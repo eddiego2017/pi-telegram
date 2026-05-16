@@ -92,6 +92,12 @@ export default function (pi: Pi.ExtensionAPI) {
     command: "/new",
     recordRuntimeEvent,
   });
+  const injectClone = Pi.createTmuxSlashCommandInjector({
+    exec: piRuntime.exec,
+    target: "pi:0",
+    command: "/clone",
+    recordRuntimeEvent,
+  });
   const injectResumeExec = Pi.createTelegramResumeExecInjector({
     exec: piRuntime.exec,
     target: "pi:0",
@@ -405,6 +411,7 @@ export default function (pi: Pi.ExtensionAPI) {
     hasPendingMessages,
     compact,
     injectNewSession,
+    injectClone,
     recordRuntimeEvent,
   });
   const pollingRuntime = Polling.createTelegramPollingControllerRuntime<

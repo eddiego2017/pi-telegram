@@ -35,6 +35,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   thinking: "🧠",
   compact: "🗜",
   new: "🆕",
+  clone: "📑",
   resume: "📂",
   queue: "🔢",
   next: "⏩",
@@ -85,6 +86,13 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       description: formatTelegramBotCommandDescription(
         "new",
         "Start a new session",
+      ),
+    },
+    {
+      command: "clone",
+      description: formatTelegramBotCommandDescription(
+        "clone",
+        "Clone current session at current position",
       ),
     },
     {
@@ -313,6 +321,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "queue",
   "compact",
   "new",
+  "clone",
   "resume",
   "model",
   "llm",
@@ -347,6 +356,7 @@ export type TelegramCommandAction =
   | { kind: "queue"; executionMode: "immediate" }
   | { kind: "compact"; executionMode: "immediate" }
   | { kind: "new"; executionMode: "immediate" }
+  | { kind: "clone"; executionMode: "immediate" }
   | { kind: "resume"; executionMode: "immediate" }
   | { kind: "status"; executionMode: "immediate" }
   | { kind: "model"; executionMode: "immediate" }
@@ -369,6 +379,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleQueue: (message: TMessage, ctx: TContext) => Promise<void>;
   handleCompact: (message: TMessage, ctx: TContext) => Promise<void>;
   handleNew: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleClone: (message: TMessage, ctx: TContext) => Promise<void>;
   handleResume: (message: TMessage, ctx: TContext) => Promise<void>;
   handleStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
@@ -436,6 +447,23 @@ export interface TelegramNewSessionCommandDeps
   hasQueuedTelegramItems: () => boolean;
   isCompactionInProgress: () => boolean;
   injectNewSession: () => Promise<void>;
+  sendTextReply: (text: string) => Promise<void>;
+}
+
+/**
+ * `/clone` mirrors `/new`: the SDK's `/clone` (fork current session at current
+ * position) is implemented in the interactive editor layer, so we inject the
+ * slash command into the host tmux pane. Same admission policy as `/new`.
+ */
+export interface TelegramCloneSessionCommandDeps
+  extends TelegramRuntimeEventRecorderPort {
+  isIdle: () => boolean;
+  hasPendingMessages: () => boolean;
+  hasActiveTelegramTurn: () => boolean;
+  hasDispatchPending: () => boolean;
+  hasQueuedTelegramItems: () => boolean;
+  isCompactionInProgress: () => boolean;
+  injectClone: () => Promise<void>;
   sendTextReply: (text: string) => Promise<void>;
 }
 
@@ -691,6 +719,7 @@ export interface TelegramCommandRuntimeDeps<
     callbacks: { onComplete: () => void; onError: (error: unknown) => void },
   ) => void;
   injectNewSession: () => Promise<void>;
+  injectClone: () => Promise<void>;
   enqueueControlItem: (
     message: TMessage,
     ctx: TContext,
@@ -726,6 +755,7 @@ export const TELEGRAM_APP_MENU_INTRO_HTML = [
   `${formatTelegramCommandEmojiPrefix("start")}/start — Open menu / Pair bridge`,
   `${formatTelegramCommandEmojiPrefix("compact")}/compact — Compact current session`,
   `${formatTelegramCommandEmojiPrefix("new")}/new — Start a new session`,
+  `${formatTelegramCommandEmojiPrefix("clone")}/clone — Clone current session at current position`,
   `${formatTelegramCommandEmojiPrefix("resume")}/resume — Resume a previous session`,
   `${formatTelegramCommandEmojiPrefix("llm")}/llm — List available LLM models`,
   `${formatTelegramCommandEmojiPrefix("next")}/next — Force next turn`,
@@ -797,6 +827,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   queue: { kind: "queue", executionMode: "immediate" },
   compact: { kind: "compact", executionMode: "immediate" },
   new: { kind: "new", executionMode: "immediate" },
+  clone: { kind: "clone", executionMode: "immediate" },
   resume: { kind: "resume", executionMode: "immediate" },
   model: { kind: "model", executionMode: "immediate" },
   llm: { kind: "llm", args: "", executionMode: "immediate" },
@@ -1005,6 +1036,32 @@ export async function handleTelegramNewSessionCommand(
   }
 }
 
+export async function handleTelegramCloneSessionCommand(
+  deps: TelegramCloneSessionCommandDeps,
+): Promise<void> {
+  if (
+    !deps.isIdle() ||
+    deps.hasPendingMessages() ||
+    deps.hasActiveTelegramTurn() ||
+    deps.hasDispatchPending() ||
+    deps.hasQueuedTelegramItems() ||
+    deps.isCompactionInProgress()
+  ) {
+    await deps.sendTextReply(
+      "Cannot clone the session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
+    );
+    return;
+  }
+  try {
+    await deps.injectClone();
+    await deps.sendTextReply("Cloned to new session.");
+  } catch (error) {
+    deps.recordRuntimeEvent?.("clone_session", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    await deps.sendTextReply(`Clone failed: ${errorMessage}`);
+  }
+}
+
 function isTelegramStaleContextError(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -1150,6 +1207,9 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
     case "new":
       await deps.handleNew(message, ctx);
       return true;
+    case "clone":
+      await deps.handleClone(message, ctx);
+      return true;
     case "resume":
       await deps.handleResume(message, ctx);
       return true;
@@ -1241,6 +1301,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     enqueueContinueTurn: deps.enqueueContinueTurn,
     compact: deps.compact,
     injectNewSession: deps.injectNewSession,
+    injectClone: deps.injectClone,
     enqueueControlItem: commandTargetRuntime.enqueueControlItem,
     showStatus: commandTargetRuntime.showStatus,
     openModelMenu: commandTargetRuntime.openModelMenu,
@@ -1394,6 +1455,19 @@ async function handleTelegramCommandRuntime<
           hasQueuedTelegramItems: deps.hasQueuedTelegramItems,
           isCompactionInProgress: deps.isCompactionInProgress,
           injectNewSession: deps.injectNewSession,
+          sendTextReply: sendReplyFor(nextMessage),
+          recordRuntimeEvent: deps.recordRuntimeEvent,
+        });
+      },
+      handleClone: async (nextMessage, commandCtx) => {
+        await handleTelegramCloneSessionCommand({
+          isIdle: () => deps.isIdle(commandCtx),
+          hasPendingMessages: () => deps.hasPendingMessages(commandCtx),
+          hasActiveTelegramTurn: deps.hasActiveTelegramTurn,
+          hasDispatchPending: deps.hasDispatchPending,
+          hasQueuedTelegramItems: deps.hasQueuedTelegramItems,
+          isCompactionInProgress: deps.isCompactionInProgress,
+          injectClone: deps.injectClone,
           sendTextReply: sendReplyFor(nextMessage),
           recordRuntimeEvent: deps.recordRuntimeEvent,
         });

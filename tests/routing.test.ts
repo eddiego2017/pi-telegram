@@ -156,6 +156,7 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
     hasPendingMessages: () => false,
     compact: () => undefined,
     injectNewSession: async () => undefined,
+    injectClone: async () => undefined,
   });
   await routeRuntime.handleUpdate(
     {

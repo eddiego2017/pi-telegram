@@ -1,0 +1,231 @@
+/**
+ * Regression tests for Telegram /resume menu pagination
+ * Covers page slicing, nav rows, callback dispatch, and stable open indices.
+ */
+
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  TELEGRAM_RESUME_MENU_PAGE_SIZE,
+  type TelegramResumeMenuEntry,
+  type TelegramResumeMenuState,
+  buildTelegramResumeMenuReplyMarkup,
+  buildTelegramResumeMenuText,
+  clampTelegramResumeMenuPage,
+  createTelegramResumeMenuStore,
+  getTelegramResumeMenuPageCount,
+  handleTelegramResumeMenuCallback,
+  sliceTelegramResumeMenuPage,
+} from "../lib/menu-resume.ts";
+
+function makeEntries(n: number): TelegramResumeMenuEntry[] {
+  const base = Date.UTC(2025, 0, 1);
+  return Array.from({ length: n }, (_unused, i) => ({
+    index: i,
+    path: `/sessions/s${i}.json`,
+    sessionId: `id-${i.toString().padStart(4, "0")}`,
+    name: undefined,
+    firstMessage: `session ${i}`,
+    messageCount: i,
+    modified: new Date(base + i * 1000),
+  }));
+}
+
+test("getTelegramResumeMenuPageCount handles empty and partial pages", () => {
+  assert.equal(getTelegramResumeMenuPageCount(0), 1);
+  assert.equal(getTelegramResumeMenuPageCount(1), 1);
+  assert.equal(getTelegramResumeMenuPageCount(TELEGRAM_RESUME_MENU_PAGE_SIZE), 1);
+  assert.equal(
+    getTelegramResumeMenuPageCount(TELEGRAM_RESUME_MENU_PAGE_SIZE + 1),
+    2,
+  );
+});
+
+test("clampTelegramResumeMenuPage keeps page in range", () => {
+  const total = TELEGRAM_RESUME_MENU_PAGE_SIZE * 2 + 3; // 3 pages
+  assert.equal(clampTelegramResumeMenuPage(-1, total), 0);
+  assert.equal(clampTelegramResumeMenuPage(0, total), 0);
+  assert.equal(clampTelegramResumeMenuPage(2, total), 2);
+  assert.equal(clampTelegramResumeMenuPage(99, total), 2);
+});
+
+test("sliceTelegramResumeMenuPage returns the requested window", () => {
+  const entries = makeEntries(TELEGRAM_RESUME_MENU_PAGE_SIZE * 2 + 3);
+  const first = sliceTelegramResumeMenuPage(entries, 0);
+  const last = sliceTelegramResumeMenuPage(entries, 2);
+  assert.equal(first.length, TELEGRAM_RESUME_MENU_PAGE_SIZE);
+  assert.equal(first[0].index, 0);
+  assert.equal(last.length, 3);
+  assert.equal(last[0].index, TELEGRAM_RESUME_MENU_PAGE_SIZE * 2);
+});
+
+test("buildTelegramResumeMenuText appends page suffix only when paginated", () => {
+  const single = makeEntries(3);
+  const many = makeEntries(TELEGRAM_RESUME_MENU_PAGE_SIZE + 1);
+  assert.ok(!buildTelegramResumeMenuText(single, "/cwd", 0).includes("Page"));
+  const paginated = buildTelegramResumeMenuText(many, "/cwd", 1);
+  assert.ok(paginated.includes("Page 2/2"));
+  assert.ok(paginated.includes(`${many.length} sessions`));
+});
+
+test("buildTelegramResumeMenuReplyMarkup keeps page-1 open index stable and adds nav row", () => {
+  const total = TELEGRAM_RESUME_MENU_PAGE_SIZE * 2 + 1; // 3 pages
+  const entries = makeEntries(total);
+  const page1 = buildTelegramResumeMenuReplyMarkup(entries, 0, 1);
+  // Row 0: Main menu; last row: nav; in-between: page entries with global indices.
+  const rows = page1.inline_keyboard;
+  const navRow = rows[rows.length - 1];
+  assert.equal(navRow.length, 3);
+  assert.equal(navRow[0].callback_data, "resume:page:0");
+  assert.equal(navRow[1].callback_data, "resume:noop");
+  assert.equal(navRow[1].text, "2/3");
+  assert.equal(navRow[2].callback_data, "resume:page:2");
+  const firstEntryRow = rows[1];
+  assert.equal(
+    firstEntryRow[0].callback_data,
+    `resume:open:${TELEGRAM_RESUME_MENU_PAGE_SIZE}`,
+  );
+});
+
+test("buildTelegramResumeMenuReplyMarkup hides Prev on first / Next on last page", () => {
+  const entries = makeEntries(TELEGRAM_RESUME_MENU_PAGE_SIZE + 1); // 2 pages
+  const first = buildTelegramResumeMenuReplyMarkup(entries, 0, 0);
+  const firstNav = first.inline_keyboard[first.inline_keyboard.length - 1];
+  assert.equal(firstNav[0].callback_data, "resume:noop");
+  assert.equal(firstNav[2].callback_data, "resume:page:1");
+  const last = buildTelegramResumeMenuReplyMarkup(entries, 0, 1);
+  const lastNav = last.inline_keyboard[last.inline_keyboard.length - 1];
+  assert.equal(lastNav[0].callback_data, "resume:page:0");
+  assert.equal(lastNav[2].callback_data, "resume:noop");
+});
+
+test("buildTelegramResumeMenuReplyMarkup omits nav row when single page", () => {
+  const entries = makeEntries(3);
+  const markup = buildTelegramResumeMenuReplyMarkup(entries, 0, 0);
+  // Just the Main menu row + entry rows; no nav row appended.
+  const flat = markup.inline_keyboard.flat();
+  assert.ok(!flat.some((b) => b.callback_data.startsWith("resume:page:")));
+});
+
+function makeState(
+  total: number,
+  page = 0,
+): TelegramResumeMenuState {
+  return {
+    chatId: 1,
+    messageId: 100,
+    sessions: makeEntries(total),
+    page,
+    currentSessionFile: undefined,
+    updatedAt: 0,
+  };
+}
+
+function makeCallbackDeps(state: TelegramResumeMenuState) {
+  const store = createTelegramResumeMenuStore(() => 1);
+  store.set(state);
+  const events: string[] = [];
+  return {
+    store,
+    events,
+    deps: {
+      getState: store.get,
+      setState: store.set,
+      getCwd: () => "/cwd",
+      editResumeMessage: async (
+        chatId: number,
+        messageId: number,
+        text: string,
+      ) => {
+        events.push(`edit:${chatId}:${messageId}:${text.includes("Page") ? "paged" : "plain"}`);
+      },
+      answerCallbackQuery: async (id: string, text?: string) => {
+        events.push(`answer:${id}:${text ?? ""}`);
+      },
+      injectResumeExec: async (path: string) => {
+        events.push(`inject:${path}`);
+      },
+      now: () => 2,
+    },
+  };
+}
+
+test("handleTelegramResumeMenuCallback paginates and updates state", async () => {
+  const state = makeState(TELEGRAM_RESUME_MENU_PAGE_SIZE * 2 + 1, 0);
+  const { store, events, deps } = makeCallbackDeps(state);
+  const handled = await handleTelegramResumeMenuCallback(
+    {
+      id: "cb1",
+      data: "resume:page:1",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.equal(handled, true);
+  assert.deepEqual(events, ["edit:1:100:paged", "answer:cb1:"]);
+  const updated = store.get(100);
+  assert.equal(updated?.page, 1);
+  assert.equal(updated?.updatedAt, 2);
+});
+
+test("handleTelegramResumeMenuCallback clamps out-of-range page requests", async () => {
+  const state = makeState(TELEGRAM_RESUME_MENU_PAGE_SIZE + 1, 0);
+  const { store, deps } = makeCallbackDeps(state);
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "cb2",
+      data: "resume:page:99",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.equal(store.get(100)?.page, 1);
+});
+
+test("handleTelegramResumeMenuCallback no-ops when page is unchanged", async () => {
+  const state = makeState(TELEGRAM_RESUME_MENU_PAGE_SIZE + 1, 1);
+  const { events, deps } = makeCallbackDeps(state);
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "cb3",
+      data: "resume:page:1",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, ["answer:cb3:"]);
+});
+
+test("handleTelegramResumeMenuCallback opens entry using global index", async () => {
+  const state = makeState(TELEGRAM_RESUME_MENU_PAGE_SIZE * 2 + 1, 1);
+  const { events, deps } = makeCallbackDeps(state);
+  const globalIndex = TELEGRAM_RESUME_MENU_PAGE_SIZE; // first entry on page 1
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "cb4",
+      data: `resume:open:${globalIndex}`,
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, [
+    `inject:/sessions/s${globalIndex}.json`,
+    "edit:1:100:plain",
+    "answer:cb4:Session switching…",
+  ]);
+});
+
+test("handleTelegramResumeMenuCallback rejects invalid open index", async () => {
+  const state = makeState(3, 0);
+  const { events, deps } = makeCallbackDeps(state);
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "cb5",
+      data: "resume:open:99",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, ["answer:cb5:Invalid selection."]);
+});

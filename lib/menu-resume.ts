@@ -13,14 +13,15 @@ import {
 
 import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
 
-export const TELEGRAM_RESUME_MENU_MAX_ITEMS = 10;
+export const TELEGRAM_RESUME_MENU_PAGE_SIZE = 8;
+export const TELEGRAM_RESUME_MENU_MAX_ITEMS = 200;
 const TELEGRAM_RESUME_MENU_STATE_TTL_MS = 10 * 60 * 1000;
 const TELEGRAM_RESUME_MENU_SUMMARY_LEN = 48;
 
 export type TelegramResumeMenuReplyMarkup = TelegramInlineKeyboardMarkup;
 
 export interface TelegramResumeMenuEntry {
-  /** index in the menu state's `sessions` array */
+  /** global index in the menu state's `sessions` array (stable across pagination) */
   index: number;
   path: string;
   sessionId: string;
@@ -33,7 +34,10 @@ export interface TelegramResumeMenuEntry {
 export interface TelegramResumeMenuState {
   chatId: number;
   messageId: number;
+  /** Full session list cached at menu open; pagination slices this in-memory. */
   sessions: TelegramResumeMenuEntry[];
+  /** Zero-based current page index. */
+  page: number;
   /** Path of the session that was active when the menu opened, filtered out. */
   currentSessionFile: string | undefined;
   updatedAt: number;
@@ -101,14 +105,44 @@ function formatTelegramResumeButtonText(
 
 export const TELEGRAM_RESUME_MENU_TITLE = "<b>📂 Resume session</b>";
 
+export function getTelegramResumeMenuPageCount(total: number): number {
+  if (total <= 0) return 1;
+  return Math.ceil(total / TELEGRAM_RESUME_MENU_PAGE_SIZE);
+}
+
+export function clampTelegramResumeMenuPage(
+  page: number,
+  total: number,
+): number {
+  const pageCount = getTelegramResumeMenuPageCount(total);
+  if (!Number.isInteger(page) || page < 0) return 0;
+  if (page >= pageCount) return pageCount - 1;
+  return page;
+}
+
+export function sliceTelegramResumeMenuPage(
+  entries: TelegramResumeMenuEntry[],
+  page: number,
+): TelegramResumeMenuEntry[] {
+  const start = page * TELEGRAM_RESUME_MENU_PAGE_SIZE;
+  return entries.slice(start, start + TELEGRAM_RESUME_MENU_PAGE_SIZE);
+}
+
 export function buildTelegramResumeMenuText(
   entries: TelegramResumeMenuEntry[],
   cwd: string,
+  page = 0,
 ): string {
   if (entries.length === 0) {
     return `${TELEGRAM_RESUME_MENU_TITLE}\n\nNo other sessions for <code>${escapeHtml(cwd)}</code>.`;
   }
-  return `${TELEGRAM_RESUME_MENU_TITLE}\n\n<code>${escapeHtml(cwd)}</code>\nPick a session to switch to:`;
+  const pageCount = getTelegramResumeMenuPageCount(entries.length);
+  const safePage = clampTelegramResumeMenuPage(page, entries.length);
+  const suffix =
+    pageCount > 1
+      ? ` (Page ${safePage + 1}/${pageCount} · ${entries.length} sessions)`
+      : "";
+  return `${TELEGRAM_RESUME_MENU_TITLE}${suffix}\n\n<code>${escapeHtml(cwd)}</code>\nPick a session to switch to:`;
 }
 
 function escapeHtml(s: string): string {
@@ -118,11 +152,15 @@ function escapeHtml(s: string): string {
 export function buildTelegramResumeMenuReplyMarkup(
   entries: TelegramResumeMenuEntry[],
   nowMs: number = Date.now(),
+  page = 0,
 ): TelegramResumeMenuReplyMarkup {
   const rows: TelegramResumeMenuReplyMarkup["inline_keyboard"] = [
     [{ text: "⬆️ Main menu", callback_data: "menu:back" }],
   ];
-  for (const entry of entries) {
+  const pageCount = getTelegramResumeMenuPageCount(entries.length);
+  const safePage = clampTelegramResumeMenuPage(page, entries.length);
+  const pageEntries = sliceTelegramResumeMenuPage(entries, safePage);
+  for (const entry of pageEntries) {
     rows.push([
       {
         text: formatTelegramResumeButtonText(entry, nowMs),
@@ -132,6 +170,26 @@ export function buildTelegramResumeMenuReplyMarkup(
   }
   if (entries.length === 0) {
     rows.push([{ text: "(no sessions)", callback_data: "resume:noop" }]);
+  }
+  if (pageCount > 1) {
+    const prevPage = safePage - 1;
+    const nextPage = safePage + 1;
+    rows.push([
+      {
+        text: prevPage >= 0 ? "⬅️ Prev" : "·",
+        callback_data:
+          prevPage >= 0 ? `resume:page:${prevPage}` : "resume:noop",
+      },
+      {
+        text: `${safePage + 1}/${pageCount}`,
+        callback_data: "resume:noop",
+      },
+      {
+        text: nextPage < pageCount ? "Next ➡️" : "·",
+        callback_data:
+          nextPage < pageCount ? `resume:page:${nextPage}` : "resume:noop",
+      },
+    ]);
   }
   return { inline_keyboard: rows };
 }
@@ -175,14 +233,16 @@ export async function openTelegramResumeMenu(
   const currentSessionFile = deps.getCurrentSessionFile();
   const sessions = await deps.listSessions(cwd);
   const entries = buildResumeMenuEntries(sessions, currentSessionFile);
-  const text = buildTelegramResumeMenuText(entries, cwd);
-  const replyMarkup = buildTelegramResumeMenuReplyMarkup(entries, now());
+  const page = 0;
+  const text = buildTelegramResumeMenuText(entries, cwd, page);
+  const replyMarkup = buildTelegramResumeMenuReplyMarkup(entries, now(), page);
   const messageId = await deps.sendResumeMenu(text, replyMarkup);
   if (messageId === undefined) return;
   deps.storeState({
     chatId: deps.chatId,
     messageId,
     sessions: entries,
+    page,
     currentSessionFile,
     updatedAt: now(),
   });
@@ -190,6 +250,8 @@ export async function openTelegramResumeMenu(
 
 export interface TelegramResumeMenuCallbackDeps {
   getState: (messageId: number | undefined) => TelegramResumeMenuState | undefined;
+  setState: (state: TelegramResumeMenuState) => void;
+  getCwd: () => string;
   editResumeMessage: (
     chatId: number,
     messageId: number,
@@ -201,6 +263,7 @@ export interface TelegramResumeMenuCallbackDeps {
     text?: string,
   ) => Promise<void>;
   injectResumeExec: (sessionPath: string) => Promise<void>;
+  now?: () => number;
 }
 
 export interface TelegramResumeMenuCallbackQuery {
@@ -228,6 +291,34 @@ export async function handleTelegramResumeMenuCallback(
   const state = deps.getState(messageId);
   if (!state) {
     await deps.answerCallbackQuery(query.id, "Resume menu expired.");
+    return true;
+  }
+  const now = deps.now ?? Date.now;
+  if (data.startsWith("resume:page:")) {
+    const pageStr = data.slice("resume:page:".length);
+    const requested = Number.parseInt(pageStr, 10);
+    if (!Number.isInteger(requested)) {
+      await deps.answerCallbackQuery(query.id, "Invalid page.");
+      return true;
+    }
+    const nextPage = clampTelegramResumeMenuPage(
+      requested,
+      state.sessions.length,
+    );
+    if (nextPage === state.page) {
+      await deps.answerCallbackQuery(query.id);
+      return true;
+    }
+    const cwd = deps.getCwd();
+    const text = buildTelegramResumeMenuText(state.sessions, cwd, nextPage);
+    const replyMarkup = buildTelegramResumeMenuReplyMarkup(
+      state.sessions,
+      now(),
+      nextPage,
+    );
+    await deps.editResumeMessage(chatId, messageId, text, replyMarkup);
+    deps.setState({ ...state, page: nextPage, updatedAt: now() });
+    await deps.answerCallbackQuery(query.id);
     return true;
   }
   if (!data.startsWith("resume:open:")) {
@@ -402,9 +493,13 @@ export function createTelegramResumeMenuRuntime<TContext>(
         storeState: store.set,
       });
     },
-    handleCallbackQuery: function handleResumeCallbackForContext(query) {
+    handleCallbackQuery: function handleResumeCallbackForContext(query, ctx) {
       return handleTelegramResumeMenuCallback(query, {
         getState: store.get,
+        setState: store.set,
+        getCwd: function getCwdForCallback() {
+          return deps.getCwd(ctx);
+        },
         editResumeMessage: function editResumeMessageHtml(
           chatId,
           messageId,

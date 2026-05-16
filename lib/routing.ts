@@ -142,6 +142,7 @@ export interface TelegramInboundRouteRuntimeDeps<
     callbacks: { onComplete: () => void; onError: (error: unknown) => void },
   ) => void;
   injectNewSession: () => Promise<void>;
+  injectClone: () => Promise<void>;
   recordRuntimeEvent?: (
     category: string,
     error: unknown,
@@ -367,6 +368,7 @@ export function createTelegramInboundRouteRuntime<
     enqueueContinueTurn,
     compact: deps.compact,
     injectNewSession: deps.injectNewSession,
+    injectClone: deps.injectClone,
     allocateItemOrder: deps.bridgeRuntime.queue.allocateItemOrder,
     allocateControlOrder: deps.bridgeRuntime.queue.allocateControlOrder,
     appendControlItem: deps.queueMutationRuntime.append,
