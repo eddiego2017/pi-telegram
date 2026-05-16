@@ -18,6 +18,10 @@
 - `[Reserved Names]` `new` is now a Telegram-reserved command name. Impact: a π prompt template named `new.md` (mapped to `/new`) is shadowed by the built-in `/new` command in Telegram.
 - `[Tests]` Added regressions for busy/success/error `/new` flows and for the tmux injector factory (command quoting + non-zero-exit error path).
 
+## 0.10.8: Compact Typing Timing Hotfix
+
+- `[Compaction]` Telegram `/compact` now starts the native `typing` chat-action keepalive after the "Compaction started" notice is sent, then stops it on completion or failure. Impact: operators see the same Telegram activity indicator during context compression that they already see during normal agent/tool work, without showing `typing` before the explicit start confirmation arrives.
+
 ## 0.10.7: Stale Context Hardening Hotfix
 
 - `[Session Reloads]` Context-sensitive command, pairing, queue, session-start, and update-dispatch paths now ignore only stale-session/stale-context failures instead of swallowing broad runtime errors. Impact: the bridge survives ctx replacement/fork/reload races while real bugs still surface for diagnostics.

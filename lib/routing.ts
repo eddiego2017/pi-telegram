@@ -91,6 +91,8 @@ export interface TelegramInboundRouteRuntimeDeps<
   requestDeferredDispatchNextQueuedTelegramTurn?: (
     dispatch: (ctx: TContext) => void,
   ) => void;
+  startTypingLoop?: (ctx: TContext, chatId?: number) => void;
+  stopTypingLoop?: () => void;
   answerCallbackQuery: (
     callbackQueryId: string,
     text?: string,
@@ -365,6 +367,8 @@ export function createTelegramInboundRouteRuntime<
     dispatchNextQueuedTelegramTurn: deps.dispatchNextQueuedTelegramTurn,
     requestDeferredDispatchNextQueuedTelegramTurn:
       deps.requestDeferredDispatchNextQueuedTelegramTurn,
+    startTypingLoop: deps.startTypingLoop,
+    stopTypingLoop: deps.stopTypingLoop,
     enqueueContinueTurn,
     compact: deps.compact,
     injectNewSession: deps.injectNewSession,
