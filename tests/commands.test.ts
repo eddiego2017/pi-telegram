@@ -26,6 +26,7 @@ import {
   handleTelegramCompactCommand,
   handleTelegramLlmCommand,
   handleTelegramNewSessionCommand,
+  handleTelegramCloneSessionCommand,
   handleTelegramModelCommand,
   formatTelegramLlmListReply,
   parseTelegramLlmFilterTokens,
@@ -95,6 +96,10 @@ test("Command helpers expose Telegram bot command definitions", () => {
     },
     { command: "compact", description: "🗜 Compact current session" },
     { command: "new", description: "🆕 Start a new session" },
+    {
+      command: "clone",
+      description: "📑 Clone current session at current position",
+    },
     { command: "resume", description: "📂 Resume a previous session" },
     { command: "llm", description: "🧬 List available LLM models" },
     {
@@ -863,6 +868,7 @@ test("Command handler target runtime binds command targets into command handling
     },
     compact: () => {},
     injectNewSession: async () => undefined,
+    injectClone: async () => undefined,
     allocateItemOrder: () => 0,
     allocateControlOrder: () => 0,
     appendControlItem: (item, ctx) => {
@@ -948,6 +954,9 @@ test("Command runtime routes commands through runtime ports", async () => {
     },
     injectNewSession: async () => {
       events.push("inject-new");
+    },
+    injectClone: async () => {
+      events.push("inject-clone");
     },
     enqueueControlItem: async (
       nextMessage: typeof message,
@@ -1151,6 +1160,9 @@ test("Command helpers execute command actions through provided handlers", async 
     handleNew: async () => {
       events.push("new");
     },
+    handleClone: async () => {
+      events.push("clone");
+    },
     handleResume: async () => {
       events.push("resume");
     },
@@ -1264,6 +1276,95 @@ test("Command helpers guard and complete /new session flow", async () => {
     "event:new_session:tmux not running",
     "reply:New session failed: tmux not running",
   ]);
+});
+
+test("Command helpers guard and complete /clone session flow", async () => {
+  const events: string[] = [];
+
+  // Busy: not idle
+  await handleTelegramCloneSessionCommand({
+    isIdle: () => false,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectClone: async () => {
+      events.push("unexpected:inject");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
+  // Busy: queue not empty
+  await handleTelegramCloneSessionCommand({
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => true,
+    isCompactionInProgress: () => false,
+    injectClone: async () => {
+      events.push("unexpected:inject");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
+  // Success
+  await handleTelegramCloneSessionCommand({
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectClone: async () => {
+      events.push("inject");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
+  // Injection failure
+  await handleTelegramCloneSessionCommand({
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectClone: async () => {
+      throw new Error("tmux not running");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+    recordRuntimeEvent: (category, error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      events.push(`event:${category}:${message}`);
+    },
+  });
+
+  assert.deepEqual(events, [
+    "reply:Cannot clone the session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
+    "reply:Cannot clone the session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
+    "inject",
+    "reply:Cloned to new session.",
+    "event:clone_session:tmux not running",
+    "reply:Clone failed: tmux not running",
+  ]);
+});
+
+test("buildTelegramCommandAction recognizes /clone as reserved", () => {
+  assert.equal(isTelegramReservedCommandName("clone"), true);
+  assert.deepEqual(buildTelegramCommandAction("clone"), {
+    kind: "clone",
+    executionMode: "immediate",
+  });
 });
 
 test("/llm command lists available models", async () => {
