@@ -120,6 +120,13 @@ export interface TelegramInboundRouteRuntimeDeps<
     ctx: TContext,
   ) => Promise<void>;
   setModel: (model: TModel) => Promise<boolean>;
+  listAvailableModels: (
+    ctx: TContext,
+  ) => readonly Commands.TelegramAvailableLlmModel[];
+  findActiveModelByIdentity: (
+    identity: Commands.TelegramAvailableLlmModel,
+    ctx: TContext,
+  ) => TModel | undefined;
   sendUserMessage?: (message: string) => void;
   isIdle: (ctx: TContext) => boolean;
   hasPendingMessages: (ctx: TContext) => boolean;
@@ -357,6 +364,17 @@ export function createTelegramInboundRouteRuntime<
     appendControlItem: deps.queueMutationRuntime.append,
     showStatus: deps.menuActions.sendStatusMessage,
     openModelMenu: deps.menuActions.openModelMenu,
+    listAvailableModels: deps.listAvailableModels,
+    isModelSwitchAllowed: (ctx) =>
+      deps.isIdle(ctx) || deps.modelSwitchController.canOfferInFlightSwitch(ctx),
+    selectLlmModel: async (target, ctx) => {
+      const fullModel = deps.findActiveModelByIdentity(target, ctx);
+      if (!fullModel) return false;
+      const changed = await deps.setModel(fullModel);
+      if (changed === false) return false;
+      deps.currentModelRuntime.setCurrentModel(fullModel, ctx);
+      return true;
+    },
     openThinkingMenu: (message, ctx) => {
       const chatId = (message as { chat: { id: number } }).chat.id;
       return deps.menuActions.openThinkingMenu(chatId, message.message_id, ctx);

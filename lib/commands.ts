@@ -31,6 +31,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   start: "🟢",
   status: "📊",
   model: "🤖",
+  llm: "🧬",
   thinking: "🧠",
   compact: "🗜",
   new: "🆕",
@@ -83,6 +84,13 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       description: formatTelegramBotCommandDescription(
         "new",
         "Start a new session",
+      ),
+    },
+    {
+      command: "llm",
+      description: formatTelegramBotCommandDescription(
+        "llm",
+        "List available LLM models",
       ),
     },
     {
@@ -238,6 +246,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "compact",
   "new",
   "model",
+  "llm",
   "thinking",
   "settings",
   "help",
@@ -271,6 +280,7 @@ export type TelegramCommandAction =
   | { kind: "new"; executionMode: "immediate" }
   | { kind: "status"; executionMode: "immediate" }
   | { kind: "model"; executionMode: "immediate" }
+  | { kind: "llm"; args: string; executionMode: "immediate" }
   | { kind: "thinking"; executionMode: "immediate" }
   | { kind: "settings"; executionMode: "immediate" }
   | {
@@ -291,6 +301,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleNew: (message: TMessage, ctx: TContext) => Promise<void>;
   handleStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleLlm: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleThinking: (message: TMessage, ctx: TContext) => Promise<void>;
   handleSettings?: (message: TMessage, ctx: TContext) => Promise<void>;
   handleHelp: (
@@ -553,6 +564,7 @@ export interface TelegramCommandOrPromptRuntimeDeps<TMessage, TContext> {
   extractRawText: (messages: TMessage[]) => string;
   handleCommand: (
     commandName: string | undefined,
+    args: string,
     message: TMessage,
     ctx: TContext,
   ) => Promise<boolean>;
@@ -602,6 +614,14 @@ export interface TelegramCommandRuntimeDeps<
   ) => void;
   showStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   openModelMenu: (message: TMessage, ctx: TContext) => Promise<void>;
+  listAvailableModels: (
+    ctx: TContext,
+  ) => readonly TelegramAvailableLlmModel[];
+  isModelSwitchAllowed: (ctx: TContext) => boolean;
+  selectLlmModel: (
+    model: TelegramAvailableLlmModel,
+    ctx: TContext,
+  ) => Promise<boolean>;
   openThinkingMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openQueueMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openSettingsMenu?: (message: TMessage, ctx: TContext) => Promise<void>;
@@ -619,6 +639,7 @@ export const TELEGRAM_APP_MENU_INTRO_HTML = [
   `${formatTelegramCommandEmojiPrefix("start")}/start — Open menu / Pair bridge`,
   `${formatTelegramCommandEmojiPrefix("compact")}/compact — Compact current session`,
   `${formatTelegramCommandEmojiPrefix("new")}/new — Start a new session`,
+  `${formatTelegramCommandEmojiPrefix("llm")}/llm — List available LLM models`,
   `${formatTelegramCommandEmojiPrefix("next")}/next — Force next turn`,
   `${formatTelegramCommandEmojiPrefix("continue")}/continue — Queue continue prompt`,
   `${formatTelegramCommandEmojiPrefix("abort")}/abort — Abort π`,
@@ -689,6 +710,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   compact: { kind: "compact", executionMode: "immediate" },
   new: { kind: "new", executionMode: "immediate" },
   model: { kind: "model", executionMode: "immediate" },
+  llm: { kind: "llm", args: "", executionMode: "immediate" },
   thinking: { kind: "thinking", executionMode: "immediate" },
   settings: { kind: "settings", executionMode: "immediate" },
   help: { kind: "help", commandName: "help", executionMode: "immediate" },
@@ -697,11 +719,16 @@ export const TELEGRAM_COMMAND_ACTIONS = {
 
 export function buildTelegramCommandAction(
   commandName: string | undefined,
+  args?: string,
 ): TelegramCommandAction {
   if (!isTelegramReservedCommandName(commandName)) {
     return { kind: "ignore", executionMode: "ignored" };
   }
-  return TELEGRAM_COMMAND_ACTIONS[commandName];
+  const baseAction = TELEGRAM_COMMAND_ACTIONS[commandName];
+  if (baseAction.kind === "llm") {
+    return { ...baseAction, args: args ?? "" };
+  }
+  return baseAction;
 }
 
 export function getTelegramCommandExecutionMode(
@@ -927,6 +954,91 @@ export async function handleTelegramModelCommand<TContext>(deps: {
   }
 }
 
+export interface TelegramAvailableLlmModel {
+  provider: string;
+  id: string;
+}
+
+export function formatTelegramLlmListReply(
+  models: readonly TelegramAvailableLlmModel[],
+): string {
+  if (models.length === 0) return "No available LLM models.";
+  const lines = models.map((model) => `• ${model.provider}/${model.id}`);
+  return ["Available LLM models:", ...lines].join("\n");
+}
+
+export function parseTelegramLlmFilterTokens(args: string): string[] {
+  return args
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+}
+
+export function filterTelegramLlmModels(
+  models: readonly TelegramAvailableLlmModel[],
+  tokens: readonly string[],
+): TelegramAvailableLlmModel[] {
+  if (tokens.length === 0) return [...models];
+  return models.filter((model) => {
+    const haystack = model.id.toLowerCase();
+    return tokens.every((token) => haystack.includes(token));
+  });
+}
+
+export async function handleTelegramLlmCommand<TContext>(deps: {
+  ctx: TContext;
+  args: string;
+  listAvailableModels: (
+    ctx: TContext,
+  ) => readonly TelegramAvailableLlmModel[];
+  isModelSwitchAllowed: (ctx: TContext) => boolean;
+  selectLlmModel: (
+    model: TelegramAvailableLlmModel,
+    ctx: TContext,
+  ) => Promise<boolean>;
+  sendTextReply: (text: string) => Promise<void>;
+}): Promise<void> {
+  try {
+    const tokens = parseTelegramLlmFilterTokens(deps.args);
+    const models = deps.listAvailableModels(deps.ctx);
+    const matches = filterTelegramLlmModels(models, tokens);
+    if (tokens.length === 0) {
+      await deps.sendTextReply(formatTelegramLlmListReply(models));
+      return;
+    }
+    if (matches.length === 0) {
+      await deps.sendTextReply(`No models match: ${tokens.join(" ")}`);
+      return;
+    }
+    if (matches.length > 1) {
+      await deps.sendTextReply(formatTelegramLlmListReply(matches));
+      return;
+    }
+    const target = matches[0];
+    if (!target) return;
+    if (!deps.isModelSwitchAllowed(deps.ctx)) {
+      await deps.sendTextReply(
+        "Cannot switch model while \u03c0 is busy. Send /abort, /next, or /stop.",
+      );
+      return;
+    }
+    const changed = await deps.selectLlmModel(target, deps.ctx);
+    if (!changed) {
+      await deps.sendTextReply(
+        `Model ${target.provider}/${target.id} is not available.`,
+      );
+      return;
+    }
+    await deps.sendTextReply(
+      `Model switched to ${target.provider}/${target.id}`,
+    );
+  } catch (error) {
+    if (isTelegramStaleContextError(error)) return;
+    throw error;
+  }
+}
+
 export async function executeTelegramCommandAction<TMessage, TContext>(
   action: TelegramCommandAction,
   message: TMessage,
@@ -962,6 +1074,9 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
       return true;
     case "model":
       await deps.handleModel(message, ctx);
+      return true;
+    case "llm":
+      await deps.handleLlm(message, action.args, ctx);
       return true;
     case "thinking":
       await deps.handleThinking(message, ctx);
@@ -1003,6 +1118,7 @@ export function createTelegramCommandHandlerTargetRuntime<
   deps: TelegramCommandHandlerTargetRuntimeDeps<TMessage, TContext>,
 ): (
   commandName: string | undefined,
+  args: string,
   message: TMessage,
   ctx: TContext,
 ) => Promise<boolean> {
@@ -1044,6 +1160,9 @@ export function createTelegramCommandHandlerTargetRuntime<
     enqueueControlItem: commandTargetRuntime.enqueueControlItem,
     showStatus: commandTargetRuntime.showStatus,
     openModelMenu: commandTargetRuntime.openModelMenu,
+    listAvailableModels: deps.listAvailableModels,
+    isModelSwitchAllowed: deps.isModelSwitchAllowed,
+    selectLlmModel: deps.selectLlmModel,
     openThinkingMenu: deps.openThinkingMenu,
     openQueueMenu: deps.openQueueMenu,
     openSettingsMenu: commandTargetRuntime.openSettingsMenu,
@@ -1064,10 +1183,17 @@ export function createTelegramCommandHandler<
 >(deps: TelegramCommandRuntimeDeps<TMessage, TContext>) {
   return async function handleTelegramCommand(
     commandName: string | undefined,
+    args: string,
     message: TMessage,
     ctx: TContext,
   ): Promise<boolean> {
-    return handleTelegramCommandRuntime(commandName, message, ctx, deps);
+    return handleTelegramCommandRuntime(
+      commandName,
+      args,
+      message,
+      ctx,
+      deps,
+    );
   };
 }
 
@@ -1084,6 +1210,7 @@ export function createTelegramCommandOrPromptRuntime<TMessage, TContext>(
       const command = parseTelegramCommand(deps.extractRawText(messages));
       const handled = await deps.handleCommand(
         command?.name,
+        command?.args ?? "",
         firstMessage,
         ctx,
       );
@@ -1114,6 +1241,7 @@ async function handleTelegramCommandRuntime<
   TContext,
 >(
   commandName: string | undefined,
+  args: string,
   message: TMessage,
   ctx: TContext,
   deps: TelegramCommandRuntimeDeps<TMessage, TContext>,
@@ -1123,7 +1251,7 @@ async function handleTelegramCommandRuntime<
   const updateStatusFor = (commandCtx: TContext) => () =>
     deps.updateStatus(commandCtx);
   return executeTelegramCommandAction(
-    buildTelegramCommandAction(commandName),
+    buildTelegramCommandAction(commandName, args),
     message,
     ctx,
     {
@@ -1221,6 +1349,16 @@ async function handleTelegramCommandRuntime<
           ctx: commandCtx,
           openModelMenu: (controlCtx) =>
             deps.openModelMenu(nextMessage, controlCtx),
+        });
+      },
+      handleLlm: async (nextMessage, args, commandCtx) => {
+        await handleTelegramLlmCommand<TContext>({
+          ctx: commandCtx,
+          args,
+          listAvailableModels: deps.listAvailableModels,
+          isModelSwitchAllowed: deps.isModelSwitchAllowed,
+          selectLlmModel: deps.selectLlmModel,
+          sendTextReply: sendReplyFor(nextMessage),
         });
       },
       handleThinking: async (nextMessage, commandCtx) => {

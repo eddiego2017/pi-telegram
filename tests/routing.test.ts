@@ -147,6 +147,8 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
     getThinkingLevel: () => "high",
     setThinkingLevel: () => undefined,
     setModel: async () => true,
+    listAvailableModels: () => [],
+    findActiveModelByIdentity: () => undefined,
     sendUserMessage: (message) => {
       events.push(`user:${message}`);
     },

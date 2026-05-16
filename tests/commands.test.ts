@@ -24,8 +24,12 @@ import {
   getTelegramCommandExecutionMode,
   getTelegramCommandMessageTarget,
   handleTelegramCompactCommand,
+  handleTelegramLlmCommand,
   handleTelegramNewSessionCommand,
   handleTelegramModelCommand,
+  formatTelegramLlmListReply,
+  parseTelegramLlmFilterTokens,
+  filterTelegramLlmModels,
   handleTelegramStatusCommand,
   handleTelegramStopCommand,
   parseTelegramCommand,
@@ -91,6 +95,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
     },
     { command: "compact", description: "🗜 Compact current session" },
     { command: "new", description: "🆕 Start a new session" },
+    { command: "llm", description: "🧬 List available LLM models" },
     {
       command: "next",
       description: "⏩ Force next turn",
@@ -868,6 +873,9 @@ test("Command handler target runtime binds command targets into command handling
       calls.push(`show:${ctx}`);
     },
     openModelMenu: async () => {},
+    listAvailableModels: () => [],
+    isModelSwitchAllowed: () => true,
+    selectLlmModel: async () => true,
     openThinkingMenu: async () => {},
     openQueueMenu: async () => {},
     getAllowedUserId: () => undefined,
@@ -877,7 +885,12 @@ test("Command handler target runtime binds command targets into command handling
     sendTextReply: async () => {},
   });
   assert.equal(
-    await handleCommand("status", { chat: { id: 7 }, message_id: 11 }, "ctx"),
+    await handleCommand(
+      "status",
+      "",
+      { chat: { id: 7 }, message_id: 11 },
+      "ctx",
+    ),
     true,
   );
   assert.deepEqual(calls, ["show:ctx"]);
@@ -955,6 +968,11 @@ test("Command runtime routes commands through runtime ports", async () => {
     openModelMenu: async (nextMessage: typeof message) => {
       events.push(`model:${nextMessage.chat.id}`);
     },
+    listAvailableModels: () => [
+      { provider: "anthropic", id: "claude-sonnet-4-5" },
+    ],
+    isModelSwitchAllowed: () => true,
+    selectLlmModel: async () => true,
     openThinkingMenu: async (nextMessage: typeof message) => {
       events.push(`thinking:${nextMessage.chat.id}`);
     },
@@ -977,18 +995,51 @@ test("Command runtime routes commands through runtime ports", async () => {
     },
   };
   const handleCommand = createTelegramCommandHandler(deps);
-  assert.equal(await handleCommand("status", message, { idle: true }), true);
-  assert.equal(await handleCommand("model", message, { idle: true }), true);
-  assert.equal(await handleCommand("thinking", message, { idle: true }), true);
-  assert.equal(await handleCommand("debug", message, { idle: true }), false);
-  assert.equal(await handleCommand("start", message, { idle: true }), true);
-  assert.equal(await handleCommand("help", message, { idle: true }), true);
-  assert.equal(await handleCommand("continue", message, { idle: true }), true);
-  assert.equal(await handleCommand("continue", message, { idle: false }), true);
-  assert.equal(await handleCommand("compact", message, { idle: true }), true);
+  assert.equal(
+    await handleCommand("status", "", message, { idle: true }),
+    true,
+  );
+  assert.equal(
+    await handleCommand("model", "", message, { idle: true }),
+    true,
+  );
+  assert.equal(
+    await handleCommand("thinking", "", message, { idle: true }),
+    true,
+  );
+  assert.equal(
+    await handleCommand("debug", "", message, { idle: true }),
+    false,
+  );
+  assert.equal(
+    await handleCommand("start", "", message, { idle: true }),
+    true,
+  );
+  assert.equal(
+    await handleCommand("help", "", message, { idle: true }),
+    true,
+  );
+  assert.equal(
+    await handleCommand("continue", "", message, { idle: true }),
+    true,
+  );
+  assert.equal(
+    await handleCommand("continue", "", message, { idle: false }),
+    true,
+  );
+  assert.equal(
+    await handleCommand("compact", "", message, { idle: true }),
+    true,
+  );
   compactComplete?.();
-  assert.equal(await handleCommand("stop", message, { idle: true }), true);
-  assert.equal(await handleCommand("unknown", message, { idle: true }), false);
+  assert.equal(
+    await handleCommand("stop", "", message, { idle: true }),
+    true,
+  );
+  assert.equal(
+    await handleCommand("unknown", "", message, { idle: true }),
+    false,
+  );
   assert.equal(allowedUserId, 7);
   assert.deepEqual(events, [
     "show:42",
@@ -1030,8 +1081,10 @@ test("Command or prompt runtime routes commands before enqueue fallback", async 
   >({
     extractRawText: (messages) =>
       messages.map((message) => message.text).join(" "),
-    handleCommand: async (commandName, message, ctx) => {
-      events.push(`command:${commandName ?? "none"}:${message.text}:${ctx.id}`);
+    handleCommand: async (commandName, args, message, ctx) => {
+      events.push(
+        `command:${commandName ?? "none"}:${args}:${message.text}:${ctx.id}`,
+      );
       return commandName === "status";
     },
     expandPromptTemplateCommand: (commandName, args) =>
@@ -1046,10 +1099,10 @@ test("Command or prompt runtime routes commands before enqueue fallback", async 
   await runtime.dispatchMessages([{ text: "hello" }], { id: "ctx" });
   await runtime.dispatchMessages([], { id: "ctx" });
   assert.deepEqual(events, [
-    "command:status:/status:ctx",
-    "command:review:/review staged:ctx",
+    "command:status::/status:ctx",
+    "command:review:staged:/review staged:ctx",
     "enqueue:1:expanded:staged:ctx",
-    "command:none:hello:ctx",
+    "command:none::hello:ctx",
     "enqueue:1:hello:ctx",
   ]);
 });
@@ -1068,6 +1121,9 @@ test("Command helpers execute command actions through provided handlers", async 
     },
     handleModel: async () => {
       events.push("model");
+    },
+    handleLlm: async () => {
+      events.push("llm");
     },
     handleThinking: async () => {
       events.push("thinking");
@@ -1200,4 +1256,87 @@ test("Command helpers guard and complete /new session flow", async () => {
     "event:new_session:tmux not running",
     "reply:New session failed: tmux not running",
   ]);
+});
+
+test("/llm command lists available models", async () => {
+  assert.deepEqual(buildTelegramCommandAction("llm"), {
+    kind: "llm",
+    args: "",
+    executionMode: "immediate",
+  });
+  assert.deepEqual(buildTelegramCommandAction("llm", "v4 flash"), {
+    kind: "llm",
+    args: "v4 flash",
+    executionMode: "immediate",
+  });
+  assert.equal(isTelegramReservedCommandName("llm"), true);
+  assert.equal(
+    formatTelegramLlmListReply([]),
+    "No available LLM models.",
+  );
+  assert.equal(
+    formatTelegramLlmListReply([
+      { provider: "anthropic", id: "claude-sonnet-4-5" },
+      { provider: "openai", id: "gpt-5" },
+    ]),
+    "Available LLM models:\n• anthropic/claude-sonnet-4-5\n• openai/gpt-5",
+  );
+
+  const sampleModels = [
+    { provider: "deepseek", id: "deepseek-v4-flash" },
+    { provider: "deepseek", id: "deepseek-v4-pro" },
+    { provider: "anthropic", id: "claude-opus-4-7" },
+  ];
+  type Ctx = { tag: string };
+  const runLlm = async (
+    args: string,
+    overrides: {
+      isModelSwitchAllowed?: (ctx: Ctx) => boolean;
+      selectLlmModel?: (model: { provider: string; id: string }) => boolean;
+    } = {},
+  ): Promise<string[]> => {
+    const replies: string[] = [];
+    await handleTelegramLlmCommand<Ctx>({
+      ctx: { tag: "ctx" },
+      args,
+      listAvailableModels: () => sampleModels,
+      isModelSwitchAllowed: overrides.isModelSwitchAllowed ?? (() => true),
+      selectLlmModel: async (model) =>
+        overrides.selectLlmModel ? overrides.selectLlmModel(model) : true,
+      sendTextReply: async (text) => {
+        replies.push(text);
+      },
+    });
+    return replies;
+  };
+
+  assert.deepEqual(parseTelegramLlmFilterTokens("  v4   Flash  "), [
+    "v4",
+    "flash",
+  ]);
+  assert.deepEqual(
+    filterTelegramLlmModels(sampleModels, ["v4"]).map((m) => m.id),
+    ["deepseek-v4-flash", "deepseek-v4-pro"],
+  );
+
+  assert.deepEqual(await runLlm(""), [
+    "Available LLM models:\n• deepseek/deepseek-v4-flash\n• deepseek/deepseek-v4-pro\n• anthropic/claude-opus-4-7",
+  ]);
+  assert.deepEqual(await runLlm("v4"), [
+    "Available LLM models:\n• deepseek/deepseek-v4-flash\n• deepseek/deepseek-v4-pro",
+  ]);
+  assert.deepEqual(await runLlm("v4 flash"), [
+    "Model switched to deepseek/deepseek-v4-flash",
+  ]);
+  assert.deepEqual(await runLlm("nope"), ["No models match: nope"]);
+  assert.deepEqual(
+    await runLlm("flash", { isModelSwitchAllowed: () => false }),
+    [
+      "Cannot switch model while π is busy. Send /abort, /next, or /stop.",
+    ],
+  );
+  assert.deepEqual(
+    await runLlm("flash", { selectLlmModel: () => false }),
+    ["Model deepseek/deepseek-v4-flash is not available."],
+  );
 });
