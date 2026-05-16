@@ -33,6 +33,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   model: "🤖",
   thinking: "🧠",
   compact: "🗜",
+  new: "🆕",
   queue: "🔢",
   next: "⏩",
   continue: "▶️",
@@ -75,6 +76,13 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       description: formatTelegramBotCommandDescription(
         "compact",
         "Compact current session",
+      ),
+    },
+    {
+      command: "new",
+      description: formatTelegramBotCommandDescription(
+        "new",
+        "Start a new session",
       ),
     },
     {
@@ -228,6 +236,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "status",
   "queue",
   "compact",
+  "new",
   "model",
   "thinking",
   "settings",
@@ -259,6 +268,7 @@ export type TelegramCommandAction =
   | { kind: "continue"; executionMode: "immediate" }
   | { kind: "queue"; executionMode: "immediate" }
   | { kind: "compact"; executionMode: "immediate" }
+  | { kind: "new"; executionMode: "immediate" }
   | { kind: "status"; executionMode: "immediate" }
   | { kind: "model"; executionMode: "immediate" }
   | { kind: "thinking"; executionMode: "immediate" }
@@ -278,6 +288,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleContinue: (message: TMessage, ctx: TContext) => Promise<void>;
   handleQueue: (message: TMessage, ctx: TContext) => Promise<void>;
   handleCompact: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleNew: (message: TMessage, ctx: TContext) => Promise<void>;
   handleStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
   handleThinking: (message: TMessage, ctx: TContext) => Promise<void>;
@@ -324,6 +335,25 @@ export interface TelegramCompactCommandDeps extends TelegramRuntimeEventRecorder
     onComplete: () => void;
     onError: (error: unknown) => void;
   }) => void;
+  sendTextReply: (text: string) => Promise<void>;
+}
+
+/**
+ * `/new` runs via a host-shell hack: we inject `/new` into the tmux pane where
+ * the π REPL lives, because the SDK's `/new` is implemented in the interactive
+ * editor layer (not as an extension command) and `sendUserMessage` deliberately
+ * skips slash-command handling. This is a fork-local workaround; see the
+ * pi-telegram README for the contract and assumptions.
+ */
+export interface TelegramNewSessionCommandDeps
+  extends TelegramRuntimeEventRecorderPort {
+  isIdle: () => boolean;
+  hasPendingMessages: () => boolean;
+  hasActiveTelegramTurn: () => boolean;
+  hasDispatchPending: () => boolean;
+  hasQueuedTelegramItems: () => boolean;
+  isCompactionInProgress: () => boolean;
+  injectNewSession: () => Promise<void>;
   sendTextReply: (text: string) => Promise<void>;
 }
 
@@ -558,6 +588,7 @@ export interface TelegramCommandRuntimeDeps<
     ctx: TContext,
     callbacks: { onComplete: () => void; onError: (error: unknown) => void },
   ) => void;
+  injectNewSession: () => Promise<void>;
   enqueueControlItem: (
     message: TMessage,
     ctx: TContext,
@@ -583,6 +614,7 @@ export const TELEGRAM_APP_MENU_INTRO_HTML = [
   "",
   `${formatTelegramCommandEmojiPrefix("start")}/start — Open menu / Pair bridge`,
   `${formatTelegramCommandEmojiPrefix("compact")}/compact — Compact current session`,
+  `${formatTelegramCommandEmojiPrefix("new")}/new — Start a new session`,
   `${formatTelegramCommandEmojiPrefix("next")}/next — Force next turn`,
   `${formatTelegramCommandEmojiPrefix("continue")}/continue — Queue continue prompt`,
   `${formatTelegramCommandEmojiPrefix("abort")}/abort — Abort π`,
@@ -651,6 +683,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   status: { kind: "status", executionMode: "immediate" },
   queue: { kind: "queue", executionMode: "immediate" },
   compact: { kind: "compact", executionMode: "immediate" },
+  new: { kind: "new", executionMode: "immediate" },
   model: { kind: "model", executionMode: "immediate" },
   thinking: { kind: "thinking", executionMode: "immediate" },
   settings: { kind: "settings", executionMode: "immediate" },
@@ -826,6 +859,32 @@ export async function handleTelegramCompactCommand(
   await deps.sendTextReply("Compaction started.");
 }
 
+export async function handleTelegramNewSessionCommand(
+  deps: TelegramNewSessionCommandDeps,
+): Promise<void> {
+  if (
+    !deps.isIdle() ||
+    deps.hasPendingMessages() ||
+    deps.hasActiveTelegramTurn() ||
+    deps.hasDispatchPending() ||
+    deps.hasQueuedTelegramItems() ||
+    deps.isCompactionInProgress()
+  ) {
+    await deps.sendTextReply(
+      "Cannot start a new session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
+    );
+    return;
+  }
+  try {
+    await deps.injectNewSession();
+    await deps.sendTextReply("New session started.");
+  } catch (error) {
+    deps.recordRuntimeEvent?.("new_session", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    await deps.sendTextReply(`New session failed: ${errorMessage}`);
+  }
+}
+
 function isTelegramStaleContextError(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -882,6 +941,9 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
       return true;
     case "compact":
       await deps.handleCompact(message, ctx);
+      return true;
+    case "new":
+      await deps.handleNew(message, ctx);
       return true;
     case "status":
       await deps.handleStatus(message, ctx);
@@ -964,6 +1026,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     dispatchNextQueuedTelegramTurn: deps.dispatchNextQueuedTelegramTurn,
     enqueueContinueTurn: deps.enqueueContinueTurn,
     compact: deps.compact,
+    injectNewSession: deps.injectNewSession,
     enqueueControlItem: commandTargetRuntime.enqueueControlItem,
     showStatus: commandTargetRuntime.showStatus,
     openModelMenu: commandTargetRuntime.openModelMenu,
@@ -1094,6 +1157,19 @@ async function handleTelegramCommandRuntime<
       },
       handleQueue: async (nextMessage, commandCtx) => {
         await deps.openQueueMenu(nextMessage, commandCtx);
+      },
+      handleNew: async (nextMessage, commandCtx) => {
+        await handleTelegramNewSessionCommand({
+          isIdle: () => deps.isIdle(commandCtx),
+          hasPendingMessages: () => deps.hasPendingMessages(commandCtx),
+          hasActiveTelegramTurn: deps.hasActiveTelegramTurn,
+          hasDispatchPending: deps.hasDispatchPending,
+          hasQueuedTelegramItems: deps.hasQueuedTelegramItems,
+          isCompactionInProgress: deps.isCompactionInProgress,
+          injectNewSession: deps.injectNewSession,
+          sendTextReply: sendReplyFor(nextMessage),
+          recordRuntimeEvent: deps.recordRuntimeEvent,
+        });
       },
       handleCompact: async (nextMessage, commandCtx) => {
         await handleTelegramCompactCommand({

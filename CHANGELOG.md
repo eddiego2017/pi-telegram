@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0: Telegram `/new` Session Command (fork-local)
+
+- `[Commands]` Added a Telegram-side `/new` command that starts a fresh π session. Admission mirrors `/compact` (strict idle, no queued items, no pending dispatch, no compaction). Resolves [issue #3](https://github.com/badlogic/pi-telegram/issues/3) for fork-local use.
+- `[Implementation]` π's built-in `/new` is implemented in the interactive editor layer (not as an extension command), and `pi.sendUserMessage` deliberately skips slash-command handling, so no in-process path exists from an event-handler context. The bridge therefore injects `/new` into the host tmux pane running the π REPL via `nohup bash -c 'sleep 1 && tmux send-keys -t pi:0 "/new" Enter'`. This is a fork-local workaround that assumes π runs in tmux session `pi:0` (this fork's deployment per `~/.pi/agent/AGENTS.md`).
+- `[Reserved Names]` `new` is now a Telegram-reserved command name. Impact: a π prompt template named `new.md` (mapped to `/new`) is shadowed by the built-in `/new` command in Telegram.
+- `[Tests]` Added regressions for busy/success/error `/new` flows and for the tmux injector factory (command quoting + non-zero-exit error path).
+
 ## 0.10.7: Stale Context Hardening Hotfix
 
 - `[Session Reloads]` Context-sensitive command, pairing, queue, session-start, and update-dispatch paths now ignore only stale-session/stale-context failures instead of swallowing broad runtime errors. Impact: the bridge survives ctx replacement/fork/reload races while real bugs still surface for diagnostics.

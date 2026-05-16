@@ -24,6 +24,7 @@ import {
   getTelegramCommandExecutionMode,
   getTelegramCommandMessageTarget,
   handleTelegramCompactCommand,
+  handleTelegramNewSessionCommand,
   handleTelegramModelCommand,
   handleTelegramStatusCommand,
   handleTelegramStopCommand,
@@ -89,6 +90,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
       description: "🟢 Open menu / Pair bridge",
     },
     { command: "compact", description: "🗜 Compact current session" },
+    { command: "new", description: "🆕 Start a new session" },
     {
       command: "next",
       description: "⏩ Force next turn",
@@ -823,6 +825,7 @@ test("Command handler target runtime binds command targets into command handling
       calls.push(`continue:${ctx}`);
     },
     compact: () => {},
+    injectNewSession: async () => undefined,
     allocateItemOrder: () => 0,
     allocateControlOrder: () => 0,
     appendControlItem: (item, ctx) => {
@@ -890,6 +893,9 @@ test("Command runtime routes commands through runtime ports", async () => {
     ) => {
       events.push("compact:start");
       compactComplete = callbacks.onComplete;
+    },
+    injectNewSession: async () => {
+      events.push("inject-new");
     },
     enqueueControlItem: async (
       nextMessage: typeof message,
@@ -1042,6 +1048,9 @@ test("Command helpers execute command actions through provided handlers", async 
     handleQueue: async () => {
       events.push("queue");
     },
+    handleNew: async () => {
+      events.push("new");
+    },
   };
   assert.equal(
     await executeTelegramCommandAction(
@@ -1071,4 +1080,85 @@ test("Command helpers execute command actions through provided handlers", async 
     true,
   );
   assert.deepEqual(events, ["stop", "help:start"]);
+});
+
+test("Command helpers guard and complete /new session flow", async () => {
+  const events: string[] = [];
+
+  // Busy: not idle
+  await handleTelegramNewSessionCommand({
+    isIdle: () => false,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectNewSession: async () => {
+      events.push("unexpected:inject");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
+  // Busy: queue not empty
+  await handleTelegramNewSessionCommand({
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => true,
+    isCompactionInProgress: () => false,
+    injectNewSession: async () => {
+      events.push("unexpected:inject");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
+  // Success
+  await handleTelegramNewSessionCommand({
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectNewSession: async () => {
+      events.push("inject");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
+  // Injection failure
+  await handleTelegramNewSessionCommand({
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectNewSession: async () => {
+      throw new Error("tmux not running");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+    recordRuntimeEvent: (category, error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      events.push(`event:${category}:${message}`);
+    },
+  });
+
+  assert.deepEqual(events, [
+    "reply:Cannot start a new session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
+    "reply:Cannot start a new session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
+    "inject",
+    "reply:New session started.",
+    "event:new_session:tmux not running",
+    "reply:New session failed: tmux not running",
+  ]);
 });

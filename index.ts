@@ -85,6 +85,12 @@ export default function (pi: Pi.ExtensionAPI) {
   const isIdle = Pi.isExtensionContextIdle;
   const hasPendingMessages = Pi.hasExtensionContextPendingMessages;
   const compact = Pi.compactExtensionContext;
+  const injectNewSession = Pi.createTmuxSlashCommandInjector({
+    exec: piRuntime.exec,
+    target: "pi:0",
+    command: "/new",
+    recordRuntimeEvent,
+  });
   const mediaGroupRuntime = Media.createTelegramMediaGroupController<
     Api.TelegramMessage,
     Pi.ExtensionContext
@@ -374,6 +380,7 @@ export default function (pi: Pi.ExtensionAPI) {
     isIdle,
     hasPendingMessages,
     compact,
+    injectNewSession,
     recordRuntimeEvent,
   });
   const pollingRuntime = Polling.createTelegramPollingControllerRuntime<

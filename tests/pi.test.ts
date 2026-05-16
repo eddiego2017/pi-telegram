@@ -133,3 +133,50 @@ test("Pi context helpers expose model, idle, pending-message, and compact adapte
   assert.equal(hasExtensionContextPendingMessages(ctx), false);
   assert.deepEqual(events, ["compact", "complete"]);
 });
+
+test("Pi tmux slash-command injector wraps send-keys in nohup/sleep and quotes the command", async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const { createTmuxSlashCommandInjector } = await import("../lib/pi.ts");
+  const inject = createTmuxSlashCommandInjector({
+    exec: async (command, args) => {
+      calls.push({ command, args });
+      return { stdout: "", stderr: "", code: 0, killed: false };
+    },
+    target: "pi:0",
+    command: "/new",
+  });
+  await inject();
+  assert.deepEqual(calls, [
+    {
+      command: "nohup",
+      args: [
+        "bash",
+        "-c",
+        'sleep 1 && tmux send-keys -t pi:0 "/new" Enter',
+      ],
+    },
+  ]);
+});
+
+test("Pi tmux slash-command injector throws and records on non-zero exit", async () => {
+  const events: Array<{ category: string; message: string }> = [];
+  const { createTmuxSlashCommandInjector } = await import("../lib/pi.ts");
+  const inject = createTmuxSlashCommandInjector({
+    exec: async () => ({
+      stdout: "",
+      stderr: "no such session: pi",
+      code: 1,
+      killed: false,
+    }),
+    target: "pi:0",
+    command: "/new",
+    recordRuntimeEvent: (category, error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      events.push({ category, message });
+    },
+  });
+  await assert.rejects(() => inject(), /tmux send-keys failed/);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.category, "tmux_inject");
+  assert.match(events[0]?.message ?? "", /no such session/);
+});
