@@ -19,6 +19,7 @@ import {
   dedupSendTextReply,
   editTelegramRenderedMessage,
   extractLatestAssistantMessageText,
+  formatAgentToolCallBlock,
   getAgentMessageText,
   isAssistantAgentMessage,
   resetTransportReplyDedup,
@@ -27,6 +28,33 @@ import {
   sendTelegramRenderedChunks,
 } from "../lib/replies.ts";
 import { createDedupAgentStartHook } from "../lib/lifecycle.ts";
+
+test("Reply helpers render tool call blocks alongside assistant text", () => {
+  const toolCallBlock = formatAgentToolCallBlock({
+    name: "telegram_attach",
+    arguments: { local_path: "/tmp/foo.png" },
+  });
+  assert.match(toolCallBlock, /telegram_attach/);
+  assert.match(toolCallBlock, /local_path/);
+  const message = {
+    role: "assistant",
+    content: [
+      { type: "text", text: "Before tool. " },
+      {
+        type: "toolCall",
+        id: "call-1",
+        name: "telegram_attach",
+        arguments: { local_path: "/tmp/foo.png" },
+      },
+      { type: "text", text: " After tool." },
+    ],
+  };
+  const rendered = getAgentMessageText(message);
+  assert.match(rendered, /Before tool/);
+  assert.match(rendered, /telegram_attach/);
+  assert.match(rendered, /local_path/);
+  assert.match(rendered, /After tool/);
+});
 
 test("Reply helpers extract assistant message text and metadata", () => {
   const messages = [

@@ -80,17 +80,70 @@ export function isAssistantAgentMessage(message: unknown): boolean {
   return getAgentMessageField(message, "role") === "assistant";
 }
 
+const TELEGRAM_TOOL_CALL_ARGS_PREVIEW_LIMIT = 400;
+
+function formatAgentToolCallArguments(args: unknown): string {
+  if (args === undefined || args === null) return "";
+  if (typeof args === "string") return args;
+  try {
+    return JSON.stringify(args, null, 2);
+  } catch {
+    return String(args);
+  }
+}
+
+export function formatAgentToolCallBlock(block: {
+  name?: unknown;
+  arguments?: unknown;
+}): string {
+  const name =
+    typeof block.name === "string" && block.name.length > 0
+      ? block.name
+      : "tool";
+  const argsText = formatAgentToolCallArguments(block.arguments);
+  if (argsText.length === 0) return `\u{1F527} \`${name}\``;
+  const truncated =
+    argsText.length > TELEGRAM_TOOL_CALL_ARGS_PREVIEW_LIMIT
+      ? `${argsText.slice(0, TELEGRAM_TOOL_CALL_ARGS_PREVIEW_LIMIT)}\u2026`
+      : argsText;
+  return `\u{1F527} \`${name}\`\n\`\`\`json\n${truncated}\n\`\`\``;
+}
+
 function extractAgentTextContent(content: unknown): string {
   const blocks = Array.isArray(content) ? content : [];
-  return blocks
-    .filter(
-      (block): block is { type: string; text?: string } =>
-        typeof block === "object" && block !== null && "type" in block,
-    )
-    .filter((block) => block.type === "text" && typeof block.text === "string")
-    .map((block) => block.text as string)
-    .join("")
-    .trim();
+  let result = "";
+  const appendBlock = (rendered: string): void => {
+    if (rendered.length === 0) return;
+    if (result.length === 0) {
+      result = rendered;
+      return;
+    }
+    const separator = result.endsWith("\n\n")
+      ? ""
+      : result.endsWith("\n")
+        ? "\n"
+        : "\n\n";
+    result = `${result}${separator}${rendered}`;
+  };
+  for (const block of blocks) {
+    if (typeof block !== "object" || block === null || !("type" in block)) {
+      continue;
+    }
+    const type = (block as { type: unknown }).type;
+    if (type === "text") {
+      const text = (block as { text?: unknown }).text;
+      if (typeof text === "string") result += text;
+      continue;
+    }
+    if (type === "toolCall") {
+      appendBlock(
+        formatAgentToolCallBlock(
+          block as { name?: unknown; arguments?: unknown },
+        ),
+      );
+    }
+  }
+  return result.trim();
 }
 
 export function getAgentMessageText(message: unknown): string {
