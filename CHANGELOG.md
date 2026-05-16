@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `[Resume Menu]` Added a Telegram-side `/resume` command that lists previous π sessions in the current cwd and lets the operator switch via an inline keyboard. Selecting a session injects `/telegram-resume-exec <path>` into the host tmux pane (`pi:0`) which the extension handles in-process via `ctx.switchSession(path)`. Paginated 8 sessions/page (`MAX_ITEMS=200`) with `⬅️ Prev` / `Page X/Y` / `Next ➡️` nav row; full list is cached at open time so page nav does not re-list, and entry callbacks use a stable global index across page changes. `resume` is now a Telegram-reserved command name.
+- `[Tests]` Added `tests/menu-resume.test.ts` covering page-count math, page clamping, slice window, nav-row visibility on first/last/single page, page-callback state updates and clamping, and stable global-index open dispatch.
 - `[Commands]` Added `/llm [tokens...]`: lists available LLM models in `provider/id` form. With tokens, filters by case-insensitive AND substring match on the model id; exactly one match switches the active session model (`Model switched to provider/id`), multiple matches list the filtered subset, no match replies `No models match: <tokens>`. Reuses `setModel` + `currentModelRuntime.setCurrentModel` so the switch surfaces in the status row, but does not persist beyond the session.
 - `[Reserved Names]` `llm` is now a Telegram-reserved command name. Impact: a π prompt template named `llm.md` (mapped to `/llm`) is shadowed by the built-in `/llm` command in Telegram.
 - `[Routing]` `Commands.handleCommand` now takes `args` between `commandName` and `message`; `buildTelegramCommandAction(name, args?)` and `executeTelegramCommandAction` thread `args` only for `llm`. Test fixtures updated.

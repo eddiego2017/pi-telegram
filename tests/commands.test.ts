@@ -95,6 +95,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
     },
     { command: "compact", description: "🗜 Compact current session" },
     { command: "new", description: "🆕 Start a new session" },
+    { command: "resume", description: "📂 Resume a previous session" },
     { command: "llm", description: "🧬 List available LLM models" },
     {
       command: "next",
@@ -878,6 +879,7 @@ test("Command handler target runtime binds command targets into command handling
     selectLlmModel: async () => true,
     openThinkingMenu: async () => {},
     openQueueMenu: async () => {},
+    openResumeMenu: async () => {},
     getAllowedUserId: () => undefined,
     setAllowedUserId: () => {},
     setMyCommands: async () => {},
@@ -978,6 +980,9 @@ test("Command runtime routes commands through runtime ports", async () => {
     },
     openQueueMenu: async (nextMessage: typeof message) => {
       events.push(`queue:${nextMessage.chat.id}`);
+    },
+    openResumeMenu: async (nextMessage: typeof message) => {
+      events.push(`resume:${nextMessage.chat.id}`);
     },
     getAllowedUserId: () => allowedUserId,
     setAllowedUserId: (userId: number) => {
@@ -1145,6 +1150,9 @@ test("Command helpers execute command actions through provided handlers", async 
     },
     handleNew: async () => {
       events.push("new");
+    },
+    handleResume: async () => {
+      events.push("resume");
     },
   };
   assert.equal(

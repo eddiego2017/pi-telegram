@@ -75,6 +75,15 @@ export interface TelegramInboundRouteRuntimeDeps<
     query: TCallbackQuery,
     ctx: TContext,
   ) => Promise<boolean>;
+  resumeMenuCallbackHandler?: (
+    query: TCallbackQuery,
+    ctx: TContext,
+  ) => Promise<boolean>;
+  openResumeMenu?: (
+    chatId: number,
+    replyToMessageId: number,
+    ctx: TContext,
+  ) => Promise<void>;
   buttonActionStore?: OutboundHandlers.TelegramButtonActionStore;
   inboundHandlerRuntime: TelegramInboundHandlerRuntime<TContext>;
   updateStatus: (ctx: TContext, error?: string) => void;
@@ -147,6 +156,7 @@ const TELEGRAM_OWNED_CALLBACK_PREFIXES = [
   "menu:",
   "model:",
   "queue:",
+  "resume:",
   "section:",
   "settings:",
   "status:",
@@ -275,6 +285,8 @@ export function createTelegramInboundRouteRuntime<
       ctx,
     );
     if (handledBySettings) return;
+    const handledByResume = await deps.resumeMenuCallbackHandler?.(query, ctx);
+    if (handledByResume) return;
     const callbackData = query.data;
     if (
       deps.sendUserMessage &&
@@ -384,6 +396,7 @@ export function createTelegramInboundRouteRuntime<
       return deps.openQueueMenu(chatId, message.message_id, ctx);
     },
     openSettingsMenu: deps.openSettingsMenu,
+    openResumeMenu: deps.openResumeMenu,
     getAllowedUserId: deps.configStore.getAllowedUserId,
     setAllowedUserId: deps.configStore.setAllowedUserId,
     setMyCommands: deps.setMyCommands,

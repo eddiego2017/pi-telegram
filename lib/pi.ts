@@ -175,3 +175,57 @@ export function createTmuxSlashCommandInjector(
     }
   };
 }
+
+export interface TmuxDynamicSlashCommandInjectorOptions {
+  exec: PiExtensionApiRuntimePorts["exec"];
+  target: string;
+  recordRuntimeEvent?: (
+    category: string,
+    error: unknown,
+    details?: Record<string, unknown>,
+  ) => void;
+}
+
+/**
+ * Variant of createTmuxSlashCommandInjector whose command + arg are decided
+ * at call time. Used when the bridge needs to invoke an internal slash command
+ * with a dynamic payload (e.g. /resume picking a specific session path).
+ */
+export function createTelegramResumeExecInjector(
+  options: TmuxDynamicSlashCommandInjectorOptions,
+): (sessionPath: string) => Promise<void> {
+  const dynamic = createTmuxDynamicSlashCommandInjector(options);
+  return function injectTelegramResumeExec(sessionPath: string) {
+    return dynamic("/telegram-resume-exec", sessionPath);
+  };
+}
+
+export function getExtensionContextSessionFile(
+  ctx: ExtensionContext,
+): string | undefined {
+  return ctx.sessionManager.getSessionFile();
+}
+
+export function createTmuxDynamicSlashCommandInjector(
+  options: TmuxDynamicSlashCommandInjectorOptions,
+): (command: string, arg?: string) => Promise<void> {
+  const { exec, target, recordRuntimeEvent } = options;
+  return async function injectTmuxSlashCommand(
+    command: string,
+    arg?: string,
+  ): Promise<void> {
+    const fullCommand = arg ? `${command} ${arg}` : command;
+    const script = `sleep 1 && tmux send-keys -t ${target} ${JSON.stringify(fullCommand)} Enter`;
+    const result = await exec("nohup", ["bash", "-c", script]);
+    if (result.code !== 0) {
+      const error = new Error(
+        `tmux send-keys failed (code ${result.code}): ${result.stderr || result.stdout || "unknown"}`,
+      );
+      recordRuntimeEvent?.("tmux_inject", error, {
+        target,
+        command: fullCommand,
+      });
+      throw error;
+    }
+  };
+}
