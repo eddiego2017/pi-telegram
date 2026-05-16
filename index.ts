@@ -20,6 +20,7 @@ import * as Lifecycle from "./lib/lifecycle.ts";
 import * as Locks from "./lib/locks.ts";
 import * as Media from "./lib/media.ts";
 import * as MenuQueue from "./lib/menu-queue.ts";
+import * as MenuResume from "./lib/menu-resume.ts";
 import * as MenuSettings from "./lib/menu-settings.ts";
 import * as Menu from "./lib/menu.ts";
 import * as Model from "./lib/model.ts";
@@ -89,6 +90,11 @@ export default function (pi: Pi.ExtensionAPI) {
     exec: piRuntime.exec,
     target: "pi:0",
     command: "/new",
+    recordRuntimeEvent,
+  });
+  const injectResumeExec = Pi.createTelegramResumeExecInjector({
+    exec: piRuntime.exec,
+    target: "pi:0",
     recordRuntimeEvent,
   });
   const mediaGroupRuntime = Media.createTelegramMediaGroupController<
@@ -327,6 +333,20 @@ export default function (pi: Pi.ExtensionAPI) {
     },
     sectionRegistry,
   );
+  const resumeMenuRuntime = MenuResume.buildTelegramResumeMenuRuntime<
+    Pi.ExtensionContext
+  >({
+    getCwd: Pi.getExtensionContextCwd,
+    getCurrentSessionFile: Pi.getExtensionContextSessionFile,
+    sendInteractiveMessage,
+    editInteractiveMessage,
+    answerCallbackQuery,
+    injectResumeExec,
+  });
+  const notifyResumeOutcome = MenuResume.createTelegramResumeOutcomeNotifier({
+    getAllowedUserId: configStore.getAllowedUserId,
+    sendTextReply,
+  });
 
   // --- Polling ---
 
@@ -353,6 +373,8 @@ export default function (pi: Pi.ExtensionAPI) {
     queueMenuCallbackHandler: queueMenuRuntime.handleCallbackQuery,
     openSettingsMenu: settingsMenuRuntime.openSettingsMenu,
     settingsMenuCallbackHandler: settingsMenuRuntime.handleCallbackQuery,
+    openResumeMenu: resumeMenuRuntime.openResumeMenu,
+    resumeMenuCallbackHandler: resumeMenuRuntime.handleCallbackQuery,
     sectionRegistry,
     buttonActionStore,
     inboundHandlerRuntime,
@@ -467,6 +489,7 @@ export default function (pi: Pi.ExtensionAPI) {
     startPolling: lockedPollingRuntime.start,
     stopPolling: lockedPollingRuntime.stop,
     updateStatus,
+    notifyResumeOutcome,
   });
 
   // --- Lifecycle Hooks ---

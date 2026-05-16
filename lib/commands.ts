@@ -35,6 +35,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   thinking: "🧠",
   compact: "🗜",
   new: "🆕",
+  resume: "📂",
   queue: "🔢",
   next: "⏩",
   continue: "▶️",
@@ -84,6 +85,13 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       description: formatTelegramBotCommandDescription(
         "new",
         "Start a new session",
+      ),
+    },
+    {
+      command: "resume",
+      description: formatTelegramBotCommandDescription(
+        "resume",
+        "Resume a previous session",
       ),
     },
     {
@@ -151,7 +159,17 @@ export interface TelegramBridgeCommandStartPollingResult {
   owner?: string;
 }
 
-export interface TelegramBridgeCommandRegistrationDeps {
+export interface TelegramResumeExecBridgeDeps {
+  /** Notify callers (e.g. Telegram chat) about resume completion or failure. */
+  notifyResumeOutcome?: (
+    outcome:
+      | { ok: true; sessionPath: string }
+      | { ok: false; sessionPath: string; error: string },
+  ) => Promise<void>;
+}
+
+export interface TelegramBridgeCommandRegistrationDeps
+  extends TelegramResumeExecBridgeDeps {
   promptForConfig: (ctx: ExtensionCommandContext) => Promise<void>;
   getStatusLines: () => string[];
   reloadConfig: () => Promise<void>;
@@ -234,6 +252,56 @@ export function registerTelegramBridgeCommands(
       deps.updateStatus(ctx);
     },
   });
+  // Internal command used by Telegram /resume callback. Not user-facing.
+  // Receives an absolute session file path and switches to it via the
+  // ExtensionCommandContext API.
+  pi.registerCommand("telegram-resume-exec", {
+    description:
+      "(internal) Switch session to the given session file path. Used by Telegram /resume callback.",
+    handler: async (args, ctx) => {
+      const sessionPath = args.trim();
+      if (!sessionPath) {
+        ctx.ui.notify("telegram-resume-exec: missing path", "warning");
+        await deps.notifyResumeOutcome?.({
+          ok: false,
+          sessionPath: "",
+          error: "missing path",
+        });
+        return;
+      }
+      try {
+        const result = await ctx.switchSession(sessionPath);
+        if (result.cancelled) {
+          ctx.ui.notify(
+            `Resume cancelled for ${sessionPath}"`,
+            "warning",
+          );
+          await deps.notifyResumeOutcome?.({
+            ok: false,
+            sessionPath,
+            error: "switchSession cancelled",
+          });
+          return;
+        }
+        // On success the context replacement happens inside pi; we still
+        // fire a best-effort notification from the (now stale) ctx so the
+        // Telegram chat gets feedback. The bridge's own session_start hook
+        // will rebind for the new session.
+        await deps.notifyResumeOutcome?.({ ok: true, sessionPath });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(
+          `Resume failed for ${sessionPath}: ${message}`,
+          "error",
+        );
+        await deps.notifyResumeOutcome?.({
+          ok: false,
+          sessionPath,
+          error: message,
+        });
+      }
+    },
+  });
 }
 
 export const TELEGRAM_RESERVED_COMMAND_NAMES = [
@@ -245,6 +313,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "queue",
   "compact",
   "new",
+  "resume",
   "model",
   "llm",
   "thinking",
@@ -278,6 +347,7 @@ export type TelegramCommandAction =
   | { kind: "queue"; executionMode: "immediate" }
   | { kind: "compact"; executionMode: "immediate" }
   | { kind: "new"; executionMode: "immediate" }
+  | { kind: "resume"; executionMode: "immediate" }
   | { kind: "status"; executionMode: "immediate" }
   | { kind: "model"; executionMode: "immediate" }
   | { kind: "llm"; args: string; executionMode: "immediate" }
@@ -299,6 +369,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleQueue: (message: TMessage, ctx: TContext) => Promise<void>;
   handleCompact: (message: TMessage, ctx: TContext) => Promise<void>;
   handleNew: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleResume: (message: TMessage, ctx: TContext) => Promise<void>;
   handleStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
   handleLlm: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
@@ -405,6 +476,11 @@ export interface TelegramCommandTargetRuntimeDeps<TContext> {
     replyToMessageId: number,
     ctx: TContext,
   ) => Promise<void>;
+  openResumeMenu?: (
+    chatId: number,
+    replyToMessageId: number,
+    ctx: TContext,
+  ) => Promise<void>;
   sendTextReply: (
     chatId: number,
     replyToMessageId: number,
@@ -426,6 +502,7 @@ export interface TelegramCommandTargetRuntime<
   showStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   openModelMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openSettingsMenu: (message: TMessage, ctx: TContext) => Promise<void>;
+  openResumeMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   sendTextReply: (message: TMessage, text: string) => Promise<void>;
 }
 
@@ -511,6 +588,7 @@ export function createTelegramCommandTargetQueueRuntime<
     showStatus: deps.showStatus,
     openModelMenu: deps.openModelMenu,
     openSettingsMenu: deps.openSettingsMenu,
+    openResumeMenu: deps.openResumeMenu,
     sendTextReply: deps.sendTextReply,
   });
 }
@@ -550,6 +628,18 @@ export function createTelegramCommandTargetRuntime<
         return;
       }
       await deps.openSettingsMenu(target.chatId, target.replyToMessageId, ctx);
+    },
+    openResumeMenu: async (message, ctx) => {
+      const target = getTelegramCommandMessageTarget(message);
+      if (!deps.openResumeMenu) {
+        await deps.sendTextReply(
+          target.chatId,
+          target.replyToMessageId,
+          "Resume menu is unavailable.",
+        );
+        return;
+      }
+      await deps.openResumeMenu(target.chatId, target.replyToMessageId, ctx);
     },
     sendTextReply: async (message, text) => {
       const target = getTelegramCommandMessageTarget(message);
@@ -621,6 +711,7 @@ export interface TelegramCommandRuntimeDeps<
   openThinkingMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openQueueMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openSettingsMenu?: (message: TMessage, ctx: TContext) => Promise<void>;
+  openResumeMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   getAllowedUserId: () => number | undefined;
   setAllowedUserId: (userId: number) => void;
   registerBotCommands: () => Promise<void>;
@@ -635,6 +726,7 @@ export const TELEGRAM_APP_MENU_INTRO_HTML = [
   `${formatTelegramCommandEmojiPrefix("start")}/start — Open menu / Pair bridge`,
   `${formatTelegramCommandEmojiPrefix("compact")}/compact — Compact current session`,
   `${formatTelegramCommandEmojiPrefix("new")}/new — Start a new session`,
+  `${formatTelegramCommandEmojiPrefix("resume")}/resume — Resume a previous session`,
   `${formatTelegramCommandEmojiPrefix("llm")}/llm — List available LLM models`,
   `${formatTelegramCommandEmojiPrefix("next")}/next — Force next turn`,
   `${formatTelegramCommandEmojiPrefix("continue")}/continue — Queue continue prompt`,
@@ -705,6 +797,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   queue: { kind: "queue", executionMode: "immediate" },
   compact: { kind: "compact", executionMode: "immediate" },
   new: { kind: "new", executionMode: "immediate" },
+  resume: { kind: "resume", executionMode: "immediate" },
   model: { kind: "model", executionMode: "immediate" },
   llm: { kind: "llm", args: "", executionMode: "immediate" },
   thinking: { kind: "thinking", executionMode: "immediate" },
@@ -1057,6 +1150,9 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
     case "new":
       await deps.handleNew(message, ctx);
       return true;
+    case "resume":
+      await deps.handleResume(message, ctx);
+      return true;
     case "status":
       await deps.handleStatus(message, ctx);
       return true;
@@ -1090,6 +1186,7 @@ export interface TelegramCommandHandlerTargetRuntimeDeps<
       | "showStatus"
       | "openModelMenu"
       | "openSettingsMenu"
+      | "openResumeMenu"
       | "sendTextReply"
       | "registerBotCommands"
     >,
@@ -1123,6 +1220,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     showStatus: deps.showStatus,
     openModelMenu: deps.openModelMenu,
     openSettingsMenu: deps.openSettingsMenu,
+    openResumeMenu: deps.openResumeMenu,
     sendTextReply: deps.sendTextReply,
   });
   return createTelegramCommandHandler({
@@ -1152,6 +1250,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     openThinkingMenu: deps.openThinkingMenu,
     openQueueMenu: deps.openQueueMenu,
     openSettingsMenu: commandTargetRuntime.openSettingsMenu,
+    openResumeMenu: commandTargetRuntime.openResumeMenu,
     getAllowedUserId: deps.getAllowedUserId,
     setAllowedUserId: deps.setAllowedUserId,
     registerBotCommands: createTelegramBotCommandRegistrar({
@@ -1298,6 +1397,9 @@ async function handleTelegramCommandRuntime<
           sendTextReply: sendReplyFor(nextMessage),
           recordRuntimeEvent: deps.recordRuntimeEvent,
         });
+      },
+      handleResume: async (nextMessage, commandCtx) => {
+        await deps.openResumeMenu(nextMessage, commandCtx);
       },
       handleCompact: async (nextMessage, commandCtx) => {
         await handleTelegramCompactCommand({
