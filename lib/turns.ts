@@ -32,6 +32,7 @@ export const TELEGRAM_PREFIX = "[telegram]";
 export interface TelegramTurnMessage {
   message_id: number;
   chat: { id: number };
+  message_thread_id?: number;
 }
 
 export type DownloadedTelegramTurnFile = DownloadedTelegramMessageFile;
@@ -407,6 +408,7 @@ export async function buildTelegramPromptTurn(
   return {
     kind: "prompt",
     chatId: firstMessage.chat.id,
+    messageThreadId: firstMessage.message_thread_id,
     replyToMessageId: firstMessage.message_id,
     sourceMessageIds: collectTelegramMessageIds(options.messages),
     queueOrder: options.queueOrder,

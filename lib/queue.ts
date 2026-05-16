@@ -65,6 +65,8 @@ export const TELEGRAM_QUEUE_LANE_CONTRACTS: readonly TelegramQueueLaneContract[]
 export interface TelegramQueueItemBase {
   kind: TelegramQueueItemKind;
   chatId: number;
+  /** Forum topic id when chatId points at a topic-enabled supergroup. */
+  messageThreadId?: number;
   replyToMessageId: number;
   guestQueryId?: string;
   queueOrder: number;
@@ -113,6 +115,7 @@ export interface TelegramActiveTurnStore<
   set: (turn: TTurn) => void;
   clear: () => void;
   getChatId: () => number | undefined;
+  getMessageThreadId: () => number | undefined;
   getReplyToMessageId: () => number | undefined;
   getGuestQueryId: () => string | undefined;
   getSourceMessageIds: () => number[] | undefined;
@@ -204,6 +207,7 @@ export function createTelegramActiveTurnStore<
       activeTurn = undefined;
     },
     getChatId: () => activeTurn?.chatId,
+    getMessageThreadId: () => activeTurn?.messageThreadId,
     getReplyToMessageId: () => activeTurn?.replyToMessageId,
     getGuestQueryId: () => activeTurn?.guestQueryId,
     getSourceMessageIds: () => activeTurn?.sourceMessageIds,

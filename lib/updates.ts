@@ -10,6 +10,7 @@ import {
   type TelegramAuthorizationState,
   type TelegramUserPairingRuntimeDeps,
 } from "./config.ts";
+import { runWithTelegramThreadContext } from "./thread-context.ts";
 
 // --- Extraction ---
 
@@ -122,6 +123,8 @@ export interface TelegramUpdateMessage {
   chat: TelegramChat;
   from?: TelegramUser;
   message_id?: number;
+  message_thread_id?: number;
+  is_topic_message?: boolean;
 }
 
 export interface TelegramCallbackQuery {
@@ -152,7 +155,7 @@ export function getAuthorizedTelegramCallbackQuery(
   const query = update.callback_query;
   if (!query) return undefined;
   const message = query.message;
-  if (!message || message.chat.type !== "private" || query.from.is_bot) {
+  if (!message || query.from.is_bot) {
     return undefined;
   }
   return query;
@@ -162,12 +165,7 @@ export function getAuthorizedTelegramMessage(
   update: TelegramUpdateRouting,
 ): TelegramUpdateMessage | undefined {
   const message = update.message;
-  if (
-    !message ||
-    message.chat.type !== "private" ||
-    !message.from ||
-    message.from.is_bot
-  ) {
+  if (!message || !message.from || message.from.is_bot) {
     return undefined;
   }
   return message;
@@ -177,12 +175,7 @@ export function getAuthorizedTelegramEditedMessage(
   update: TelegramUpdateRouting,
 ): TelegramUpdateMessage | undefined {
   const message = update.edited_message;
-  if (
-    !message ||
-    message.chat.type !== "private" ||
-    !message.from ||
-    message.from.is_bot
-  ) {
+  if (!message || !message.from || message.from.is_bot) {
     return undefined;
   }
   return message;
@@ -555,6 +548,35 @@ function getTelegramMessageReplyTarget(
   };
 }
 
+function getTelegramPlanThreadContextScope<
+  TReactionUpdate extends TelegramMessageReactionUpdated,
+  TCallbackQuery extends TelegramCallbackQuery,
+  TMessage extends TelegramUpdateMessage,
+>(
+  plan: TelegramUpdateExecutionPlan<TReactionUpdate, TCallbackQuery, TMessage>,
+):
+  | { chatId: number; messageThreadId?: number }
+  | undefined {
+  const pickMessage = (
+    msg: TelegramUpdateMessage | undefined,
+  ): { chatId: number; messageThreadId?: number } | undefined => {
+    if (!msg || typeof msg.chat.id !== "number") return undefined;
+    return {
+      chatId: msg.chat.id,
+      messageThreadId: msg.message_thread_id,
+    };
+  };
+  switch (plan.kind) {
+    case "callback":
+      return pickMessage(plan.query.message);
+    case "message":
+    case "edited-message":
+      return pickMessage(plan.message);
+    default:
+      return undefined;
+  }
+}
+
 export async function executeTelegramUpdate<
   TUpdate extends TelegramUpdateFlow,
   TContext = unknown,
@@ -696,7 +718,6 @@ export async function handleAuthorizedTelegramReactionUpdate<TContext>(
 ): Promise<void> {
   const reactionUser = reactionUpdate.user;
   if (
-    reactionUpdate.chat.type !== "private" ||
     !reactionUser ||
     reactionUser.is_bot ||
     reactionUser.id !== deps.allowedUserId
@@ -755,6 +776,31 @@ function isTelegramStaleContextError(error: unknown): boolean {
 }
 
 export async function executeTelegramUpdatePlan<
+  TContext = unknown,
+  TReactionUpdate extends TelegramMessageReactionUpdated =
+    TelegramMessageReactionUpdated,
+  TCallbackQuery extends TelegramCallbackQuery = TelegramCallbackQuery,
+  TMessage extends TelegramUpdateMessage = TelegramUpdateMessage,
+>(
+  plan: TelegramUpdateExecutionPlan<TReactionUpdate, TCallbackQuery, TMessage>,
+  deps: TelegramUpdateRuntimeDeps<
+    TContext,
+    TReactionUpdate,
+    TCallbackQuery,
+    TMessage
+  >,
+): Promise<void> {
+  const scope = getTelegramPlanThreadContextScope(plan);
+  if (scope) {
+    await runWithTelegramThreadContext(scope, () =>
+      executeTelegramUpdatePlanInner(plan, deps),
+    );
+    return;
+  }
+  await executeTelegramUpdatePlanInner(plan, deps);
+}
+
+async function executeTelegramUpdatePlanInner<
   TContext = unknown,
   TReactionUpdate extends TelegramMessageReactionUpdated =
     TelegramMessageReactionUpdated,

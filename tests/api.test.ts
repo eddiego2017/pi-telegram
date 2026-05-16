@@ -656,3 +656,78 @@ test("Telegram API client resolves bot tokens lazily for wrapped calls", async (
     restoreFetch();
   }
 });
+
+test("Telegram bridge API runtime injects default message_thread_id for matching chats", async () => {
+  const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+  const multipartCalls: Array<Record<string, string>> = [];
+  const runtime = createTelegramBridgeApiRuntime({
+    tempDir: "/tmp/telegram",
+    maxFileSizeBytes: 123,
+    tempFileMaxAgeMs: 60_000,
+    recordRuntimeEvent: () => {},
+    getDefaultMessageThreadId: (chatId) => (chatId === -10042 ? 77 : undefined),
+    client: createApiRuntimeClient({
+      call: async <TResponse>(
+        method: string,
+        body: Record<string, unknown>,
+      ) => {
+        calls.push({ method, body });
+        if (method === "sendMessage") return { message_id: 1 } as TResponse;
+        return true as TResponse;
+      },
+      callMultipart: async <TResponse>(
+        _method: string,
+        fields: Record<string, string>,
+      ) => {
+        multipartCalls.push(fields);
+        return true as TResponse;
+      },
+    }),
+  });
+  // Forum chat with no explicit thread id → injected.
+  await runtime.sendMessage({ chat_id: -10042, text: "hi" });
+  // Forum chat with explicit thread id → preserved.
+  await runtime.sendMessage({
+    chat_id: -10042,
+    text: "hi",
+    message_thread_id: 11,
+  });
+  // Different chat → not injected.
+  await runtime.sendMessage({ chat_id: 1, text: "hi" });
+  await runtime.sendTypingAction(-10042);
+  await runtime.sendMessageDraft(-10042, 5, "draft");
+  await runtime.callMultipart(
+    "sendDocument",
+    { chat_id: "-10042" },
+    "document",
+    "/tmp/a",
+    "a.txt",
+  );
+  assert.deepEqual(calls, [
+    {
+      method: "sendMessage",
+      body: { chat_id: -10042, text: "hi", message_thread_id: 77 },
+    },
+    {
+      method: "sendMessage",
+      body: { chat_id: -10042, text: "hi", message_thread_id: 11 },
+    },
+    { method: "sendMessage", body: { chat_id: 1, text: "hi" } },
+    {
+      method: "sendChatAction",
+      body: { chat_id: -10042, action: "typing", message_thread_id: 77 },
+    },
+    {
+      method: "sendMessageDraft",
+      body: {
+        chat_id: -10042,
+        draft_id: 5,
+        text: "draft",
+        message_thread_id: 77,
+      },
+    },
+  ]);
+  assert.deepEqual(multipartCalls, [
+    { chat_id: "-10042", message_thread_id: "77" },
+  ]);
+});

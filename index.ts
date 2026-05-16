@@ -38,6 +38,7 @@ import * as Runtime from "./lib/runtime.ts";
 import * as Setup from "./lib/setup.ts";
 import * as Status from "./lib/status.ts";
 import * as TextGroups from "./lib/text-groups.ts";
+import * as ThreadContext from "./lib/thread-context.ts";
 
 type ActivePiModel = NonNullable<Pi.ExtensionContext["model"]>;
 type RuntimeTelegramQueueItem = Queue.TelegramQueueItem<Pi.ExtensionContext>;
@@ -163,6 +164,14 @@ export default function (pi: Pi.ExtensionAPI) {
 
   // --- Telegram API ---
 
+  const resolveDefaultMessageThreadId =
+    ThreadContext.createTelegramMessageThreadIdResolver({
+      getActiveTurnThreadContext:
+        ThreadContext.createTelegramActiveTurnThreadContextGetter({
+          getChatId: activeTurnRuntime.getChatId,
+          getMessageThreadId: activeTurnRuntime.getMessageThreadId,
+        }),
+    });
   const {
     callMultipart,
     deleteWebhook,
@@ -180,6 +189,7 @@ export default function (pi: Pi.ExtensionAPI) {
   } = Api.createDefaultTelegramBridgeApiRuntime({
     getBotToken: configStore.getBotToken,
     recordRuntimeEvent,
+    getDefaultMessageThreadId: resolveDefaultMessageThreadId,
   });
 
   // --- Message Delivery & Preview ---

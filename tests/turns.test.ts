@@ -501,3 +501,33 @@ test("Turn helpers assemble prompt turns with text, ids, history, and image payl
     mimeType: "image/png",
   });
 });
+
+test("Turn builder captures forum topic message_thread_id on the active turn", async () => {
+  const turn = await buildTelegramPromptTurn({
+    telegramPrefix: "[telegram]",
+    messages: [
+      { message_id: 10, chat: { id: -10042 }, message_thread_id: 77 },
+      { message_id: 11, chat: { id: -10042 }, message_thread_id: 77 },
+    ],
+    queueOrder: 1,
+    rawText: "hello topic",
+    files: [],
+    readBinaryFile: async () => new Uint8Array(),
+    inferImageMimeType: () => undefined,
+  });
+  assert.equal(turn.chatId, -10042);
+  assert.equal(turn.messageThreadId, 77);
+});
+
+test("Turn builder leaves messageThreadId undefined for non-topic chats", async () => {
+  const turn = await buildTelegramPromptTurn({
+    telegramPrefix: "[telegram]",
+    messages: [{ message_id: 10, chat: { id: 99 } }],
+    queueOrder: 1,
+    rawText: "hello",
+    files: [],
+    readBinaryFile: async () => new Uint8Array(),
+    inferImageMimeType: () => undefined,
+  });
+  assert.equal(turn.messageThreadId, undefined);
+});

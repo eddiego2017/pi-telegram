@@ -27,6 +27,7 @@ import {
   TELEGRAM_REMOVAL_REACTION_EMOJIS,
   TELEGRAM_REMOVAL_REACTIONS,
 } from "../lib/updates.ts";
+import { getAmbientTelegramThreadContext } from "../lib/thread-context.ts";
 
 const TEST_CONTEXT = "ctx";
 
@@ -153,12 +154,13 @@ test("Update routing extracts only private human callback queries", () => {
   assert.ok(query);
 });
 
-test("Update routing extracts private human messages and edited messages separately", () => {
+test("Update routing extracts human messages and edited messages from any chat type", () => {
+  // Bots are still filtered out at extraction time.
   assert.equal(
     getAuthorizedTelegramMessage({
       message: {
-        chat: { type: "group" },
-        from: { id: 1, is_bot: false },
+        chat: { type: "private" },
+        from: { id: 1, is_bot: true },
       },
     }),
     undefined,
@@ -170,13 +172,34 @@ test("Update routing extracts private human messages and edited messages separat
     },
   });
   assert.ok(directMessage);
-  const editedMessage = getAuthorizedTelegramEditedMessage({
-    edited_message: {
-      chat: { type: "private" },
+  // Group / forum supergroup messages now pass extraction; downstream
+  // authorization narrows by `allowedUserId`.
+  const groupMessage = getAuthorizedTelegramMessage({
+    message: {
+      chat: { type: "group" },
       from: { id: 1, is_bot: false },
     },
   });
+  assert.ok(groupMessage);
+  const forumMessage = getAuthorizedTelegramMessage({
+    message: {
+      chat: { type: "supergroup" },
+      from: { id: 1, is_bot: false },
+      message_thread_id: 99,
+      is_topic_message: true,
+    },
+  });
+  assert.ok(forumMessage);
+  assert.equal(forumMessage.message_thread_id, 99);
+  const editedMessage = getAuthorizedTelegramEditedMessage({
+    edited_message: {
+      chat: { type: "supergroup" },
+      from: { id: 1, is_bot: false },
+      message_thread_id: 99,
+    },
+  });
   assert.ok(editedMessage);
+  assert.equal(editedMessage.message_thread_id, 99);
 });
 
 test("Update routing extracts guest messages without private chat filter", () => {
@@ -915,4 +938,75 @@ test("Update runtime handles callback deny and message pair flows", async () => 
     "reply:7:9:Telegram bridge paired with this account.",
     "message",
   ]);
+});
+
+test("Update runtime stamps message_thread_id into ambient context for forum topic messages", async () => {
+  let observed: { chatId: number; messageThreadId?: number } | undefined;
+  await executeTelegramUpdatePlan(
+    {
+      kind: "message",
+      message: {
+        chat: { id: -10042, type: "supergroup" },
+        from: { id: 2, is_bot: false },
+        message_id: 9,
+        message_thread_id: 77,
+        is_topic_message: true,
+      },
+      shouldPair: false,
+      shouldNotifyPaired: false,
+      shouldDeny: false,
+    },
+    {
+      ctx: TEST_CONTEXT,
+      removePendingMediaGroupMessages: () => {},
+      removeQueuedTelegramTurnsByMessageIds: () => 0,
+      handleAuthorizedTelegramReactionUpdate: async () => {},
+      pairTelegramUserIfNeeded: async () => false,
+      answerCallbackQuery: async () => {},
+      answerGuestQuery: async () => {},
+      handleAuthorizedTelegramCallbackQuery: async () => {},
+      sendTextReply: async () => undefined,
+      handleAuthorizedTelegramMessage: async () => {
+        observed = getAmbientTelegramThreadContext();
+      },
+      handleAuthorizedTelegramEditedMessage: async () => {},
+    },
+  );
+  assert.deepEqual(observed, { chatId: -10042, messageThreadId: 77 });
+});
+
+test("Update runtime stamps ambient context for callback queries originating in forum topics", async () => {
+  let observed: { chatId: number; messageThreadId?: number } | undefined;
+  await executeTelegramUpdatePlan(
+    {
+      kind: "callback",
+      query: {
+        id: "cb-1",
+        from: { id: 2, is_bot: false },
+        message: {
+          chat: { id: -10042, type: "supergroup" },
+          message_id: 9,
+          message_thread_id: 77,
+        },
+      },
+      shouldPair: false,
+      shouldDeny: false,
+    },
+    {
+      ctx: TEST_CONTEXT,
+      removePendingMediaGroupMessages: () => {},
+      removeQueuedTelegramTurnsByMessageIds: () => 0,
+      handleAuthorizedTelegramReactionUpdate: async () => {},
+      pairTelegramUserIfNeeded: async () => false,
+      answerCallbackQuery: async () => {},
+      answerGuestQuery: async () => {},
+      handleAuthorizedTelegramCallbackQuery: async () => {
+        observed = getAmbientTelegramThreadContext();
+      },
+      sendTextReply: async () => undefined,
+      handleAuthorizedTelegramMessage: async () => {},
+      handleAuthorizedTelegramEditedMessage: async () => {},
+    },
+  );
+  assert.deepEqual(observed, { chatId: -10042, messageThreadId: 77 });
 });

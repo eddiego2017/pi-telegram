@@ -106,6 +106,8 @@ export interface TelegramMessage {
   text?: string;
   caption?: string;
   media_group_id?: string;
+  message_thread_id?: number;
+  is_topic_message?: boolean;
   photo?: TelegramPhotoSize[];
   document?: TelegramDocument;
   video?: TelegramVideo;
@@ -189,6 +191,7 @@ export type TelegramSendMessageBody = Record<string, unknown> & {
   parse_mode?: "HTML";
   reply_markup?: unknown;
   reply_parameters?: TelegramReplyParameters;
+  message_thread_id?: number;
 };
 
 export type TelegramEditMessageTextBody = Record<string, unknown> & {
@@ -273,6 +276,11 @@ export interface TelegramBridgeApiRuntimeDeps {
     error: unknown,
     details?: Record<string, unknown>,
   ) => void;
+  /** Resolve the ambient forum-topic id for outbound calls that did not
+   *  explicitly specify one. Receives the target chat id so multi-chat
+   *  scenarios don't leak threads across chats. Returns undefined for
+   *  regular (non-forum) chats. */
+  getDefaultMessageThreadId?: (chatId: number) => number | undefined;
 }
 
 export interface TelegramBridgeApiRuntime {
@@ -694,6 +702,7 @@ export function createTelegramChatActionSender<TAction extends string>(
 export function createDefaultTelegramBridgeApiRuntime(deps: {
   getBotToken: () => string | undefined;
   recordRuntimeEvent: TelegramBridgeApiRuntimeDeps["recordRuntimeEvent"];
+  getDefaultMessageThreadId?: (chatId: number) => number | undefined;
 }): TelegramBridgeApiRuntime {
   return createTelegramBridgeApiRuntime({
     client: createTelegramApiClient(deps.getBotToken),
@@ -701,12 +710,23 @@ export function createDefaultTelegramBridgeApiRuntime(deps: {
     maxFileSizeBytes: TELEGRAM_INBOUND_FILE_MAX_BYTES,
     tempFileMaxAgeMs: TELEGRAM_TEMP_FILE_MAX_AGE_MS,
     recordRuntimeEvent: deps.recordRuntimeEvent,
+    getDefaultMessageThreadId: deps.getDefaultMessageThreadId,
   });
 }
 
 export function createTelegramBridgeApiRuntime(
   deps: TelegramBridgeApiRuntimeDeps,
 ): TelegramBridgeApiRuntime {
+  const resolveDefaultThreadId =
+    deps.getDefaultMessageThreadId ?? ((_chatId: number) => undefined);
+  const withDefaultThreadId = <T extends Record<string, unknown>>(body: T): T => {
+    if (body.message_thread_id !== undefined) return body;
+    const chatId = body.chat_id;
+    if (typeof chatId !== "number") return body;
+    const threadId = resolveDefaultThreadId(chatId);
+    if (threadId === undefined) return body;
+    return { ...body, message_thread_id: threadId };
+  };
   const callRecorded = async <TResponse>(
     method: string,
     body: Record<string, unknown>,
@@ -729,10 +749,26 @@ export function createTelegramBridgeApiRuntime(
       fileName,
       options,
     ) => {
+      let effectiveFields = fields;
+      if (
+        effectiveFields.message_thread_id === undefined &&
+        typeof effectiveFields.chat_id === "string"
+      ) {
+        const chatId = Number(effectiveFields.chat_id);
+        if (Number.isFinite(chatId)) {
+          const threadId = resolveDefaultThreadId(chatId);
+          if (threadId !== undefined) {
+            effectiveFields = {
+              ...effectiveFields,
+              message_thread_id: String(threadId),
+            };
+          }
+        }
+      }
       try {
         return await deps.client.callMultipart(
           method,
-          fields,
+          effectiveFields,
           fileField,
           filePath,
           fileName,
@@ -769,16 +805,16 @@ export function createTelegramBridgeApiRuntime(
     setMyCommands: (commands) =>
       callRecorded<boolean>("setMyCommands", { commands }),
     sendChatAction: (chatId, action) =>
-      callRecorded<boolean>("sendChatAction", {
-        chat_id: chatId,
-        action,
-      }),
+      callRecorded<boolean>(
+        "sendChatAction",
+        withDefaultThreadId({ chat_id: chatId, action }),
+      ),
     sendTypingAction: createTelegramChatActionSender(
       (chatId, action) =>
-        callRecorded<boolean>("sendChatAction", {
-          chat_id: chatId,
-          action,
-        }),
+        callRecorded<boolean>(
+          "sendChatAction",
+          withDefaultThreadId({ chat_id: chatId, action }),
+        ),
       "typing",
     ),
     sendMessageDraft: (chatId, draftId, text, options) => {
@@ -790,12 +826,16 @@ export function createTelegramBridgeApiRuntime(
       if (options?.parse_mode !== undefined)
         body.parse_mode = options.parse_mode;
       if (options?.entities !== undefined) body.entities = options.entities;
-      if (options?.message_thread_id !== undefined)
+      if (options?.message_thread_id !== undefined) {
         body.message_thread_id = options.message_thread_id;
-      return callRecorded<boolean>("sendMessageDraft", body);
+      }
+      return callRecorded<boolean>("sendMessageDraft", withDefaultThreadId(body));
     },
     sendMessage: (body) =>
-      callRecorded<TelegramSentMessage>("sendMessage", body),
+      callRecorded<TelegramSentMessage>(
+        "sendMessage",
+        withDefaultThreadId(body),
+      ),
     editMessageText: async (body) => {
       try {
         await deps.client.call("editMessageText", body);
