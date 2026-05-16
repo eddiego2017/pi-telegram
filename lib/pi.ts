@@ -92,6 +92,27 @@ export function getExtensionContextModel(
   return ctx.model;
 }
 
+export function listExtensionContextAvailableModels(
+  ctx: ExtensionContext,
+): readonly { provider: string; id: string }[] {
+  return ctx.modelRegistry.getAvailable().map((model) => ({
+    provider: model.provider,
+    id: model.id,
+  }));
+}
+
+export function findExtensionContextAvailableModel(
+  identity: { provider: string; id: string },
+  ctx: ExtensionContext,
+): NonNullable<ExtensionContext["model"]> | undefined {
+  return ctx.modelRegistry
+    .getAvailable()
+    .find(
+      (model) =>
+        model.provider === identity.provider && model.id === identity.id,
+    ) as NonNullable<ExtensionContext["model"]> | undefined;
+}
+
 export function getExtensionContextCwd(ctx: ExtensionContext): string {
   return ctx.cwd;
 }

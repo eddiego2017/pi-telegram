@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `[Commands]` Added `/llm [tokens...]`: lists available LLM models in `provider/id` form. With tokens, filters by case-insensitive AND substring match on the model id; exactly one match switches the active session model (`Model switched to provider/id`), multiple matches list the filtered subset, no match replies `No models match: <tokens>`. Reuses `setModel` + `currentModelRuntime.setCurrentModel` so the switch surfaces in the status row, but does not persist beyond the session.
+- `[Reserved Names]` `llm` is now a Telegram-reserved command name. Impact: a π prompt template named `llm.md` (mapped to `/llm`) is shadowed by the built-in `/llm` command in Telegram.
+- `[Routing]` `Commands.handleCommand` now takes `args` between `commandName` and `message`; `buildTelegramCommandAction(name, args?)` and `executeTelegramCommandAction` thread `args` only for `llm`. Test fixtures updated.
+- `[Tests]` Added regressions for `/llm` filter tokenization, AND-match filtering, list / single-select / no-match / busy / unavailable-model branches, and `buildTelegramCommandAction` args propagation.
+
 ## 0.11.0: Telegram `/new` Session Command (fork-local)
 
 - `[Commands]` Added a Telegram-side `/new` command that starts a fresh π session. Admission mirrors `/compact` (strict idle, no queued items, no pending dispatch, no compaction). Resolves [issue #3](https://github.com/badlogic/pi-telegram/issues/3) for fork-local use.
