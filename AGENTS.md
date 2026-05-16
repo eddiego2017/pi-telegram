@@ -59,7 +59,8 @@
 - Dispatch is gated by active turns, pending dispatch, unsettled control work, compaction, `ctx.isIdle()`, and π pending messages; dispatched prompts remain queued until `agent_start` consumes them
 - Telegram `/compact` owns a native `typing` keepalive for the compaction window so phone clients show activity between the started/completed notices; stop it on both completion and failure
 - `/stop`, `/abort`, `/next`, and `/continue` have distinct contracts: reset queue and abort; abort while preserving queue; force next queued turn; enqueue a priority `continue` prompt
-- `/start`, `/help`, and `/status` open the unified command-help/status-row/control menu; `/model`, `/thinking`, and `/queue` jump to sections directly; visible bot commands are `/start`, `/compact`, `/next`, `/continue`, `/abort`, `/stop`
+- `/new` is a strict-idle session-replacement command with the same admission gate as `/compact` (no active turn, no queued items, no pending dispatch, no compaction); the bridge injects `/new` into the host tmux pane (`pi:0`) via `nohup bash -c 'sleep 1 && tmux send-keys ...'` because π's `/new` lives in the interactive editor layer and `sendUserMessage` skips slash-command handling. This is a fork-local workaround that assumes π runs in a tmux pane named `pi:0`
+- `/start`, `/help`, and `/status` open the unified command-help/status-row/control menu; `/model`, `/thinking`, and `/queue` jump to sections directly; visible bot commands are `/start`, `/compact`, `/new`, `/next`, `/continue`, `/abort`, `/stop`
 - Command/menu emoji are fixed UI adornments owned by the `commands` map; do not add a persisted emoji toggle or Settings menu until there is a real setting to own
 - Telegram `reply_to_message` context is prompt-only and must not affect slash-command parsing
 - Long-lived timers, pollers, watchers, and deferred queue dispatch must be session-bound and avoid stale live π contexts after session replacement

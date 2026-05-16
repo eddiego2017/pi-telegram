@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0: Telegram `/new` Session Command (fork-local)
+
+- `[Commands]` Added a Telegram-side `/new` command that starts a fresh π session. Admission mirrors `/compact` (strict idle, no queued items, no pending dispatch, no compaction). Resolves [issue #3](https://github.com/badlogic/pi-telegram/issues/3) for fork-local use.
+- `[Implementation]` π's built-in `/new` is implemented in the interactive editor layer (not as an extension command), and `pi.sendUserMessage` deliberately skips slash-command handling, so no in-process path exists from an event-handler context. The bridge therefore injects `/new` into the host tmux pane running the π REPL via `nohup bash -c 'sleep 1 && tmux send-keys -t pi:0 "/new" Enter'`. This is a fork-local workaround that assumes π runs in tmux session `pi:0` (this fork's deployment per `~/.pi/agent/AGENTS.md`).
+- `[Reserved Names]` `new` is now a Telegram-reserved command name. Impact: a π prompt template named `new.md` (mapped to `/new`) is shadowed by the built-in `/new` command in Telegram.
+- `[Tests]` Added regressions for busy/success/error `/new` flows and for the tmux injector factory (command quoting + non-zero-exit error path).
+
 ## 0.10.8: Compact Typing Timing Hotfix
 
 - `[Compaction]` Telegram `/compact` now starts the native `typing` chat-action keepalive after the "Compaction started" notice is sent, then stops it on completion or failure. Impact: operators see the same Telegram activity indicator during context compression that they already see during normal agent/tool work, without showing `typing` before the explicit start confirmation arrives.

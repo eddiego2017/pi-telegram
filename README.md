@@ -86,6 +86,7 @@ Use these inside the Telegram DM with your bot. The main entrypoint is `/start`:
 
 - **`/start`**: Pair the first Telegram user when needed, register bot commands, and open the inline application menu with command help, prompt-template commands, status rows, model controls, thinking controls, settings, and queue controls.
 - **`/compact`**: Start session compaction when the session is idle; Telegram shows the native typing indicator while compaction is running.
+- **`/new`**: Start a fresh π session when the session is idle and the Telegram queue is empty. *Fork-local workaround*: π's built-in `/new` lives in the interactive editor (not as an extension command), so the bridge injects `/new` into the host tmux pane (`pi:0`) where the π REPL runs. Requires tmux and assumes this fork's deployment topology.
 - **`/next`**: Dispatch the next queued turn, aborting π first if needed.
 - **`/continue`**: Enqueue a priority `continue` prompt.
 - **`/abort`**: Abort the active run without touching the queue.

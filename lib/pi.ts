@@ -112,3 +112,45 @@ export function compactExtensionContext(
 ): ReturnType<ExtensionContext["compact"]> {
   return ctx.compact(callbacks);
 }
+
+/**
+ * Fork-local workaround: inject a slash command into the host tmux pane that
+ * runs the π REPL. π's `/new` (and `/resume`, etc.) is handled by the
+ * interactive editor layer, not the extension command system, and
+ * `pi.sendUserMessage` deliberately skips slash-command handling. The only
+ * reliable way to trigger those built-ins from an extension context is to
+ * send keystrokes to the host shell.
+ *
+ * The injection runs through `nohup bash -c 'sleep 1 && tmux send-keys ...'`
+ * so it detaches from the current turn: the Telegram reply delivers first
+ * and π swallows the keypress while idle. Failures are recorded as runtime
+ * events; callers still see them as exceptions so the Telegram reply can
+ * surface a clear error message.
+ */
+export interface TmuxSlashCommandInjectorOptions {
+  exec: PiExtensionApiRuntimePorts["exec"];
+  target: string;
+  command: string;
+  recordRuntimeEvent?: (
+    category: string,
+    error: unknown,
+    details?: Record<string, unknown>,
+  ) => void;
+}
+
+export function createTmuxSlashCommandInjector(
+  options: TmuxSlashCommandInjectorOptions,
+): () => Promise<void> {
+  const { exec, target, command, recordRuntimeEvent } = options;
+  return async function injectTmuxSlashCommand(): Promise<void> {
+    const script = `sleep 1 && tmux send-keys -t ${target} ${JSON.stringify(command)} Enter`;
+    const result = await exec("nohup", ["bash", "-c", script]);
+    if (result.code !== 0) {
+      const error = new Error(
+        `tmux send-keys failed (code ${result.code}): ${result.stderr || result.stdout || "unknown"}`,
+      );
+      recordRuntimeEvent?.("tmux_inject", error, { target, command });
+      throw error;
+    }
+  };
+}

@@ -7,7 +7,7 @@
 - Poll Telegram updates and enforce single-user pairing
 - Translate Telegram messages and media into π inputs
 - Stream and deliver π responses back to Telegram
-- Manage Telegram-specific controls such as queue reactions, π prompt-template commands, `/start` application menu sections, `/compact`, `/next`, `/abort`, and `/stop`
+- Manage Telegram-specific controls such as queue reactions, π prompt-template commands, `/start` application menu sections, `/compact`, `/new`, `/next`, `/abort`, and `/stop`
 
 ## Runtime Structure
 
