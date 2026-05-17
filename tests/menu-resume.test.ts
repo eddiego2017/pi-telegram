@@ -73,16 +73,17 @@ test("buildTelegramResumeMenuReplyMarkup keeps page-1 open index stable and adds
   const total = TELEGRAM_RESUME_MENU_PAGE_SIZE * 2 + 1; // 3 pages
   const entries = makeEntries(total);
   const page1 = buildTelegramResumeMenuReplyMarkup(entries, 0, 1);
-  // Row 0: Main menu; row 1: Delete mode; last row: nav; in-between: page entries with global indices.
+  // Row 0: Delete mode; last row: nav; in-between: page entries with global indices.
   const rows = page1.inline_keyboard;
   const navRow = rows[rows.length - 1];
-  assert.equal(rows[1][0].callback_data, "resume:mode:delete");
+  assert.equal(rows[0][0].callback_data, "resume:mode:delete");
+  assert.ok(!rows.flat().some((button) => button.text.includes("Main menu")));
   assert.equal(navRow.length, 3);
   assert.equal(navRow[0].callback_data, "resume:page:0");
   assert.equal(navRow[1].callback_data, "resume:noop");
   assert.equal(navRow[1].text, "2/3");
   assert.equal(navRow[2].callback_data, "resume:page:2");
-  const firstEntryRow = rows[2];
+  const firstEntryRow = rows[1];
   assert.equal(firstEntryRow.length, 1);
   assert.equal(
     firstEntryRow[0].callback_data,
@@ -125,8 +126,9 @@ test("buildTelegramResumeMenuReplyMarkup hides Prev on first / Next on last page
 test("buildTelegramResumeMenuReplyMarkup omits nav row when single page", () => {
   const entries = makeEntries(3);
   const markup = buildTelegramResumeMenuReplyMarkup(entries, 0, 0);
-  // Just the Main menu row + entry rows; no nav row appended.
+  // Just the delete-mode row + entry rows; no nav row appended.
   const flat = markup.inline_keyboard.flat();
+  assert.ok(!flat.some((b) => b.text.includes("Main menu")));
   assert.ok(!flat.some((b) => b.callback_data.startsWith("resume:page:")));
 });
 

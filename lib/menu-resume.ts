@@ -170,13 +170,10 @@ export function buildTelegramResumeMenuReplyMarkup(
 ): TelegramResumeMenuReplyMarkup {
   const selectedPaths = new Set(selectedDeletePaths);
   const selectedCount = entries.filter((entry) => selectedPaths.has(entry.path)).length;
-  const rows: TelegramResumeMenuReplyMarkup["inline_keyboard"] = [
-    [
-      mode === "delete"
-        ? { text: "⬅️ Back to resume list", callback_data: "resume:mode:open" }
-        : { text: "⬆️ Main menu", callback_data: "menu:back" },
-    ],
-  ];
+  const rows: TelegramResumeMenuReplyMarkup["inline_keyboard"] = [];
+  if (mode === "delete") {
+    rows.push([{ text: "⬅️ Back to resume list", callback_data: "resume:mode:open" }]);
+  }
   if (entries.length > 0 && mode === "open") {
     rows.push([{ text: "🗑 Delete sessions", callback_data: "resume:mode:delete" }]);
   }
