@@ -87,7 +87,7 @@ Use these inside the Telegram DM with your bot. The main entrypoint is `/start`:
 - **`/start`**: Pair the first Telegram user when needed, register bot commands, and open the inline application menu with command help, prompt-template commands, status rows, model controls, thinking controls, settings, and queue controls.
 - **`/compact`**: Start session compaction when the session is idle; Telegram shows the native typing indicator while compaction is running.
 - **`/new`**: Start a fresh π session when the session is idle and the Telegram queue is empty. *Fork-local workaround*: π's built-in `/new` lives in the interactive editor (not as an extension command), so the bridge injects `/new` into the host tmux pane (`pi:0`) where the π REPL runs. Requires tmux and assumes this fork's deployment topology.
-- **`/resume`**: List previous π sessions for the current working directory in a paginated inline keyboard. Tap a session row to switch to it, or tap its `🗑` button and confirm to delete that stale session file.
+- **`/resume`**: List previous π sessions for the current working directory in a paginated inline keyboard. Session rows stay full width for readable previews; use `🗑 Delete sessions` to enter delete mode, then pick and confirm a stale session file to remove.
 - **`/llm [tokens...]`**: List available LLM models (`provider/id`). With tokens, filter by case-insensitive AND substring match on the model id; if exactly one model matches, switch the active model for this session and reply `Model switched to provider/id`. Multiple matches list the filtered subset; no match replies `No models match: <tokens>`.
 - **`/next`**: Dispatch the next queued turn, aborting π first if needed.
 - **`/continue`**: Enqueue a priority `continue` prompt.

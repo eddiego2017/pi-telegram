@@ -73,23 +73,31 @@ test("buildTelegramResumeMenuReplyMarkup keeps page-1 open index stable and adds
   const total = TELEGRAM_RESUME_MENU_PAGE_SIZE * 2 + 1; // 3 pages
   const entries = makeEntries(total);
   const page1 = buildTelegramResumeMenuReplyMarkup(entries, 0, 1);
-  // Row 0: Main menu; last row: nav; in-between: page entries with global indices.
+  // Row 0: Main menu; row 1: Delete mode; last row: nav; in-between: page entries with global indices.
   const rows = page1.inline_keyboard;
   const navRow = rows[rows.length - 1];
+  assert.equal(rows[1][0].callback_data, "resume:mode:delete");
   assert.equal(navRow.length, 3);
   assert.equal(navRow[0].callback_data, "resume:page:0");
   assert.equal(navRow[1].callback_data, "resume:noop");
   assert.equal(navRow[1].text, "2/3");
   assert.equal(navRow[2].callback_data, "resume:page:2");
-  const firstEntryRow = rows[1];
+  const firstEntryRow = rows[2];
+  assert.equal(firstEntryRow.length, 1);
   assert.equal(
     firstEntryRow[0].callback_data,
     `resume:open:${TELEGRAM_RESUME_MENU_PAGE_SIZE}`,
   );
-  assert.equal(
-    firstEntryRow[1].callback_data,
-    `resume:delete:${TELEGRAM_RESUME_MENU_PAGE_SIZE}`,
-  );
+});
+
+test("buildTelegramResumeMenuReplyMarkup uses full-width delete rows in delete mode", () => {
+  const entries = makeEntries(3);
+  const markup = buildTelegramResumeMenuReplyMarkup(entries, 0, 0, "delete");
+  const rows = markup.inline_keyboard;
+  assert.equal(rows[0][0].callback_data, "resume:mode:open");
+  assert.equal(rows[1].length, 1);
+  assert.equal(rows[1][0].callback_data, "resume:delete:0");
+  assert.ok(rows[1][0].text.startsWith("🗑 "));
 });
 
 test("buildTelegramResumeMenuReplyMarkup hides Prev on first / Next on last page", () => {
@@ -148,9 +156,11 @@ function makeCallbackDeps(
       ) => {
         const kind = text.includes("Delete this session?")
           ? "confirm"
-          : text.includes("Page")
-            ? "paged"
-            : "plain";
+          : text.includes("Pick a session to delete:")
+            ? "delete-list"
+            : text.includes("Page")
+              ? "paged"
+              : "plain";
         events.push(`edit:${chatId}:${messageId}:${kind}`);
       },
       answerCallbackQuery: async (id: string, text?: string) => {
@@ -262,6 +272,7 @@ test("handleTelegramResumeMenuCallback opens delete confirmation", async () => {
 
 test("handleTelegramResumeMenuCallback cancels delete confirmation", async () => {
   const state = makeState(3, 0);
+  state.mode = "delete";
   const { events, deps } = makeCallbackDeps(state);
   await handleTelegramResumeMenuCallback(
     {
@@ -271,11 +282,27 @@ test("handleTelegramResumeMenuCallback cancels delete confirmation", async () =>
     },
     deps,
   );
-  assert.deepEqual(events, ["edit:1:100:plain", "answer:cancel:Cancelled."]);
+  assert.deepEqual(events, ["edit:1:100:delete-list", "answer:cancel:Cancelled."]);
+});
+
+test("handleTelegramResumeMenuCallback switches list modes", async () => {
+  const state = makeState(3, 0);
+  const { store, events, deps } = makeCallbackDeps(state);
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "mode",
+      data: "resume:mode:delete",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, ["edit:1:100:delete-list", "answer:mode:"]);
+  assert.equal(store.get(100)?.mode, "delete");
 });
 
 test("handleTelegramResumeMenuCallback deletes session and reindexes remaining rows", async () => {
   const state = makeState(3, 0);
+  state.mode = "delete";
   const { store, events, deps } = makeCallbackDeps(state);
   await handleTelegramResumeMenuCallback(
     {
@@ -287,11 +314,12 @@ test("handleTelegramResumeMenuCallback deletes session and reindexes remaining r
   );
   assert.deepEqual(events, [
     "delete:/sessions/s1.json",
-    "edit:1:100:plain",
+    "edit:1:100:delete-list",
     "answer:confirm:Session deleted.",
   ]);
   const updated = store.get(100);
   assert.equal(updated?.sessions.length, 2);
+  assert.equal(updated?.mode, "delete");
   assert.deepEqual(
     updated?.sessions.map((entry) => [entry.index, entry.path]),
     [
