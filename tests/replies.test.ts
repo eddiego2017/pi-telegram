@@ -63,6 +63,13 @@ test("Reply helpers extract assistant message text and metadata", () => {
       role: "assistant",
       stopReason: "error",
       errorMessage: "boom",
+      usage: {
+        input: 200,
+        output: 50,
+        cacheRead: 8_000,
+        cacheWrite: 0,
+        totalTokens: 8_250,
+      },
       content: [
         { type: "text", text: " hello " },
         { type: "image", source: "ignored" },
@@ -76,6 +83,11 @@ test("Reply helpers extract assistant message text and metadata", () => {
     text: "hello world",
     stopReason: "error",
     errorMessage: "boom",
+    usage: {
+      input: 200,
+      cacheRead: 8_000,
+      cacheWrite: 0,
+    },
   });
 });
 

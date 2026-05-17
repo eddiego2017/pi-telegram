@@ -39,6 +39,39 @@ test("Context usage footer formats compact kilotoken and percent values", () => 
   );
 });
 
+test("Context usage footer includes prompt cache hit data when available", () => {
+  assert.equal(
+    formatTelegramContextUsageFooter(
+      {
+        tokens: 8_200,
+        contextWindow: 400_000,
+        percent: 2.1,
+      },
+      {
+        input: 200,
+        cacheRead: 8_000,
+        cacheWrite: 0,
+      },
+    ),
+    "—\n📊 ctx 8.2K/400K 2.1%\n🎯 cache 8K/8.2K 98%",
+  );
+  assert.equal(
+    formatTelegramContextUsageFooter(
+      {
+        tokens: 8_200,
+        contextWindow: 400_000,
+        percent: 2.1,
+      },
+      {
+        input: 8_200,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    ),
+    "—\n📊 ctx 8.2K/400K 2.1%",
+  );
+});
+
 test("Context usage footer appends as display-only markdown tail", () => {
   assert.equal(
     appendTelegramContextUsageFooter(
@@ -59,7 +92,7 @@ test("Context usage footer strips only recognized footer tails", () => {
   );
   assert.equal(
     stripTelegramContextUsageFooter(
-      "hello\n\n---\n📊 ctx 25.6K/400K 6.4%\n---",
+      "hello\n\n---\n📊 ctx 25.6K/400K 6.4%\n🎯 cache 8K/8.2K 98%\n---",
     ),
     "hello",
   );

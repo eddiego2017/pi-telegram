@@ -10,14 +10,21 @@ export interface TelegramContextUsageSnapshot {
   percent: number | null;
 }
 
+export interface TelegramPromptCacheUsageSnapshot {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
 const CONTEXT_USAGE_FOOTER_SEPARATOR = "—";
 const CONTEXT_USAGE_FOOTER_PREFIX = "📊 ctx";
 const CONTEXT_USAGE_TOKEN_PATTERN = String.raw`(?:\?|\d+(?:\.\d+)?K)`;
 const CONTEXT_USAGE_PERCENT_PATTERN = String.raw`(?:\?|\d+(?:\.\d+)?%)`;
 const CONTEXT_USAGE_FOOTER_LINE_PATTERN = String.raw`📊\s*ctx\s+${CONTEXT_USAGE_TOKEN_PATTERN}\/${CONTEXT_USAGE_TOKEN_PATTERN}\s+${CONTEXT_USAGE_PERCENT_PATTERN}`;
+const CONTEXT_USAGE_CACHE_LINE_PATTERN = String.raw`🎯\s*cache\s+${CONTEXT_USAGE_TOKEN_PATTERN}\/${CONTEXT_USAGE_TOKEN_PATTERN}\s+${CONTEXT_USAGE_PERCENT_PATTERN}`;
 const CONTEXT_USAGE_FOOTER_SEPARATOR_PATTERN = String.raw`(?:—|-{3}|─{3,})`;
 const CONTEXT_USAGE_FOOTER_PATTERN = new RegExp(
-  String.raw`(?:\r?\n){0,2}[\t ]*${CONTEXT_USAGE_FOOTER_SEPARATOR_PATTERN}[\t ]*\r?\n[\t ]*${CONTEXT_USAGE_FOOTER_LINE_PATTERN}[\t ]*(?:\r?\n[\t ]*${CONTEXT_USAGE_FOOTER_SEPARATOR_PATTERN}[\t ]*)?[\t ]*$`,
+  String.raw`(?:\r?\n){0,2}[\t ]*${CONTEXT_USAGE_FOOTER_SEPARATOR_PATTERN}[\t ]*\r?\n[\t ]*${CONTEXT_USAGE_FOOTER_LINE_PATTERN}[\t ]*(?:\r?\n[\t ]*${CONTEXT_USAGE_CACHE_LINE_PATTERN}[\t ]*)?(?:\r?\n[\t ]*${CONTEXT_USAGE_FOOTER_SEPARATOR_PATTERN}[\t ]*)?[\t ]*$`,
   "u",
 );
 
@@ -34,16 +41,36 @@ function formatContextPercent(value: number): string {
   return `${trimTrailingZeroes(value.toFixed(decimals))}%`;
 }
 
+function formatCachePercent(value: number): string {
+  return `${trimTrailingZeroes(value.toFixed(0))}%`;
+}
+
+function formatTelegramPromptCacheLine(
+  usage: TelegramPromptCacheUsageSnapshot | undefined,
+): string | undefined {
+  if (!usage) return undefined;
+  const denominator = usage.input + usage.cacheRead + usage.cacheWrite;
+  if (denominator <= 0 || (usage.cacheRead <= 0 && usage.cacheWrite <= 0)) {
+    return undefined;
+  }
+  const percent = (usage.cacheRead / denominator) * 100;
+  return `🎯 cache ${formatKilokens(usage.cacheRead)}/${formatKilokens(denominator)} ${formatCachePercent(percent)}`;
+}
+
 export function formatTelegramContextUsageFooter(
   usage: TelegramContextUsageSnapshot | undefined,
+  promptCacheUsage?: TelegramPromptCacheUsageSnapshot,
 ): string | undefined {
   if (!usage || usage.tokens === null || usage.percent === null) {
     return undefined;
   }
-  return [
+  const lines = [
     CONTEXT_USAGE_FOOTER_SEPARATOR,
     `${CONTEXT_USAGE_FOOTER_PREFIX} ${formatKilokens(usage.tokens)}/${formatKilokens(usage.contextWindow)} ${formatContextPercent(usage.percent)}`,
-  ].join("\n");
+  ];
+  const cacheLine = formatTelegramPromptCacheLine(promptCacheUsage);
+  if (cacheLine) lines.push(cacheLine);
+  return lines.join("\n");
 }
 
 export function appendTelegramContextUsageFooter(

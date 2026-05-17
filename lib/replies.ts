@@ -5,6 +5,7 @@
  */
 
 import type { TelegramReplyParameters, TelegramSentMessage } from "./api.ts";
+import type { TelegramPromptCacheUsageSnapshot } from "./context-usage.ts";
 import {
   renderTelegramMessage,
   type TelegramRenderedChunk,
@@ -150,12 +151,33 @@ export function getAgentMessageText(message: unknown): string {
   return extractAgentTextContent(getAgentMessageField(message, "content"));
 }
 
+function getNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function extractAgentPromptCacheUsage(
+  message: unknown,
+): TelegramPromptCacheUsageSnapshot | undefined {
+  const rawUsage = getAgentMessageField(message, "usage");
+  if (typeof rawUsage !== "object" || rawUsage === null) return undefined;
+  const input = getNonNegativeNumber(Reflect.get(rawUsage, "input"));
+  const cacheRead = getNonNegativeNumber(Reflect.get(rawUsage, "cacheRead"));
+  const cacheWrite = getNonNegativeNumber(Reflect.get(rawUsage, "cacheWrite"));
+  if (input === undefined || cacheRead === undefined || cacheWrite === undefined) {
+    return undefined;
+  }
+  return { input, cacheRead, cacheWrite };
+}
+
 export function extractLatestAssistantMessageText(
   messages: readonly unknown[],
 ): {
   text?: string;
   stopReason?: string;
   errorMessage?: string;
+  usage?: TelegramPromptCacheUsageSnapshot;
 } {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
@@ -167,7 +189,13 @@ export function extractLatestAssistantMessageText(
     const errorMessage =
       typeof rawErrorMessage === "string" ? rawErrorMessage : undefined;
     const text = getAgentMessageText(message);
-    return { text: text || undefined, stopReason, errorMessage };
+    const usage = extractAgentPromptCacheUsage(message);
+    return {
+      text: text || undefined,
+      stopReason,
+      errorMessage,
+      ...(usage ? { usage } : {}),
+    };
   }
   return {};
 }

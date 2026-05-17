@@ -1100,7 +1100,10 @@ test("Agent end hook binds assistant extraction and runtime ports", async () => 
     getActiveTurn: () => turn,
     extractAssistant: (messages) => {
       events.push(`extract:${messages.join(",")}`);
-      return { text: "final" };
+      return {
+        text: "final",
+        usage: { input: 200, cacheRead: 8_000, cacheWrite: 0 },
+      };
     },
     getPreserveQueuedTurnsAsHistory: () => false,
     resetRuntimeState: () => {
@@ -1134,7 +1137,8 @@ test("Agent end hook binds assistant extraction and runtime ports", async () => 
     sendQueuedAttachments: async () => {
       events.push("attachments");
     },
-    getContextUsageFooter: (ctx) => `footer:${ctx.id}`,
+    getContextUsageFooter: (ctx, usage) =>
+      `footer:${ctx.id}:${usage?.cacheRead ?? "none"}`,
   });
   await hook({ messages: ["a", "b"] }, { id: "ctx" });
   assert.deepEqual(events, [
@@ -1142,7 +1146,7 @@ test("Agent end hook binds assistant extraction and runtime ports", async () => 
     "reset",
     "status:ctx",
     "preview:final",
-    "finalize:final:footer:ctx",
+    "finalize:final:footer:ctx:8000",
     "attachments",
   ]);
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1151,7 +1155,7 @@ test("Agent end hook binds assistant extraction and runtime ports", async () => 
     "reset",
     "status:ctx",
     "preview:final",
-    "finalize:final:footer:ctx",
+    "finalize:final:footer:ctx:8000",
     "attachments",
     "dispatch:ctx",
   ]);

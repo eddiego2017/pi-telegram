@@ -744,6 +744,11 @@ export interface TelegramAgentEndAssistantResult {
   text?: string;
   stopReason?: string;
   errorMessage?: string;
+  usage?: {
+    input: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
 }
 
 export interface TelegramAgentEndOutboundVoiceReply {
@@ -851,7 +856,10 @@ export interface TelegramAgentEndHookRuntimeDeps<
   sendOutboundReplyArtifacts?: TelegramAgentEndRuntimeDeps<TTurn>["sendOutboundReplyArtifacts"];
   getDefaultChatId?: TelegramAgentEndRuntimeDeps<TTurn>["getDefaultChatId"];
   isProactivePushEnabled?: TelegramAgentEndRuntimeDeps<TTurn>["isProactivePushEnabled"];
-  getContextUsageFooter?: (ctx: TContext) => string | undefined;
+  getContextUsageFooter?: (
+    ctx: TContext,
+    promptCacheUsage?: TelegramAgentEndAssistantResult["usage"],
+  ) => string | undefined;
   recordRuntimeEvent?: TelegramAgentEndRuntimeDeps<TTurn>["recordRuntimeEvent"];
 }
 
@@ -944,10 +952,11 @@ export function createTelegramAgentEndHook<
   ): Promise<void> {
     const turn = deps.getActiveTurn();
     const proactiveEnabled = deps.isProactivePushEnabled?.() ?? false;
+    const assistant =
+      turn || proactiveEnabled ? deps.extractAssistant(event.messages) : {};
     await handleTelegramAgentEndRuntime({
       turn,
-      assistant:
-        turn || proactiveEnabled ? deps.extractAssistant(event.messages) : {},
+      assistant,
       preserveQueuedTurnsAsHistory: deps.getPreserveQueuedTurnsAsHistory(),
       resetRuntimeState: deps.resetRuntimeState,
       updateStatus: () => deps.updateStatus(ctx),
@@ -971,7 +980,9 @@ export function createTelegramAgentEndHook<
       sendOutboundReplyArtifacts: deps.sendOutboundReplyArtifacts,
       getDefaultChatId: deps.getDefaultChatId,
       isProactivePushEnabled: deps.isProactivePushEnabled,
-      displayFooter: turn ? deps.getContextUsageFooter?.(ctx) : undefined,
+      displayFooter: turn
+        ? deps.getContextUsageFooter?.(ctx, assistant.usage)
+        : undefined,
       recordRuntimeEvent: deps.recordRuntimeEvent,
     });
   };

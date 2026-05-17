@@ -17,7 +17,10 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 
-import { formatTelegramContextUsageFooter } from "./context-usage.ts";
+import {
+  formatTelegramContextUsageFooter,
+  type TelegramPromptCacheUsageSnapshot,
+} from "./context-usage.ts";
 
 export type {
   AgentEndEvent,
@@ -131,9 +134,10 @@ export function hasExtensionContextPendingMessages(
 
 export function getExtensionContextUsageFooter(
   ctx: ExtensionContext,
+  promptCacheUsage?: TelegramPromptCacheUsageSnapshot,
 ): string | undefined {
   return typeof ctx.getContextUsage === "function"
-    ? formatTelegramContextUsageFooter(ctx.getContextUsage())
+    ? formatTelegramContextUsageFooter(ctx.getContextUsage(), promptCacheUsage)
     : undefined;
 }
 
