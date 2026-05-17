@@ -127,9 +127,9 @@ test("Session history renders active-branch chat lines without tool rows", () =>
     ],
   );
   const historyText = buildTelegramSessionHistoryText(snapshot, 0);
-  assert.match(historyText, /<pre>#  role      msg/);
-  assert.match(historyText, /1  user      hello &lt;world&gt;/);
-  assert.match(historyText, /2  assistant Hi &amp; welcome/);
+  assert.match(historyText, /<code>#<\/code> <code>role     <\/code> msg/);
+  assert.match(historyText, /<code>1<\/code> <code>user     <\/code> hello &lt;world&gt;/);
+  assert.match(historyText, /<code>2<\/code> <code>assistant<\/code> Hi &amp; welcome/);
   assert.match(historyText, /Tools hidden · 1 calls · 1 results/);
   assert.doesNotMatch(historyText, /read|file body/i);
   assert.deepEqual(buildTelegramSessionHistoryReplyMarkup(snapshot, 0).inline_keyboard, [

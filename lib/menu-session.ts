@@ -428,14 +428,14 @@ function buildHistoryTable(items: readonly TelegramSessionHistoryItem[]): string
   const indexWidth = Math.max(1, String(maxIndex).length);
   const textWidth = historyTableTextWidth(indexWidth);
   const rows = [
-    `${padRight("#", indexWidth)}  ${padRight("role", TELEGRAM_SESSION_HISTORY_ROLE_WIDTH)} msg`,
+    `<code>${escapeHtml(padRight("#", indexWidth))}</code> <code>${escapeHtml(padRight("role", TELEGRAM_SESSION_HISTORY_ROLE_WIDTH))}</code> msg`,
   ];
   for (const item of items) {
     rows.push(
-      `${padRight(String(item.globalIndex), indexWidth)}  ${padRight(item.role, TELEGRAM_SESSION_HISTORY_ROLE_WIDTH)} ${truncateDisplay(item.detail, textWidth) || "(empty)"}`,
+      `<code>${escapeHtml(padRight(String(item.globalIndex), indexWidth))}</code> <code>${escapeHtml(padRight(item.role, TELEGRAM_SESSION_HISTORY_ROLE_WIDTH))}</code> ${escapeHtml(truncateDisplay(item.detail, textWidth) || "(empty)")}`,
     );
   }
-  return `<pre>${escapeHtml(rows.join("\n"))}</pre>`;
+  return rows.join("\n");
 }
 
 function buildLatestPreview(items: TelegramSessionHistoryItem[]): string {
