@@ -15,6 +15,7 @@ import {
   buildTelegramSessionMainText,
   buildTelegramSessionStats,
   createTelegramSessionMenuRuntime,
+  handleTelegramSessionMenuCallback,
   type TelegramSessionSnapshot,
 } from "../lib/menu-session.ts";
 
@@ -129,7 +130,8 @@ test("Session history renders active-branch chat lines without tool rows", () =>
   assert.match(historyText, /<pre>#  role      msg/);
   assert.match(historyText, /1  user      hello &lt;world&gt;/);
   assert.match(historyText, /2  assistant Hi &amp; welcome/);
-  assert.doesNotMatch(historyText, /tool|tools|read/i);
+  assert.match(historyText, /Tools hidden · 1 calls · 1 results/);
+  assert.doesNotMatch(historyText, /read|file body/i);
   assert.deepEqual(buildTelegramSessionHistoryReplyMarkup(snapshot, 0).inline_keyboard, [
     [{ text: "⬅️ Back to session", callback_data: "session:back:main" }],
   ]);
@@ -170,11 +172,38 @@ test("Session menu runtime opens, pages, details, and refreshes", async () => {
 
   assert.deepEqual(events, [
     "send:7:html:<b>🧭 Session</b>:1",
-    "edit:7:99:html:<b>📜 History</b>:1",
     "answer:cb1:",
-    "edit:7:99:html:<b>🤖 Assistant</b>:2",
+    "edit:7:99:html:<b>📜 History</b>:1",
     "answer:cb2:",
-    "edit:7:99:html:<b>🧭 Session</b>:1",
+    "edit:7:99:html:<b>🤖 Assistant</b>:2",
     "answer:cb3:Refreshed.",
+    "edit:7:99:html:<b>🧭 Session</b>:1",
   ]);
+});
+
+test("Session callback failures are answered and swallowed", async () => {
+  const snapshot = makeSnapshot();
+  const answers: string[] = [];
+  const handled = await handleTelegramSessionMenuCallback(
+    { id: "cb", data: "session:history", message: { chat: { id: 7 }, message_id: 99 } },
+    {
+      getState: () => ({
+        chatId: 7,
+        messageId: 99,
+        view: "main",
+        page: 0,
+        updatedAt: 1,
+      }),
+      setState: () => {},
+      getSnapshot: () => snapshot,
+      editSessionMessage: async () => {
+        throw new Error("Telegram edit failed");
+      },
+      answerCallbackQuery: async (_id, text) => {
+        answers.push(text ?? "");
+      },
+    },
+  );
+  assert.equal(handled, true);
+  assert.deepEqual(answers, [""]);
 });

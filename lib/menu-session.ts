@@ -12,6 +12,10 @@ const TELEGRAM_SESSION_SUMMARY_LEN = 54;
 const TELEGRAM_SESSION_HISTORY_TABLE_WIDTH = 37;
 const TELEGRAM_SESSION_HISTORY_ROLE_WIDTH = 9;
 const TELEGRAM_SESSION_DETAIL_TEXT_LEN = 3000;
+const TELEGRAM_SESSION_GRAPHEME_SEGMENTER =
+  typeof Intl.Segmenter === "function"
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : undefined;
 
 export type TelegramSessionReplyMarkup = TelegramInlineKeyboardMarkup;
 export type TelegramSessionView = "main" | "history" | "detail";
@@ -344,9 +348,68 @@ function pageSlice<T>(items: readonly T[], page: number): readonly T[] {
   return items.slice(start, start + TELEGRAM_SESSION_HISTORY_PAGE_SIZE);
 }
 
+function getGraphemes(text: string): string[] {
+  if (TELEGRAM_SESSION_GRAPHEME_SEGMENTER) {
+    return Array.from(
+      TELEGRAM_SESSION_GRAPHEME_SEGMENTER.segment(text),
+      (segment) => segment.segment,
+    );
+  }
+  return Array.from(text);
+}
+
+function codePointWidth(char: string): number {
+  const codePoint = char.codePointAt(0) ?? 0;
+  if (
+    codePoint === 0 ||
+    codePoint < 32 ||
+    (codePoint >= 0x300 && codePoint <= 0x36f)
+  ) {
+    return 0;
+  }
+  if (
+    codePoint >= 0x1100 &&
+    (codePoint <= 0x115f ||
+      codePoint === 0x2329 ||
+      codePoint === 0x232a ||
+      (codePoint >= 0x2e80 && codePoint <= 0xa4cf) ||
+      (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+      (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+      (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
+      (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
+      (codePoint >= 0xff00 && codePoint <= 0xff60) ||
+      (codePoint >= 0xffe0 && codePoint <= 0xffe6))
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function displayWidth(text: string): number {
+  return getGraphemes(text).reduce(
+    (sum, grapheme) =>
+      sum + Array.from(grapheme).reduce((n, char) => n + codePointWidth(char), 0),
+    0,
+  );
+}
+
+function truncateDisplay(s: string, width: number): string {
+  const clean = cleanText(s);
+  if (displayWidth(clean) <= width) return clean;
+  let result = "";
+  let used = 0;
+  for (const grapheme of getGraphemes(clean)) {
+    const nextWidth = displayWidth(grapheme);
+    if (used + nextWidth > Math.max(0, width - 1)) break;
+    result += grapheme;
+    used += nextWidth;
+  }
+  return `${result}…`;
+}
+
 function padRight(s: string, width: number): string {
-  if (s.length >= width) return s;
-  return s + " ".repeat(width - s.length);
+  const padding = width - displayWidth(s);
+  return padding > 0 ? s + " ".repeat(padding) : s;
 }
 
 function historyTableTextWidth(indexWidth: number): number {
@@ -369,7 +432,7 @@ function buildHistoryTable(items: readonly TelegramSessionHistoryItem[]): string
   ];
   for (const item of items) {
     rows.push(
-      `${padRight(String(item.globalIndex), indexWidth)}  ${padRight(item.role, TELEGRAM_SESSION_HISTORY_ROLE_WIDTH)} ${truncate(item.detail, textWidth) || "(empty)"}`,
+      `${padRight(String(item.globalIndex), indexWidth)}  ${padRight(item.role, TELEGRAM_SESSION_HISTORY_ROLE_WIDTH)} ${truncateDisplay(item.detail, textWidth) || "(empty)"}`,
     );
   }
   return `<pre>${escapeHtml(rows.join("\n"))}</pre>`;
@@ -438,12 +501,15 @@ export function buildTelegramSessionHistoryText(
   const count = pageCount(items.length);
   const start = safePage * TELEGRAM_SESSION_HISTORY_PAGE_SIZE;
   const end = Math.min(items.length, start + TELEGRAM_SESSION_HISTORY_PAGE_SIZE);
+  const stats = buildTelegramSessionStats(snapshot);
   const lines = [
     "<b>📜 History</b>",
-    `Active branch · ${start + 1}–${end} / ${items.length}`,
-    "",
+    `Chat rows · ${start + 1}–${end} / ${items.length}`,
   ];
-  lines.push(buildHistoryTable(pageSlice(items, safePage)));
+  if (stats.toolCalls > 0 || stats.toolResults > 0) {
+    lines.push(`Tools hidden · ${stats.toolCalls} calls · ${stats.toolResults} results`);
+  }
+  lines.push("", buildHistoryTable(pageSlice(items, safePage)));
   if (count > 1) lines.push("", `Page ${safePage + 1}/${count}`);
   return lines.join("\n");
 }
@@ -581,7 +647,7 @@ export interface TelegramSessionMenuCallbackDeps {
   now?: () => number;
 }
 
-export async function handleTelegramSessionMenuCallback(
+async function handleTelegramSessionMenuCallbackUnsafe(
   query: TelegramSessionMenuCallbackQuery,
   deps: TelegramSessionMenuCallbackDeps,
 ): Promise<boolean> {
@@ -610,6 +676,7 @@ export async function handleTelegramSessionMenuCallback(
   };
 
   if (data === "session:refresh" || data === "session:back:main") {
+    await deps.answerCallbackQuery(query.id, data === "session:refresh" ? "Refreshed." : undefined);
     await deps.editSessionMessage(
       chatId,
       messageId,
@@ -617,7 +684,6 @@ export async function handleTelegramSessionMenuCallback(
       buildTelegramSessionMainReplyMarkup(history.length > 0),
     );
     updateState({ view: "main", page: latestPage(history.length), detailIndex: undefined });
-    await deps.answerCallbackQuery(query.id, data === "session:refresh" ? "Refreshed." : undefined);
     return true;
   }
 
@@ -627,6 +693,7 @@ export async function handleTelegramSessionMenuCallback(
       return true;
     }
     const page = clampPage(state.page, history.length);
+    await deps.answerCallbackQuery(query.id);
     await deps.editSessionMessage(
       chatId,
       messageId,
@@ -634,7 +701,6 @@ export async function handleTelegramSessionMenuCallback(
       buildTelegramSessionHistoryReplyMarkup(snapshot, page),
     );
     updateState({ view: "history", page, detailIndex: undefined });
-    await deps.answerCallbackQuery(query.id);
     return true;
   }
 
@@ -645,6 +711,7 @@ export async function handleTelegramSessionMenuCallback(
     }
     const requested = Number.parseInt(data.slice("session:page:".length), 10);
     const page = clampPage(requested, history.length);
+    await deps.answerCallbackQuery(query.id);
     await deps.editSessionMessage(
       chatId,
       messageId,
@@ -652,7 +719,6 @@ export async function handleTelegramSessionMenuCallback(
       buildTelegramSessionHistoryReplyMarkup(snapshot, page),
     );
     updateState({ view: "history", page, detailIndex: undefined });
-    await deps.answerCallbackQuery(query.id);
     return true;
   }
 
@@ -663,6 +729,7 @@ export async function handleTelegramSessionMenuCallback(
       return true;
     }
     const item = history[index];
+    await deps.answerCallbackQuery(query.id);
     await deps.editSessionMessage(
       chatId,
       messageId,
@@ -674,12 +741,41 @@ export async function handleTelegramSessionMenuCallback(
       detailIndex: index,
       page: clampPage(Math.floor(index / TELEGRAM_SESSION_HISTORY_PAGE_SIZE), history.length),
     });
-    await deps.answerCallbackQuery(query.id);
     return true;
   }
 
   await deps.answerCallbackQuery(query.id);
   return true;
+}
+
+export async function handleTelegramSessionMenuCallback(
+  query: TelegramSessionMenuCallbackQuery,
+  deps: TelegramSessionMenuCallbackDeps,
+): Promise<boolean> {
+  if (!query.data?.startsWith("session:")) return false;
+  let answered = false;
+  const safeDeps: TelegramSessionMenuCallbackDeps = {
+    ...deps,
+    answerCallbackQuery: async (callbackQueryId, text) => {
+      await deps.answerCallbackQuery(callbackQueryId, text);
+      answered = true;
+    },
+  };
+  try {
+    return await handleTelegramSessionMenuCallbackUnsafe(query, safeDeps);
+  } catch {
+    if (!answered) {
+      try {
+        await deps.answerCallbackQuery(
+          query.id,
+          "Session menu update failed. Try /session.",
+        );
+      } catch {
+        // Keep polling alive even if the callback query has already expired.
+      }
+    }
+    return true;
+  }
 }
 
 export interface TelegramSessionMenuRuntime<TContext> {
