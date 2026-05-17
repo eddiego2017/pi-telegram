@@ -216,6 +216,23 @@ export function getExtensionContextSessionFile(
   return ctx.sessionManager.getSessionFile();
 }
 
+export function getExtensionContextSessionName(
+  ctx: ExtensionContext,
+): string | undefined {
+  return ctx.sessionManager.getSessionName();
+}
+
+type WritableSessionInfoManager = ExtensionContext["sessionManager"] & {
+  appendSessionInfo(name: string): string;
+};
+
+export function setExtensionContextSessionName(
+  name: string,
+  ctx: ExtensionContext,
+): void {
+  (ctx.sessionManager as WritableSessionInfoManager).appendSessionInfo(name);
+}
+
 export function createTmuxDynamicSlashCommandInjector(
   options: TmuxDynamicSlashCommandInjectorOptions,
 ): (command: string, arg?: string) => Promise<void> {

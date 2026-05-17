@@ -37,6 +37,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   new: "🆕",
   clone: "📑",
   resume: "📂",
+  name: "🏷️",
   queue: "🔢",
   next: "⏩",
   continue: "▶️",
@@ -100,6 +101,13 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       description: formatTelegramBotCommandDescription(
         "resume",
         "Resume a previous session",
+      ),
+    },
+    {
+      command: "name",
+      description: formatTelegramBotCommandDescription(
+        "name",
+        "Set current session name",
       ),
     },
     {
@@ -323,6 +331,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "new",
   "clone",
   "resume",
+  "name",
   "model",
   "llm",
   "thinking",
@@ -358,6 +367,7 @@ export type TelegramCommandAction =
   | { kind: "new"; executionMode: "immediate" }
   | { kind: "clone"; executionMode: "immediate" }
   | { kind: "resume"; executionMode: "immediate" }
+  | { kind: "name"; args: string; executionMode: "immediate" }
   | { kind: "status"; executionMode: "immediate" }
   | { kind: "model"; executionMode: "immediate" }
   | { kind: "llm"; args: string; executionMode: "immediate" }
@@ -381,6 +391,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleNew: (message: TMessage, ctx: TContext) => Promise<void>;
   handleClone: (message: TMessage, ctx: TContext) => Promise<void>;
   handleResume: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleName: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
   handleLlm: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
@@ -745,6 +756,8 @@ export interface TelegramCommandRuntimeDeps<
   openQueueMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openSettingsMenu?: (message: TMessage, ctx: TContext) => Promise<void>;
   openResumeMenu: (message: TMessage, ctx: TContext) => Promise<void>;
+  getSessionName: (ctx: TContext) => string | undefined;
+  setSessionName: (name: string, ctx: TContext) => void | Promise<void>;
   getAllowedUserId: () => number | undefined;
   setAllowedUserId: (userId: number) => void;
   registerBotCommands: () => Promise<void>;
@@ -761,6 +774,7 @@ export const TELEGRAM_APP_MENU_INTRO_HTML = [
   `${formatTelegramCommandEmojiPrefix("new")}/new — Start a new session`,
   `${formatTelegramCommandEmojiPrefix("clone")}/clone — Clone current session at current position`,
   `${formatTelegramCommandEmojiPrefix("resume")}/resume — Resume a previous session`,
+  `${formatTelegramCommandEmojiPrefix("name")}/name — Set current session name`,
   `${formatTelegramCommandEmojiPrefix("llm")}/llm — List available LLM models`,
   `${formatTelegramCommandEmojiPrefix("next")}/next — Force next turn`,
   `${formatTelegramCommandEmojiPrefix("continue")}/continue — Queue continue prompt`,
@@ -833,6 +847,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   new: { kind: "new", executionMode: "immediate" },
   clone: { kind: "clone", executionMode: "immediate" },
   resume: { kind: "resume", executionMode: "immediate" },
+  name: { kind: "name", args: "", executionMode: "immediate" },
   model: { kind: "model", executionMode: "immediate" },
   llm: { kind: "llm", args: "", executionMode: "immediate" },
   thinking: { kind: "thinking", executionMode: "immediate" },
@@ -849,7 +864,7 @@ export function buildTelegramCommandAction(
     return { kind: "ignore", executionMode: "ignored" };
   }
   const baseAction = TELEGRAM_COMMAND_ACTIONS[commandName];
-  if (baseAction.kind === "llm") {
+  if (baseAction.kind === "llm" || baseAction.kind === "name") {
     return { ...baseAction, args: args ?? "" };
   }
   return baseAction;
@@ -1074,6 +1089,41 @@ export async function handleTelegramCloneSessionCommand(
   }
 }
 
+function formatTelegramSessionNameUsage(
+  currentName: string | undefined,
+): string {
+  const current = currentName
+    ? `Current name:\n${currentName}`
+    : "No session name set.";
+  return `${current}\n\nUsage:\n/name <new name>\n/name --clear`;
+}
+
+export async function handleTelegramSessionNameCommand<TContext>(deps: {
+  ctx: TContext;
+  args: string;
+  getSessionName: (ctx: TContext) => string | undefined;
+  setSessionName: (name: string, ctx: TContext) => void | Promise<void>;
+  updateStatus: () => void;
+  sendTextReply: (text: string) => Promise<void>;
+}): Promise<void> {
+  const trimmed = deps.args.trim();
+  if (!trimmed) {
+    await deps.sendTextReply(
+      formatTelegramSessionNameUsage(deps.getSessionName(deps.ctx)),
+    );
+    return;
+  }
+  if (trimmed === "--clear") {
+    await deps.setSessionName("", deps.ctx);
+    deps.updateStatus();
+    await deps.sendTextReply("Session name cleared.");
+    return;
+  }
+  await deps.setSessionName(trimmed, deps.ctx);
+  deps.updateStatus();
+  await deps.sendTextReply(`Session name set:\n${trimmed}`);
+}
+
 function isTelegramStaleContextError(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -1225,6 +1275,9 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
     case "resume":
       await deps.handleResume(message, ctx);
       return true;
+    case "name":
+      await deps.handleName(message, action.args, ctx);
+      return true;
     case "status":
       await deps.handleStatus(message, ctx);
       return true;
@@ -1326,6 +1379,8 @@ export function createTelegramCommandHandlerTargetRuntime<
     openQueueMenu: deps.openQueueMenu,
     openSettingsMenu: commandTargetRuntime.openSettingsMenu,
     openResumeMenu: commandTargetRuntime.openResumeMenu,
+    getSessionName: deps.getSessionName,
+    setSessionName: deps.setSessionName,
     getAllowedUserId: deps.getAllowedUserId,
     setAllowedUserId: deps.setAllowedUserId,
     registerBotCommands: createTelegramBotCommandRegistrar({
@@ -1488,6 +1543,16 @@ async function handleTelegramCommandRuntime<
       },
       handleResume: async (nextMessage, commandCtx) => {
         await deps.openResumeMenu(nextMessage, commandCtx);
+      },
+      handleName: async (nextMessage, args, commandCtx) => {
+        await handleTelegramSessionNameCommand<TContext>({
+          ctx: commandCtx,
+          args,
+          getSessionName: deps.getSessionName,
+          setSessionName: deps.setSessionName,
+          updateStatus: updateStatusFor(commandCtx),
+          sendTextReply: sendReplyFor(nextMessage),
+        });
       },
       handleCompact: async (nextMessage, commandCtx) => {
         await handleTelegramCompactCommand({

@@ -424,6 +424,8 @@ export default function (pi: Pi.ExtensionAPI) {
     compact,
     injectNewSession,
     injectClone,
+    getSessionName: Pi.getExtensionContextSessionName,
+    setSessionName: Pi.setExtensionContextSessionName,
     recordRuntimeEvent,
   });
   const pollingRuntime = Polling.createTelegramPollingControllerRuntime<

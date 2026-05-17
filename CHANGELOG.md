@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `[Commands]` Added Telegram-side `/name`: `/name <new name>` sets the current π session display name via session-info entries, `/name` shows the current name plus usage, and `/name --clear` clears the display name. The bot command menu now lists 🏷️ `/name`, and `name` is a Telegram-reserved command name.
+- `[Tests]` Added `/name` regressions for action parsing/dispatch, runtime wiring, and show/set/clear handler behavior.
 - `[Resume Menu]` Added a `🗑 Delete sessions` mode to Telegram `/resume`. Normal session rows stay full width for readable previews; delete mode now shows full-width fake-checkbox rows (`☐`/`☑`), supports multi-select plus `Clear selection`, opens a two-button confirmation (`❌ No` / `🗑 Yes, delete`), unlinks all selected stale session files on confirmation, refreshes the cached page, reindexes remaining callback rows, and still refuses current-session deletion defensively.
 - `[Tests]` Added `/resume` regressions for fake-checkbox delete-mode callback data, mode switching, selection toggling, confirmation open/cancel flows, confirmed batch deletion, row reindexing, and current-session delete refusal.
 - `[Context Usage]` Final Telegram-originated text replies now append a display-only context usage footer after outbound text handlers run, e.g. `—\n📊 ctx 25.6K/400K 6.4%`, using π's runtime context-usage snapshot. The footer stays out of session history, avoids translation/redaction/TTS outbound handlers, and is stripped from future Telegram `[reply]` context when users reply to an assistant message.

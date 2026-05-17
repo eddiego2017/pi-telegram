@@ -157,6 +157,8 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
     compact: () => undefined,
     injectNewSession: async () => undefined,
     injectClone: async () => undefined,
+    getSessionName: () => undefined,
+    setSessionName: () => undefined,
   });
   await routeRuntime.handleUpdate(
     {

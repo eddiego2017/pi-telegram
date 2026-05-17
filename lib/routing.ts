@@ -145,6 +145,8 @@ export interface TelegramInboundRouteRuntimeDeps<
   ) => void;
   injectNewSession: () => Promise<void>;
   injectClone: () => Promise<void>;
+  getSessionName: (ctx: TContext) => string | undefined;
+  setSessionName: (name: string, ctx: TContext) => void | Promise<void>;
   recordRuntimeEvent?: (
     category: string,
     error: unknown,
@@ -373,6 +375,8 @@ export function createTelegramInboundRouteRuntime<
     compact: deps.compact,
     injectNewSession: deps.injectNewSession,
     injectClone: deps.injectClone,
+    getSessionName: deps.getSessionName,
+    setSessionName: deps.setSessionName,
     allocateItemOrder: deps.bridgeRuntime.queue.allocateItemOrder,
     allocateControlOrder: deps.bridgeRuntime.queue.allocateControlOrder,
     appendControlItem: deps.queueMutationRuntime.append,

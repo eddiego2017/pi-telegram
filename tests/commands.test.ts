@@ -27,6 +27,7 @@ import {
   handleTelegramLlmCommand,
   handleTelegramNewSessionCommand,
   handleTelegramCloneSessionCommand,
+  handleTelegramSessionNameCommand,
   handleTelegramModelCommand,
   formatTelegramLlmListReply,
   parseTelegramLlmFilterTokens,
@@ -88,6 +89,7 @@ function createBridgeCommandContext(
 test("Command helpers expose Telegram bot command definitions", () => {
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.model, "🤖");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.thinking, "🧠");
+  assert.deepEqual(TELEGRAM_COMMAND_EMOJI.name, "🏷️");
   assert.equal(formatTelegramCommandEmojiPrefix("model"), "🤖 ");
   const expectedBuiltins = [
     {
@@ -101,6 +103,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
       description: "📑 Clone current session at current position",
     },
     { command: "resume", description: "📂 Resume a previous session" },
+    { command: "name", description: "🏷️ Set current session name" },
     { command: "llm", description: "🧬 List available LLM models" },
     {
       command: "next",
@@ -470,6 +473,11 @@ test("Command helpers build command actions", () => {
     commandName: "start",
     executionMode: "immediate",
   });
+  assert.deepEqual(buildTelegramCommandAction("name", "work label"), {
+    kind: "name",
+    args: "work label",
+    executionMode: "immediate",
+  });
   assert.deepEqual(Object.keys(TELEGRAM_COMMAND_ACTIONS), [
     ...TELEGRAM_RESERVED_COMMAND_NAMES,
   ]);
@@ -494,6 +502,7 @@ test("Command execution mode contract keeps Telegram controls immediate", () => 
     ["continue", "immediate"],
     ["status", "immediate"],
     ["model", "immediate"],
+    ["name", "immediate"],
     ["unknown", "ignored"],
     [undefined, "ignored"],
   ];
@@ -869,6 +878,8 @@ test("Command handler target runtime binds command targets into command handling
     compact: () => {},
     injectNewSession: async () => undefined,
     injectClone: async () => undefined,
+    getSessionName: () => undefined,
+    setSessionName: () => undefined,
     allocateItemOrder: () => 0,
     allocateControlOrder: () => 0,
     appendControlItem: (item, ctx) => {
@@ -957,6 +968,10 @@ test("Command runtime routes commands through runtime ports", async () => {
     },
     injectClone: async () => {
       events.push("inject-clone");
+    },
+    getSessionName: () => "old name",
+    setSessionName: (name: string) => {
+      events.push(`session-name:${name}`);
     },
     enqueueControlItem: async (
       nextMessage: typeof message,
@@ -1047,6 +1062,10 @@ test("Command runtime routes commands through runtime ports", async () => {
   );
   compactComplete?.();
   assert.equal(
+    await handleCommand("name", "mobile task", message, { idle: true }),
+    true,
+  );
+  assert.equal(
     await handleCommand("stop", "", message, { idle: true }),
     true,
   );
@@ -1078,6 +1097,9 @@ test("Command runtime routes commands through runtime ports", async () => {
     "status",
     "dispatch",
     "reply:99:Compaction completed.",
+    "session-name:mobile task",
+    "status",
+    "reply:99:Session name set:\nmobile task",
     "clear-switch",
     "clear-queue",
     "preserve:false",
@@ -1166,6 +1188,9 @@ test("Command helpers execute command actions through provided handlers", async 
     handleResume: async () => {
       events.push("resume");
     },
+    handleName: async (_message: unknown, args: string) => {
+      events.push(`name:${args}`);
+    },
   };
   assert.equal(
     await executeTelegramCommandAction(
@@ -1194,7 +1219,16 @@ test("Command helpers execute command actions through provided handlers", async 
     ),
     true,
   );
-  assert.deepEqual(events, ["stop", "help:start"]);
+  assert.equal(
+    await executeTelegramCommandAction(
+      { kind: "name", args: "label", executionMode: "immediate" },
+      {},
+      {},
+      deps,
+    ),
+    true,
+  );
+  assert.deepEqual(events, ["stop", "help:start", "name:label"]);
 });
 
 test("Command helpers guard and complete /new session flow", async () => {
@@ -1365,6 +1399,46 @@ test("buildTelegramCommandAction recognizes /clone as reserved", () => {
     kind: "clone",
     executionMode: "immediate",
   });
+});
+
+test("/name command shows, sets, and clears the current session name", async () => {
+  const replies: string[] = [];
+  const events: string[] = [];
+  let sessionName: string | undefined = "existing label";
+  const runName = (args: string) =>
+    handleTelegramSessionNameCommand({
+      ctx: "ctx",
+      args,
+      getSessionName: () => sessionName,
+      setSessionName: (name) => {
+        sessionName = name.trim() || undefined;
+        events.push(`set:${name}`);
+      },
+      updateStatus: () => {
+        events.push("status");
+      },
+      sendTextReply: async (text) => {
+        replies.push(text);
+      },
+    });
+
+  await runName("");
+  await runName("  mobile debug thread  ");
+  await runName("--clear");
+  await runName("");
+
+  assert.deepEqual(replies, [
+    "Current name:\nexisting label\n\nUsage:\n/name <new name>\n/name --clear",
+    "Session name set:\nmobile debug thread",
+    "Session name cleared.",
+    "No session name set.\n\nUsage:\n/name <new name>\n/name --clear",
+  ]);
+  assert.deepEqual(events, [
+    "set:mobile debug thread",
+    "status",
+    "set:",
+    "status",
+  ]);
 });
 
 test("/llm command lists available models", async () => {

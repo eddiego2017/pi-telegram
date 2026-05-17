@@ -173,6 +173,7 @@ Current operator controls include:
 - `/compact` for Telegram-triggered π session compaction when the bridge is idle
 - `/queue` for opening the queue section of the inline application menu; the same section is reachable from the status/main menu and supports top-anchored Back navigation, Priority/Normal tabs, and cancellation
 - `/resume` for opening a paginated inline-keyboard list of previous sessions in the current cwd; normal session rows stay full width for readable previews, while `🗑 Delete sessions` switches to a fake-checkbox delete-mode list (`☐`/`☑`) that supports multi-select, two-step confirmation, batch unlink, cached page refresh, and row reindexing
+- `/name [new name]` for showing, setting, or clearing the current session display name using π session-info entries directly from the active extension context; `/name --clear` appends an empty name entry, matching π core's current-name resolution rules
 - `/next` for dispatching the next queued turn, aborting the active run first when π is busy
 - `/continue` for enqueueing a Telegram-owned `continue` prompt, without aborting the current turn or forcing the next queued item
 - `/abort` for aborting the active Telegram-owned run while preserving queued items for manual continuation
