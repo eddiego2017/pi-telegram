@@ -172,7 +172,7 @@ Current operator controls include:
 - Hidden `/model` and `/thinking` shortcuts for opening the model and thinking sections directly while keeping settings out of the visible bot command menu
 - `/compact` for Telegram-triggered π session compaction when the bridge is idle
 - `/queue` for opening the queue section of the inline application menu; the same section is reachable from the status/main menu and supports top-anchored Back navigation, Priority/Normal tabs, and cancellation
-- `/resume` for opening a paginated inline-keyboard list of previous sessions in the current cwd; normal session rows stay full width for readable previews, while `🗑 Delete sessions` switches to a delete-mode list whose rows open a two-step confirmation before unlinking the stale session file and refreshing cached rows
+- `/resume` for opening a paginated inline-keyboard list of previous sessions in the current cwd; normal session rows stay full width for readable previews, while `🗑 Delete sessions` switches to a fake-checkbox delete-mode list (`☐`/`☑`) that supports multi-select, two-step confirmation, batch unlink, cached page refresh, and row reindexing
 - `/next` for dispatching the next queued turn, aborting the active run first when π is busy
 - `/continue` for enqueueing a Telegram-owned `continue` prompt, without aborting the current turn or forcing the next queued item
 - `/abort` for aborting the active Telegram-owned run while preserving queued items for manual continuation
