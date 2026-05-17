@@ -213,16 +213,6 @@ function countToolCalls(message: TelegramSessionMessage | undefined): number {
   return content.filter((block) => block?.type === "toolCall").length;
 }
 
-function formatToolCallNames(message: TelegramSessionMessage | undefined): string {
-  const content = message?.content;
-  if (!Array.isArray(content)) return "";
-  const names = content
-    .filter((block) => block?.type === "toolCall")
-    .map((block) => (typeof block.name === "string" ? block.name : "tool"));
-  if (names.length === 0) return "";
-  return names.slice(0, 3).join(", ") + (names.length > 3 ? ", …" : "");
-}
-
 function usageValue(value: number | undefined): number {
   return Number.isFinite(value) ? value ?? 0 : 0;
 }
@@ -278,7 +268,7 @@ export function buildTelegramSessionHistoryItems(
   snapshot: TelegramSessionSnapshot,
 ): TelegramSessionHistoryItem[] {
   const items: TelegramSessionHistoryItem[] = [];
-  snapshot.branch.forEach((entry, index) => {
+  snapshot.branch.forEach((entry) => {
     if (entry.type === "message") {
       const message = entry.message;
       if (!message) return;
@@ -286,7 +276,7 @@ export function buildTelegramSessionHistoryItems(
         const detail = contentText(message.content) || "(empty user message)";
         items.push({
           entryId: entry.id,
-          globalIndex: index + 1,
+          globalIndex: items.length + 1,
           timestamp: entry.timestamp,
           role: "user",
           title: "👤 User",
@@ -298,38 +288,20 @@ export function buildTelegramSessionHistoryItems(
       }
       if (message.role === "assistant") {
         const text = contentText(message.content);
+        if (!text) return;
         const toolCallCount = countToolCalls(message);
-        const toolNames = formatToolCallNames(message);
-        const fallback = toolCallCount > 0 ? `Tool calls: ${toolNames}` : "(empty assistant message)";
-        const detail = text || fallback;
         items.push({
           entryId: entry.id,
-          globalIndex: index + 1,
+          globalIndex: items.length + 1,
           timestamp: entry.timestamp,
           role: "assistant",
           title: "🤖 Assistant",
-          summary: truncate(detail, TELEGRAM_SESSION_SUMMARY_LEN),
-          detail,
+          summary: truncate(text, TELEGRAM_SESSION_SUMMARY_LEN),
+          detail: text,
           toolCallCount,
           tokenOutput: message.usage?.output,
         });
         return;
-      }
-      if (message.role === "toolResult") {
-        const text = contentText(message.content);
-        const name = message.toolName || "tool";
-        const status = message.isError ? "error" : "ok";
-        const detail = text || `(${status})`;
-        items.push({
-          entryId: entry.id,
-          globalIndex: index + 1,
-          timestamp: entry.timestamp,
-          role: "tool",
-          title: `🔧 ${name}`,
-          summary: `${status} · ${truncate(detail, TELEGRAM_SESSION_SUMMARY_LEN)}`,
-          detail,
-          toolCallCount: 0,
-        });
       }
       return;
     }
@@ -337,7 +309,7 @@ export function buildTelegramSessionHistoryItems(
       const detail = contentText(entry.content) || `custom: ${entry.customType ?? "message"}`;
       items.push({
         entryId: entry.id,
-        globalIndex: index + 1,
+        globalIndex: items.length + 1,
         timestamp: entry.timestamp,
         role: "custom",
         title: "🧩 Custom",
@@ -419,7 +391,6 @@ export function buildTelegramSessionMainReplyMarkup(
       text: hasHistory ? "📜 History" : "📜 History (empty)",
       callback_data: hasHistory ? "session:history" : "session:noop",
     },
-    { text: "🔄 Refresh", callback_data: "session:refresh" },
   ]);
   return { inline_keyboard: rows };
 }
@@ -440,9 +411,8 @@ export function buildTelegramSessionHistoryText(
     "",
   ];
   for (const item of pageSlice(items, safePage)) {
-    const tools = item.toolCallCount > 0 ? ` · tools ×${item.toolCallCount}` : "";
     lines.push(
-      `${item.globalIndex} ${item.title}${tools}\n${escapeHtml(item.summary || "(empty)")}`,
+      `${item.globalIndex} ${item.role}: ${escapeHtml(item.summary || "(empty)")}`,
     );
   }
   if (count > 1) lines.push("", `Page ${safePage + 1}/${count}`);
@@ -456,16 +426,8 @@ export function buildTelegramSessionHistoryReplyMarkup(
   const items = buildTelegramSessionHistoryItems(snapshot);
   const safePage = clampPage(page, items.length);
   const rows: TelegramSessionReplyMarkup["inline_keyboard"] = [
-    [{ text: "⬅️ Session", callback_data: "session:back:main" }],
+    [{ text: "⬅️ Back to session", callback_data: "session:back:main" }],
   ];
-  for (const item of pageSlice(items, safePage)) {
-    rows.push([
-      {
-        text: `Open #${item.globalIndex} · ${item.title.replace(/^[^ ]+ /, "")}`,
-        callback_data: `session:turn:${item.globalIndex - 1}`,
-      },
-    ]);
-  }
   const count = pageCount(items.length);
   if (count > 1) {
     const prev = safePage - 1;

@@ -110,31 +110,27 @@ test("Session menu builds compact stats and escaped latest preview", () => {
   assert.match(text, /hello &lt;world&gt;/);
   assert.match(text, /Hi &amp; welcome/);
   assert.deepEqual(buildTelegramSessionMainReplyMarkup(true), {
-    inline_keyboard: [
-      [
-        { text: "📜 History", callback_data: "session:history" },
-        { text: "🔄 Refresh", callback_data: "session:refresh" },
-      ],
-    ],
+    inline_keyboard: [[{ text: "📜 History", callback_data: "session:history" }]],
   });
 });
 
-test("Session history uses active branch messages and opens details", () => {
+test("Session history renders active-branch chat lines without tool rows", () => {
   const snapshot = makeSnapshot();
   const items = buildTelegramSessionHistoryItems(snapshot);
-  assert.equal(items.length, 3);
+  assert.equal(items.length, 2);
   assert.deepEqual(
     items.map((item) => [item.globalIndex, item.title, item.summary]),
     [
       [1, "👤 User", "hello <world>"],
       [2, "🤖 Assistant", "Hi & welcome"],
-      [3, "🔧 read", "ok · file body"],
     ],
   );
-  assert.match(buildTelegramSessionHistoryText(snapshot, 0), /1 👤 User/);
-  assert.match(buildTelegramSessionHistoryText(snapshot, 0), /Hi &amp; welcome/);
-  assert.deepEqual(buildTelegramSessionHistoryReplyMarkup(snapshot, 0).inline_keyboard.at(1), [
-    { text: "Open #1 · User", callback_data: "session:turn:0" },
+  const historyText = buildTelegramSessionHistoryText(snapshot, 0);
+  assert.match(historyText, /1 user: hello &lt;world&gt;/);
+  assert.match(historyText, /2 assistant: Hi &amp; welcome/);
+  assert.doesNotMatch(historyText, /tool|tools|read/i);
+  assert.deepEqual(buildTelegramSessionHistoryReplyMarkup(snapshot, 0).inline_keyboard, [
+    [{ text: "⬅️ Back to session", callback_data: "session:back:main" }],
   ]);
   assert.match(buildTelegramSessionDetailText(items[1]), /<b>🤖 Assistant<\/b>/);
   assert.match(buildTelegramSessionDetailText(items[1]), /tools ×1/);
@@ -173,7 +169,7 @@ test("Session menu runtime opens, pages, details, and refreshes", async () => {
 
   assert.deepEqual(events, [
     "send:7:html:<b>🧭 Session</b>:1",
-    "edit:7:99:html:<b>📜 History</b>:4",
+    "edit:7:99:html:<b>📜 History</b>:1",
     "answer:cb1:",
     "edit:7:99:html:<b>🤖 Assistant</b>:2",
     "answer:cb2:",
