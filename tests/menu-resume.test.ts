@@ -86,6 +86,10 @@ test("buildTelegramResumeMenuReplyMarkup keeps page-1 open index stable and adds
     firstEntryRow[0].callback_data,
     `resume:open:${TELEGRAM_RESUME_MENU_PAGE_SIZE}`,
   );
+  assert.equal(
+    firstEntryRow[1].callback_data,
+    `resume:delete:${TELEGRAM_RESUME_MENU_PAGE_SIZE}`,
+  );
 });
 
 test("buildTelegramResumeMenuReplyMarkup hides Prev on first / Next on last page", () => {
@@ -122,7 +126,10 @@ function makeState(
   };
 }
 
-function makeCallbackDeps(state: TelegramResumeMenuState) {
+function makeCallbackDeps(
+  state: TelegramResumeMenuState,
+  getCurrentSessionFile = () => state.currentSessionFile,
+) {
   const store = createTelegramResumeMenuStore(() => 1);
   store.set(state);
   const events: string[] = [];
@@ -133,18 +140,27 @@ function makeCallbackDeps(state: TelegramResumeMenuState) {
       getState: store.get,
       setState: store.set,
       getCwd: () => "/cwd",
+      getCurrentSessionFile,
       editResumeMessage: async (
         chatId: number,
         messageId: number,
         text: string,
       ) => {
-        events.push(`edit:${chatId}:${messageId}:${text.includes("Page") ? "paged" : "plain"}`);
+        const kind = text.includes("Delete this session?")
+          ? "confirm"
+          : text.includes("Page")
+            ? "paged"
+            : "plain";
+        events.push(`edit:${chatId}:${messageId}:${kind}`);
       },
       answerCallbackQuery: async (id: string, text?: string) => {
         events.push(`answer:${id}:${text ?? ""}`);
       },
       injectResumeExec: async (path: string) => {
         events.push(`inject:${path}`);
+      },
+      deleteSessionFile: async (path: string) => {
+        events.push(`delete:${path}`);
       },
       now: () => 2,
     },
@@ -228,4 +244,91 @@ test("handleTelegramResumeMenuCallback rejects invalid open index", async () => 
     deps,
   );
   assert.deepEqual(events, ["answer:cb5:Invalid selection."]);
+});
+
+test("handleTelegramResumeMenuCallback opens delete confirmation", async () => {
+  const state = makeState(3, 0);
+  const { events, deps } = makeCallbackDeps(state);
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "del",
+      data: "resume:delete:1",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, ["edit:1:100:confirm", "answer:del:"]);
+});
+
+test("handleTelegramResumeMenuCallback cancels delete confirmation", async () => {
+  const state = makeState(3, 0);
+  const { events, deps } = makeCallbackDeps(state);
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "cancel",
+      data: "resume:cancel-delete",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, ["edit:1:100:plain", "answer:cancel:Cancelled."]);
+});
+
+test("handleTelegramResumeMenuCallback deletes session and reindexes remaining rows", async () => {
+  const state = makeState(3, 0);
+  const { store, events, deps } = makeCallbackDeps(state);
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "confirm",
+      data: "resume:confirm-delete:1",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, [
+    "delete:/sessions/s1.json",
+    "edit:1:100:plain",
+    "answer:confirm:Session deleted.",
+  ]);
+  const updated = store.get(100);
+  assert.equal(updated?.sessions.length, 2);
+  assert.deepEqual(
+    updated?.sessions.map((entry) => [entry.index, entry.path]),
+    [
+      [0, "/sessions/s0.json"],
+      [1, "/sessions/s2.json"],
+    ],
+  );
+});
+
+test("handleTelegramResumeMenuCallback refuses to delete current session", async () => {
+  const state = makeState(3, 0);
+  state.currentSessionFile = "/sessions/s1.json";
+  const { events, deps } = makeCallbackDeps(state);
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "current",
+      data: "resume:confirm-delete:1",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, ["answer:current:Can't delete current session."]);
+});
+
+test("handleTelegramResumeMenuCallback checks the live current session before delete", async () => {
+  const state = makeState(3, 0);
+  const { events, deps } = makeCallbackDeps(
+    state,
+    () => "/sessions/s1.json",
+  );
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "live-current",
+      data: "resume:delete:1",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, ["answer:live-current:Can't delete current session."]);
 });

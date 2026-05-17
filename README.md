@@ -87,6 +87,7 @@ Use these inside the Telegram DM with your bot. The main entrypoint is `/start`:
 - **`/start`**: Pair the first Telegram user when needed, register bot commands, and open the inline application menu with command help, prompt-template commands, status rows, model controls, thinking controls, settings, and queue controls.
 - **`/compact`**: Start session compaction when the session is idle; Telegram shows the native typing indicator while compaction is running.
 - **`/new`**: Start a fresh π session when the session is idle and the Telegram queue is empty. *Fork-local workaround*: π's built-in `/new` lives in the interactive editor (not as an extension command), so the bridge injects `/new` into the host tmux pane (`pi:0`) where the π REPL runs. Requires tmux and assumes this fork's deployment topology.
+- **`/resume`**: List previous π sessions for the current working directory in a paginated inline keyboard. Tap a session row to switch to it, or tap its `🗑` button and confirm to delete that stale session file.
 - **`/llm [tokens...]`**: List available LLM models (`provider/id`). With tokens, filter by case-insensitive AND substring match on the model id; if exactly one model matches, switch the active model for this session and reply `Model switched to provider/id`. Multiple matches list the filtered subset; no match replies `No models match: <tokens>`.
 - **`/next`**: Dispatch the next queued turn, aborting π first if needed.
 - **`/continue`**: Enqueue a priority `continue` prompt.
@@ -116,7 +117,7 @@ If you ask π for a generated file, π can call the `telegram_attach` tool and t
 
 ### Operator menu and controls
 
-The inline application menu is the primary operator surface. It exposes status, prompt-template commands, model selection, thinking level selection, settings, and queue inspection/mutation: a Telegram-shaped subset of the important handles normally available from the CLI. A typical control loop stays inside Telegram: open `/start`, inspect status, jump into Queue, delete stale work, switch model, return to the main menu, and keep the π session running without touching the terminal.
+The inline application menu is the primary operator surface. It exposes status, prompt-template commands, model selection, thinking level selection, settings, queue inspection/mutation, and session resume/delete flows: a Telegram-shaped subset of the important handles normally available from the CLI. A typical control loop stays inside Telegram: open `/start`, inspect status, jump into Queue, delete stale work, switch model, resume or prune old sessions, return to the main menu, and keep the π session running without touching the terminal.
 
 ### Queue runtime
 
