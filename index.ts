@@ -23,6 +23,7 @@ import * as MenuQueue from "./lib/menu-queue.ts";
 import * as MenuResume from "./lib/menu-resume.ts";
 import * as MenuSession from "./lib/menu-session.ts";
 import * as MenuSettings from "./lib/menu-settings.ts";
+import * as MenuTree from "./lib/menu-tree.ts";
 import * as Menu from "./lib/menu.ts";
 import * as Model from "./lib/model.ts";
 import * as OutboundAttachments from "./lib/outbound-attachments.ts";
@@ -101,6 +102,11 @@ export default function (pi: Pi.ExtensionAPI) {
     recordRuntimeEvent,
   });
   const injectResumeExec = Pi.createTelegramResumeExecInjector({
+    exec: piRuntime.exec,
+    target: "pi:0",
+    recordRuntimeEvent,
+  });
+  const injectTreeExec = Pi.createTelegramTreeExecInjector({
     exec: piRuntime.exec,
     target: "pi:0",
     recordRuntimeEvent,
@@ -368,7 +374,31 @@ export default function (pi: Pi.ExtensionAPI) {
     editInteractiveMessage,
     answerCallbackQuery,
   });
+  const canNavigateTree = MenuTree.createTelegramTreeNavigationGate<
+    Pi.ExtensionContext
+  >({
+    isIdle,
+    hasPendingMessages,
+    hasActiveTelegramTurn: activeTurnRuntime.has,
+    hasDispatchPending: lifecycle.hasDispatchPending,
+    hasQueuedTelegramItems: telegramQueueStore.hasQueuedItems,
+    isCompactionInProgress: lifecycle.isCompactionInProgress,
+  });
+  const treeMenuRuntime = MenuTree.buildTelegramTreeMenuRuntime<
+    Pi.ExtensionContext
+  >({
+    getSnapshot: Pi.getExtensionContextSessionSnapshot,
+    sendInteractiveMessage,
+    editInteractiveMessage,
+    answerCallbackQuery,
+    injectTreeExec,
+    canNavigate: canNavigateTree,
+  });
   const notifyResumeOutcome = MenuResume.createTelegramResumeOutcomeNotifier({
+    getAllowedUserId: configStore.getAllowedUserId,
+    sendTextReply,
+  });
+  const notifyTreeOutcome = MenuTree.createTelegramTreeOutcomeNotifier({
     getAllowedUserId: configStore.getAllowedUserId,
     sendTextReply,
   });
@@ -402,6 +432,8 @@ export default function (pi: Pi.ExtensionAPI) {
     resumeMenuCallbackHandler: resumeMenuRuntime.handleCallbackQuery,
     openSessionMenu: sessionMenuRuntime.openSessionMenu,
     sessionMenuCallbackHandler: sessionMenuRuntime.handleCallbackQuery,
+    openTreeMenu: treeMenuRuntime.openTreeMenu,
+    treeMenuCallbackHandler: treeMenuRuntime.handleCallbackQuery,
     sectionRegistry,
     buttonActionStore,
     inboundHandlerRuntime,
@@ -522,6 +554,7 @@ export default function (pi: Pi.ExtensionAPI) {
     stopPolling: lockedPollingRuntime.stop,
     updateStatus,
     notifyResumeOutcome,
+    notifyTreeOutcome,
   });
 
   // --- Lifecycle Hooks ---

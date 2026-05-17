@@ -94,6 +94,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.thinking, "🧠");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.name, "🏷️");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.session, "🧭");
+  assert.deepEqual(TELEGRAM_COMMAND_EMOJI.tree, "🌳");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.reload, "🔄");
   assert.equal(formatTelegramCommandEmojiPrefix("model"), "🤖 ");
   const expectedBuiltins = [
@@ -110,6 +111,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
     },
     { command: "resume", description: "📂 Resume a previous session" },
     { command: "session", description: "🧭 Show current session" },
+    { command: "tree", description: "🌳 Rewind current session tree" },
     { command: "name", description: "🏷️ Set current session name" },
     { command: "llm", description: "🧬 List available LLM models" },
     {
@@ -1083,6 +1085,9 @@ test("Command runtime routes commands through runtime ports", async () => {
     openSessionMenu: async (nextMessage: typeof message) => {
       events.push(`session:${nextMessage.chat.id}`);
     },
+    openTreeMenu: async (nextMessage: typeof message) => {
+      events.push(`tree:${nextMessage.chat.id}`);
+    },
     getAllowedUserId: () => allowedUserId,
     setAllowedUserId: (userId: number) => {
       allowedUserId = userId;
@@ -1141,6 +1146,10 @@ test("Command runtime routes commands through runtime ports", async () => {
     true,
   );
   assert.equal(
+    await handleCommand("tree", "", message, { idle: true }),
+    true,
+  );
+  assert.equal(
     await handleCommand("name", "mobile task", message, { idle: true }),
     true,
   );
@@ -1178,6 +1187,7 @@ test("Command runtime routes commands through runtime ports", async () => {
     "reply:99:Compaction completed.",
     "reply:99:Reload queued.",
     "reload:queue",
+    "tree:42",
     "session-name:mobile task",
     "status",
     "reply:99:Session name set:\nmobile task",
@@ -1274,6 +1284,9 @@ test("Command helpers execute command actions through provided handlers", async 
     },
     handleSession: async () => {
       events.push("session");
+    },
+    handleTree: async () => {
+      events.push("tree");
     },
     handleName: async (_message: unknown, args: string) => {
       events.push(`name:${args}`);

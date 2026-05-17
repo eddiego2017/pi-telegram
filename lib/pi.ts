@@ -214,6 +214,18 @@ export function createTelegramResumeExecInjector(
   };
 }
 
+export function createTelegramTreeExecInjector(
+  options: TmuxDynamicSlashCommandInjectorOptions,
+): (entryId: string, summarize: boolean) => Promise<void> {
+  const dynamic = createTmuxDynamicSlashCommandInjector(options);
+  return function injectTelegramTreeExec(entryId: string, summarize: boolean) {
+    return dynamic(
+      "/telegram-tree-exec",
+      `${entryId} ${summarize ? "summary" : "none"}`,
+    );
+  };
+}
+
 export function getExtensionContextSessionFile(
   ctx: ExtensionContext,
 ): string | undefined {
@@ -232,6 +244,7 @@ export function getExtensionContextSessionSnapshot(ctx: ExtensionContext) {
     sessionId: ctx.sessionManager.getSessionId(),
     sessionFile: ctx.sessionManager.getSessionFile(),
     sessionName: ctx.sessionManager.getSessionName(),
+    leafId: ctx.sessionManager.getLeafId(),
     entries: ctx.sessionManager.getEntries(),
     branch: ctx.sessionManager.getBranch(),
     contextUsage: ctx.getContextUsage(),

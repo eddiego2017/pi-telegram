@@ -12,6 +12,7 @@ import type { TelegramInboundHandlerRuntime } from "./inbound-handlers.ts";
 import * as Media from "./media.ts";
 import * as Menu from "./menu.ts";
 import * as MenuSession from "./menu-session.ts";
+import * as MenuTree from "./menu-tree.ts";
 import * as Model from "./model.ts";
 import * as OutboundHandlers from "./outbound-handlers.ts";
 import * as PromptTemplates from "./prompt-templates.ts";
@@ -30,7 +31,8 @@ export type TelegramRoutedMessage = Updates.TelegramUpdateMessage &
 
 export type TelegramRoutedCallbackQuery = Updates.TelegramCallbackQuery &
   Menu.MenuCallbackQuery &
-  MenuSession.TelegramSessionMenuCallbackQuery;
+  MenuSession.TelegramSessionMenuCallbackQuery &
+  MenuTree.TelegramTreeMenuCallbackQuery;
 
 export interface TelegramInboundRouteRuntimeDeps<
   TMessage extends TelegramRoutedMessage,
@@ -85,12 +87,21 @@ export interface TelegramInboundRouteRuntimeDeps<
     query: TCallbackQuery,
     ctx: TContext,
   ) => Promise<boolean>;
+  treeMenuCallbackHandler?: (
+    query: TCallbackQuery,
+    ctx: TContext,
+  ) => Promise<boolean>;
   openResumeMenu?: (
     chatId: number,
     replyToMessageId: number,
     ctx: TContext,
   ) => Promise<void>;
   openSessionMenu?: (
+    chatId: number,
+    replyToMessageId: number,
+    ctx: TContext,
+  ) => Promise<void>;
+  openTreeMenu?: (
     chatId: number,
     replyToMessageId: number,
     ctx: TContext,
@@ -180,6 +191,7 @@ const TELEGRAM_OWNED_CALLBACK_PREFIXES = [
   "status:",
   "tgbtn:",
   "thinking:",
+  "tree:",
 ] as const;
 
 function isTelegramOwnedCallbackData(data: string): boolean {
@@ -307,6 +319,8 @@ export function createTelegramInboundRouteRuntime<
     if (handledByResume) return;
     const handledBySession = await deps.sessionMenuCallbackHandler?.(query, ctx);
     if (handledBySession) return;
+    const handledByTree = await deps.treeMenuCallbackHandler?.(query, ctx);
+    if (handledByTree) return;
     const callbackData = query.data;
     if (
       deps.sendUserMessage &&
@@ -429,6 +443,7 @@ export function createTelegramInboundRouteRuntime<
     openSettingsMenu: deps.openSettingsMenu,
     openResumeMenu: deps.openResumeMenu,
     openSessionMenu: deps.openSessionMenu,
+    openTreeMenu: deps.openTreeMenu,
     getAllowedUserId: deps.configStore.getAllowedUserId,
     setAllowedUserId: deps.configStore.setAllowedUserId,
     setMyCommands: deps.setMyCommands,
