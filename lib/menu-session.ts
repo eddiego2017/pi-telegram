@@ -339,10 +339,6 @@ function clampPage(page: number, total: number): number {
   return page;
 }
 
-function latestPage(total: number): number {
-  return pageCount(total) - 1;
-}
-
 function pageSlice<T>(items: readonly T[], page: number): readonly T[] {
   const start = page * TELEGRAM_SESSION_HISTORY_PAGE_SIZE;
   return items.slice(start, start + TELEGRAM_SESSION_HISTORY_PAGE_SIZE);
@@ -619,7 +615,7 @@ export async function openTelegramSessionMenu(
     chatId: deps.chatId,
     messageId,
     view: "main",
-    page: latestPage(history.length),
+    page: 0,
     updatedAt: now(),
   });
 }
@@ -683,7 +679,7 @@ async function handleTelegramSessionMenuCallbackUnsafe(
       buildTelegramSessionMainText(snapshot),
       buildTelegramSessionMainReplyMarkup(history.length > 0),
     );
-    updateState({ view: "main", page: latestPage(history.length), detailIndex: undefined });
+    updateState({ view: "main", page: 0, detailIndex: undefined });
     return true;
   }
 
