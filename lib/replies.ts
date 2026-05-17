@@ -207,6 +207,7 @@ export interface TelegramReplyDeliveryDeps<TReplyMarkup> {
     parse_mode?: "HTML";
     reply_markup?: TReplyMarkup;
     reply_parameters?: TelegramReplyParameters;
+    link_preview_options?: { is_disabled: true };
   }) => Promise<TelegramSentMessage>;
   editMessage: (body: {
     chat_id: number;
@@ -214,6 +215,7 @@ export interface TelegramReplyDeliveryDeps<TReplyMarkup> {
     text: string;
     parse_mode?: "HTML";
     reply_markup?: TReplyMarkup;
+    link_preview_options?: { is_disabled: true };
   }) => Promise<unknown>;
 }
 
@@ -221,13 +223,17 @@ export interface TelegramReplyTransport<TReplyMarkup> {
   sendRenderedChunks: (
     chatId: number,
     chunks: TelegramRenderedChunk[],
-    options?: { replyMarkup?: TReplyMarkup; replyToMessageId?: number },
+    options?: {
+      replyMarkup?: TReplyMarkup;
+      replyToMessageId?: number;
+      disableLinkPreview?: boolean;
+    },
   ) => Promise<number | undefined>;
   editRenderedMessage: (
     chatId: number,
     messageId: number,
     chunks: TelegramRenderedChunk[],
-    options?: { replyMarkup?: TReplyMarkup },
+    options?: { replyMarkup?: TReplyMarkup; disableLinkPreview?: boolean },
   ) => Promise<number | undefined>;
 }
 
@@ -254,7 +260,11 @@ export async function sendTelegramRenderedChunks<TReplyMarkup>(
   chatId: number,
   chunks: TelegramRenderedChunk[],
   deps: TelegramReplyDeliveryDeps<TReplyMarkup>,
-  options?: { replyMarkup?: TReplyMarkup; replyToMessageId?: number },
+  options?: {
+    replyMarkup?: TReplyMarkup;
+    replyToMessageId?: number;
+    disableLinkPreview?: boolean;
+  },
 ): Promise<number | undefined> {
   let lastMessageId: number | undefined;
   for (const [index, chunk] of chunks.entries()) {
@@ -269,6 +279,9 @@ export async function sendTelegramRenderedChunks<TReplyMarkup>(
       reply_markup:
         index === chunks.length - 1 ? options?.replyMarkup : undefined,
       ...(replyParameters ? { reply_parameters: replyParameters } : {}),
+      ...(options?.disableLinkPreview
+        ? { link_preview_options: { is_disabled: true as const } }
+        : {}),
     });
     lastMessageId = sent.message_id;
   }
@@ -280,7 +293,7 @@ export async function editTelegramRenderedMessage<TReplyMarkup>(
   messageId: number,
   chunks: TelegramRenderedChunk[],
   deps: TelegramReplyDeliveryDeps<TReplyMarkup>,
-  options?: { replyMarkup?: TReplyMarkup },
+  options?: { replyMarkup?: TReplyMarkup; disableLinkPreview?: boolean },
 ): Promise<number | undefined> {
   if (chunks.length === 0) return messageId;
   const [firstChunk, ...remainingChunks] = chunks;
@@ -291,10 +304,14 @@ export async function editTelegramRenderedMessage<TReplyMarkup>(
     parse_mode: firstChunk.parseMode,
     reply_markup:
       remainingChunks.length === 0 ? options?.replyMarkup : undefined,
+    ...(options?.disableLinkPreview
+      ? { link_preview_options: { is_disabled: true as const } }
+      : {}),
   });
   if (remainingChunks.length > 0) {
     return sendTelegramRenderedChunks(chatId, remainingChunks, deps, {
       replyMarkup: options?.replyMarkup,
+      disableLinkPreview: options?.disableLinkPreview,
     });
   }
   return messageId;
@@ -446,14 +463,14 @@ export function createTelegramRenderedMessageRuntime<TReplyMarkup>(
         chatId,
         messageId,
         deps.renderTelegramMessage(text, { mode }),
-        { replyMarkup },
+        { replyMarkup, disableLinkPreview: true },
       );
     },
     sendInteractiveMessage: async (chatId, text, mode, replyMarkup) => {
       return deps.replyTransport.sendRenderedChunks(
         chatId,
         deps.renderTelegramMessage(text, { mode }),
-        { replyMarkup },
+        { replyMarkup, disableLinkPreview: true },
       );
     },
   };

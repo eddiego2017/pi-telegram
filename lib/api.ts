@@ -192,6 +192,7 @@ export type TelegramSendMessageBody = Record<string, unknown> & {
   reply_markup?: unknown;
   reply_parameters?: TelegramReplyParameters;
   message_thread_id?: number;
+  link_preview_options?: { is_disabled: true };
 };
 
 export type TelegramEditMessageTextBody = Record<string, unknown> & {
@@ -199,6 +200,7 @@ export type TelegramEditMessageTextBody = Record<string, unknown> & {
   message_id: number;
   text: string;
   parse_mode?: "HTML";
+  link_preview_options?: { is_disabled: true };
 };
 
 export type TelegramSendMessageDraftBody = Record<string, unknown> & {

@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- `[Session Menu]` Added Telegram-side `/session`, a compact current-session center backed by `ctx.sessionManager`: name/file/id stats, message/tool counts, token/cache/cost totals, context usage, latest chat preview, and active-branch history pagination. History uses `getBranch()` so abandoned branches stay out of the default chat browser while aggregate stats still use all entries, renders user/assistant/custom rows directly in the HTML panel, and skips tool-call/tool-result noise by default.
+- `[Session Menu]` Added Telegram-side `/session`, a compact current-session center backed by `ctx.sessionManager`: name/file/id stats, message/tool counts, token/cache/cost totals, context usage, latest chat preview, and active-branch history pagination. History uses `getBranch()` so abandoned branches stay out of the default chat browser while aggregate stats still use all entries, renders user/assistant/custom rows as a narrow monospace table directly in the HTML panel, and skips tool-call/tool-result noise by default.
+- `[Menus]` Interactive menu messages now disable Telegram link previews, so URLs inside menus such as `/session` history do not spawn OpenGraph cards.
 - `[Commands]` The bot command menu now lists 🧭 `/session`, `session` is Telegram-reserved, and `session:` is a pi-telegram-owned callback prefix alongside `resume:`/menu prefixes.
 - `[Tests]` Added `tests/menu-session.test.ts` for summary formatting/escaping, history item extraction, panel rendering, and callback runtime navigation; updated command tests for `/session` routing and bot-command registration.
 - `[Commands]` Added Telegram-side `/reload`: the bot replies `Reload queued.`, then queues internal `/telegram-reload-runtime` as a `followUp` so `ctx.reload()` runs from `ExtensionCommandContext`. The bot command menu now lists 🔄 `/reload`, and `reload` is a Telegram-reserved command name.

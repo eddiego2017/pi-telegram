@@ -9,6 +9,8 @@ import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
 const TELEGRAM_SESSION_STATE_TTL_MS = 10 * 60 * 1000;
 const TELEGRAM_SESSION_HISTORY_PAGE_SIZE = 6;
 const TELEGRAM_SESSION_SUMMARY_LEN = 54;
+const TELEGRAM_SESSION_HISTORY_TABLE_WIDTH = 37;
+const TELEGRAM_SESSION_HISTORY_ROLE_WIDTH = 9;
 const TELEGRAM_SESSION_DETAIL_TEXT_LEN = 3000;
 
 export type TelegramSessionReplyMarkup = TelegramInlineKeyboardMarkup;
@@ -342,6 +344,37 @@ function pageSlice<T>(items: readonly T[], page: number): readonly T[] {
   return items.slice(start, start + TELEGRAM_SESSION_HISTORY_PAGE_SIZE);
 }
 
+function padRight(s: string, width: number): string {
+  if (s.length >= width) return s;
+  return s + " ".repeat(width - s.length);
+}
+
+function historyTableTextWidth(indexWidth: number): number {
+  return Math.max(
+    12,
+    TELEGRAM_SESSION_HISTORY_TABLE_WIDTH -
+      indexWidth -
+      2 -
+      TELEGRAM_SESSION_HISTORY_ROLE_WIDTH -
+      1,
+  );
+}
+
+function buildHistoryTable(items: readonly TelegramSessionHistoryItem[]): string {
+  const maxIndex = Math.max(...items.map((item) => item.globalIndex), 1);
+  const indexWidth = Math.max(1, String(maxIndex).length);
+  const textWidth = historyTableTextWidth(indexWidth);
+  const rows = [
+    `${padRight("#", indexWidth)}  ${padRight("role", TELEGRAM_SESSION_HISTORY_ROLE_WIDTH)} msg`,
+  ];
+  for (const item of items) {
+    rows.push(
+      `${padRight(String(item.globalIndex), indexWidth)}  ${padRight(item.role, TELEGRAM_SESSION_HISTORY_ROLE_WIDTH)} ${truncate(item.detail, textWidth) || "(empty)"}`,
+    );
+  }
+  return `<pre>${escapeHtml(rows.join("\n"))}</pre>`;
+}
+
 function buildLatestPreview(items: TelegramSessionHistoryItem[]): string {
   const latest = items
     .filter((item) => item.role !== "tool")
@@ -410,11 +443,7 @@ export function buildTelegramSessionHistoryText(
     `Active branch · ${start + 1}–${end} / ${items.length}`,
     "",
   ];
-  for (const item of pageSlice(items, safePage)) {
-    lines.push(
-      `${item.globalIndex} ${item.role}: ${escapeHtml(item.summary || "(empty)")}`,
-    );
-  }
+  lines.push(buildHistoryTable(pageSlice(items, safePage)));
   if (count > 1) lines.push("", `Page ${safePage + 1}/${count}`);
   return lines.join("\n");
 }

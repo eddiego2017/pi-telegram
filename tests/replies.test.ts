@@ -246,10 +246,12 @@ test("Reply runtime bundles text, markdown, and interactive rendered-message del
     allow_sending_without_reply: true,
   });
   assert.deepEqual(sent[2]?.reply_markup, { inline_keyboard: [] });
+  assert.deepEqual(sent[2]?.link_preview_options, { is_disabled: true });
   assert.deepEqual(
     edited.map((body) => body.text),
     ["html:menu"],
   );
+  assert.deepEqual(edited[0]?.link_preview_options, { is_disabled: true });
 });
 
 test("Reply delivery runtime exposes transport and rendered-message helpers", async () => {
