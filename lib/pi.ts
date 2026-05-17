@@ -226,6 +226,18 @@ export function getExtensionContextSessionName(
   return ctx.sessionManager.getSessionName();
 }
 
+export function getExtensionContextSessionSnapshot(ctx: ExtensionContext) {
+  return {
+    cwd: ctx.cwd,
+    sessionId: ctx.sessionManager.getSessionId(),
+    sessionFile: ctx.sessionManager.getSessionFile(),
+    sessionName: ctx.sessionManager.getSessionName(),
+    entries: ctx.sessionManager.getEntries(),
+    branch: ctx.sessionManager.getBranch(),
+    contextUsage: ctx.getContextUsage(),
+  };
+}
+
 type WritableSessionInfoManager = ExtensionContext["sessionManager"] & {
   appendSessionInfo(name: string): string;
 };

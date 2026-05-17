@@ -11,6 +11,7 @@ import type { TelegramSectionRegistry } from "./extension-sections.ts";
 import type { TelegramInboundHandlerRuntime } from "./inbound-handlers.ts";
 import * as Media from "./media.ts";
 import * as Menu from "./menu.ts";
+import * as MenuSession from "./menu-session.ts";
 import * as Model from "./model.ts";
 import * as OutboundHandlers from "./outbound-handlers.ts";
 import * as PromptTemplates from "./prompt-templates.ts";
@@ -28,7 +29,8 @@ export type TelegramRoutedMessage = Updates.TelegramUpdateMessage &
   Turns.TelegramTurnMessage;
 
 export type TelegramRoutedCallbackQuery = Updates.TelegramCallbackQuery &
-  Menu.MenuCallbackQuery;
+  Menu.MenuCallbackQuery &
+  MenuSession.TelegramSessionMenuCallbackQuery;
 
 export interface TelegramInboundRouteRuntimeDeps<
   TMessage extends TelegramRoutedMessage,
@@ -79,7 +81,16 @@ export interface TelegramInboundRouteRuntimeDeps<
     query: TCallbackQuery,
     ctx: TContext,
   ) => Promise<boolean>;
+  sessionMenuCallbackHandler?: (
+    query: TCallbackQuery,
+    ctx: TContext,
+  ) => Promise<boolean>;
   openResumeMenu?: (
+    chatId: number,
+    replyToMessageId: number,
+    ctx: TContext,
+  ) => Promise<void>;
+  openSessionMenu?: (
     chatId: number,
     replyToMessageId: number,
     ctx: TContext,
@@ -164,6 +175,7 @@ const TELEGRAM_OWNED_CALLBACK_PREFIXES = [
   "queue:",
   "resume:",
   "section:",
+  "session:",
   "settings:",
   "status:",
   "tgbtn:",
@@ -293,6 +305,8 @@ export function createTelegramInboundRouteRuntime<
     if (handledBySettings) return;
     const handledByResume = await deps.resumeMenuCallbackHandler?.(query, ctx);
     if (handledByResume) return;
+    const handledBySession = await deps.sessionMenuCallbackHandler?.(query, ctx);
+    if (handledBySession) return;
     const callbackData = query.data;
     if (
       deps.sendUserMessage &&
@@ -414,6 +428,7 @@ export function createTelegramInboundRouteRuntime<
     },
     openSettingsMenu: deps.openSettingsMenu,
     openResumeMenu: deps.openResumeMenu,
+    openSessionMenu: deps.openSessionMenu,
     getAllowedUserId: deps.configStore.getAllowedUserId,
     setAllowedUserId: deps.configStore.setAllowedUserId,
     setMyCommands: deps.setMyCommands,

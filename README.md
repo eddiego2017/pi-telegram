@@ -89,6 +89,7 @@ Use these inside the Telegram DM with your bot. The main entrypoint is `/start`:
 - **`/reload`**: Queue a safe π runtime reload from Telegram. The bridge acknowledges first, then sends an internal `/telegram-reload-runtime` follow-up so `ctx.reload()` runs inside π's command context instead of the Telegram update handler.
 - **`/new`**: Start a fresh π session when the session is idle and the Telegram queue is empty. *Fork-local workaround*: π's built-in `/new` lives in the interactive editor (not as an extension command), so the bridge injects `/new` into the host tmux pane (`pi:0`) where the π REPL runs. Requires tmux and assumes this fork's deployment topology.
 - **`/resume`**: List previous π sessions for the current working directory in a paginated inline keyboard. Session rows stay full width for readable previews; use `🗑 Delete sessions` to enter fake-checkbox delete mode, select one or more stale sessions, then confirm batch deletion.
+- **`/session`**: Open a Telegram-native session center for the current π session: compact name/file/id/message/token/cost/context stats, latest chat preview, active-branch history pagination, and per-entry detail views for user, assistant, and tool-result messages.
 - **`/name [new name]`**: Show, set, or clear the current π session display name directly from Telegram. `/name <new name>` appends a session-info entry, `/name` shows the current name plus usage, and `/name --clear` clears it.
 - **`/llm [tokens...]`**: List available LLM models (`provider/id`). With tokens, filter by case-insensitive AND substring match on the model id; if exactly one model matches, switch the active model for this session and reply `Model switched to provider/id`. Multiple matches list the filtered subset; no match replies `No models match: <tokens>`.
 - **`/next`**: Dispatch the next queued turn, aborting π first if needed.
@@ -119,7 +120,7 @@ If you ask π for a generated file, π can call the `telegram_attach` tool and t
 
 ### Operator menu and controls
 
-The inline application menu is the primary operator surface. It exposes status, prompt-template commands, model selection, thinking level selection, settings, queue inspection/mutation, and session resume/delete flows: a Telegram-shaped subset of the important handles normally available from the CLI. A typical control loop stays inside Telegram: open `/start`, inspect status, jump into Queue, delete stale work, switch model, resume or prune old sessions, return to the main menu, and keep the π session running without touching the terminal.
+The inline application menu is the primary operator surface. It exposes status, prompt-template commands, model selection, thinking level selection, settings, queue inspection/mutation, session resume/delete flows, and the `/session` session-center/history view: a Telegram-shaped subset of the important handles normally available from the CLI. A typical control loop stays inside Telegram: open `/start`, inspect status, jump into Queue, inspect current session history, delete stale work, switch model, resume or prune old sessions, return to the main menu, and keep the π session running without touching the terminal.
 
 ### Queue runtime
 

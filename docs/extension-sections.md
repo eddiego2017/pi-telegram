@@ -194,9 +194,11 @@ The token is an implementation detail. Section authors **never** write `section:
 3. Button action store (`tgbtn:*`)
 4. Queue menu callbacks (`queue:*`)
 5. Settings menu callbacks (`settings:*`)
-6. Built-in menu callbacks (`menu:*`, `model:*`, `thinking:*`, `status:*`)
-7. Section callbacks (`section:*`) — dispatched before step 6's full handler
-8. Unknown callbacks fall back to `[callback]` prompt text
+6. Resume menu callbacks (`resume:*`)
+7. Session-center callbacks (`session:*`)
+8. Section callbacks (`section:*`) — dispatched inside the built-in menu handler before normal `menu:*` actions
+9. Built-in menu callbacks (`menu:*`, `model:*`, `thinking:*`, `status:*`)
+10. Unknown callbacks fall back to `[callback]` prompt text
 
 ### Handler return values
 
@@ -354,7 +356,7 @@ section:0:settings:open          → open settings root
 section:0:<action>:<payload>     → forwarded to handleCallback
 ```
 
-`section:` is listed in `TELEGRAM_OWNED_CALLBACK_PREFIXES` alongside `menu:`, `model:`, `settings:`, `status:`, `tgbtn:`, `thinking:`, `queue:`. Layered extensions must not use this prefix.
+`section:` is listed in `TELEGRAM_OWNED_CALLBACK_PREFIXES` alongside `menu:`, `model:`, `settings:`, `status:`, `tgbtn:`, `thinking:`, `queue:`, `resume:`, and `session:`. Layered extensions must not use this prefix.
 
 ### Inline keyboard layout
 

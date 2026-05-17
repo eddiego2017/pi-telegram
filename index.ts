@@ -21,6 +21,7 @@ import * as Locks from "./lib/locks.ts";
 import * as Media from "./lib/media.ts";
 import * as MenuQueue from "./lib/menu-queue.ts";
 import * as MenuResume from "./lib/menu-resume.ts";
+import * as MenuSession from "./lib/menu-session.ts";
 import * as MenuSettings from "./lib/menu-settings.ts";
 import * as Menu from "./lib/menu.ts";
 import * as Model from "./lib/model.ts";
@@ -359,6 +360,14 @@ export default function (pi: Pi.ExtensionAPI) {
     answerCallbackQuery,
     injectResumeExec,
   });
+  const sessionMenuRuntime = MenuSession.createTelegramSessionMenuRuntime<
+    Pi.ExtensionContext
+  >({
+    getSnapshot: Pi.getExtensionContextSessionSnapshot,
+    sendInteractiveMessage,
+    editInteractiveMessage,
+    answerCallbackQuery,
+  });
   const notifyResumeOutcome = MenuResume.createTelegramResumeOutcomeNotifier({
     getAllowedUserId: configStore.getAllowedUserId,
     sendTextReply,
@@ -391,6 +400,8 @@ export default function (pi: Pi.ExtensionAPI) {
     settingsMenuCallbackHandler: settingsMenuRuntime.handleCallbackQuery,
     openResumeMenu: resumeMenuRuntime.openResumeMenu,
     resumeMenuCallbackHandler: resumeMenuRuntime.handleCallbackQuery,
+    openSessionMenu: sessionMenuRuntime.openSessionMenu,
+    sessionMenuCallbackHandler: sessionMenuRuntime.handleCallbackQuery,
     sectionRegistry,
     buttonActionStore,
     inboundHandlerRuntime,

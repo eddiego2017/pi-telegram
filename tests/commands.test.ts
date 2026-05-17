@@ -93,6 +93,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.model, "🤖");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.thinking, "🧠");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.name, "🏷️");
+  assert.deepEqual(TELEGRAM_COMMAND_EMOJI.session, "🧭");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.reload, "🔄");
   assert.equal(formatTelegramCommandEmojiPrefix("model"), "🤖 ");
   const expectedBuiltins = [
@@ -108,6 +109,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
       description: "📑 Clone current session at current position",
     },
     { command: "resume", description: "📂 Resume a previous session" },
+    { command: "session", description: "🧭 Show current session" },
     { command: "name", description: "🏷️ Set current session name" },
     { command: "llm", description: "🧬 List available LLM models" },
     {
@@ -400,6 +402,7 @@ test("Command target queue runtime binds control queue and chat targets", async 
     },
     showStatus: async () => {},
     openModelMenu: async () => {},
+    openSessionMenu: async () => {},
     sendTextReply: async () => {},
   });
   runtime.enqueueControlItem(
@@ -432,6 +435,9 @@ test("Command target runtime binds chat reply targets to command ports", async (
     openModelMenu: async (chatId, replyToMessageId, ctx) => {
       calls.push(`model:${chatId}:${replyToMessageId}:${ctx}`);
     },
+    openSessionMenu: async (chatId, replyToMessageId, ctx) => {
+      calls.push(`session:${chatId}:${replyToMessageId}:${ctx}`);
+    },
     sendTextReply: async (chatId, replyToMessageId, text) => {
       calls.push(`reply:${chatId}:${replyToMessageId}:${text}`);
     },
@@ -448,12 +454,14 @@ test("Command target runtime binds chat reply targets to command ports", async (
   );
   await runtime.showStatus(message, "ctx");
   await runtime.openModelMenu(message, "ctx");
+  await runtime.openSessionMenu(message, "ctx");
   await runtime.sendTextReply(message, "hello");
   assert.deepEqual(calls, [
     "enqueue:7:11:ctx:status:⚡ status",
     "execute",
     "status:7:11:ctx",
     "model:7:11:ctx",
+    "session:7:11:ctx",
     "reply:7:11:hello",
   ]);
 });
@@ -498,6 +506,10 @@ test("Command helpers build command actions", () => {
     args: "work label",
     executionMode: "immediate",
   });
+  assert.deepEqual(buildTelegramCommandAction("session"), {
+    kind: "session",
+    executionMode: "immediate",
+  });
   assert.deepEqual(Object.keys(TELEGRAM_COMMAND_ACTIONS), [
     ...TELEGRAM_RESERVED_COMMAND_NAMES,
   ]);
@@ -524,6 +536,7 @@ test("Command execution mode contract keeps Telegram controls immediate", () => 
     ["status", "immediate"],
     ["model", "immediate"],
     ["name", "immediate"],
+    ["session", "immediate"],
     ["unknown", "ignored"],
     [undefined, "ignored"],
   ];
@@ -952,6 +965,7 @@ test("Command handler target runtime binds command targets into command handling
     openThinkingMenu: async () => {},
     openQueueMenu: async () => {},
     openResumeMenu: async () => {},
+    openSessionMenu: async () => {},
     getAllowedUserId: () => undefined,
     setAllowedUserId: () => {},
     setMyCommands: async () => {},
@@ -1065,6 +1079,9 @@ test("Command runtime routes commands through runtime ports", async () => {
     },
     openResumeMenu: async (nextMessage: typeof message) => {
       events.push(`resume:${nextMessage.chat.id}`);
+    },
+    openSessionMenu: async (nextMessage: typeof message) => {
+      events.push(`session:${nextMessage.chat.id}`);
     },
     getAllowedUserId: () => allowedUserId,
     setAllowedUserId: (userId: number) => {
@@ -1254,6 +1271,9 @@ test("Command helpers execute command actions through provided handlers", async 
     },
     handleResume: async () => {
       events.push("resume");
+    },
+    handleSession: async () => {
+      events.push("session");
     },
     handleName: async (_message: unknown, args: string) => {
       events.push(`name:${args}`);

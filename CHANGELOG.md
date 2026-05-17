@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `[Session Menu]` Added Telegram-side `/session`, a compact current-session center backed by `ctx.sessionManager`: name/file/id stats, message/tool counts, token/cache/cost totals, context usage, latest chat preview, active-branch history pagination, and per-entry detail views. History uses `getBranch()` so abandoned branches stay out of the default chat browser while aggregate stats still use all entries.
+- `[Commands]` The bot command menu now lists 🧭 `/session`, `session` is Telegram-reserved, and `session:` is a pi-telegram-owned callback prefix alongside `resume:`/menu prefixes.
+- `[Tests]` Added `tests/menu-session.test.ts` for summary formatting/escaping, history item extraction, detail views, and callback runtime navigation; updated command tests for `/session` routing and bot-command registration.
 - `[Commands]` Added Telegram-side `/reload`: the bot replies `Reload queued.`, then queues internal `/telegram-reload-runtime` as a `followUp` so `ctx.reload()` runs from `ExtensionCommandContext`. The bot command menu now lists 🔄 `/reload`, and `reload` is a Telegram-reserved command name.
 - `[Pi SDK]` Preserved `sendUserMessage(content, options)` through the local π adapter so `deliverAs: "followUp"` reaches π core.
 - `[Tests]` Added regressions for `/reload` command parsing, bot-command registration, internal runtime reload command registration, Telegram acknowledgement/queue failure behavior, runtime wiring, and `sendUserMessage` option forwarding.
