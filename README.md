@@ -126,13 +126,13 @@ The menu is the primary way to inspect and mutate the queue. Reactions are an ex
 
 ### Streaming and Telegram HTML rendering
 
-Closed Markdown blocks stream back as rich Telegram HTML while π is generating. The growing tail stays conservative until the final rendered reply lands. Long replies are split below Telegram limits without intentionally breaking HTML structures, links, code blocks, blockquotes, lists, or code fences.
+Closed Markdown blocks stream back as rich Telegram HTML while π is generating. The growing tail stays conservative until the final rendered reply lands. Final Telegram-originated text replies include a display-only context-usage footer such as `—\n📊 ctx 25.6K/400K 6.4%` after outbound text handlers run, so translation/redaction handlers only see the assistant answer. Long replies are split below Telegram limits without intentionally breaking HTML structures, links, code blocks, blockquotes, lists, or code fences.
 
 Rendering is phone-aware: tables and lists stay narrow, table padding accounts for emoji graphemes and wide Unicode display width, unsupported link forms degrade safely, and block spacing stays faithful to the original Markdown.
 
 ### Media, replies, edits, and split text
 
-Telegram replies to earlier text or caption messages are forwarded as `[reply]` context for normal prompts, while slash commands still parse from the new message text only. If a Telegram message is edited while still waiting in the queue, the queued turn is updated instead of duplicated. Very long text messages that Telegram appears to split automatically are coalesced through a conservative debounce when the first chunk is near Telegram's text limit.
+Telegram replies to earlier text or caption messages are forwarded as `[reply]` context for normal prompts, while slash commands still parse from the new message text only. Display-only context-usage footers previously added to assistant replies are stripped from quoted reply context before the next prompt is queued. If a Telegram message is edited while still waiting in the queue, the queued turn is updated instead of duplicated. Very long text messages that Telegram appears to split automatically are coalesced through a conservative debounce when the first chunk is near Telegram's text limit.
 
 ### Inbound handlers
 

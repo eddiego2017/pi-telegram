@@ -576,6 +576,7 @@ export default function (pi: Pi.ExtensionAPI) {
     isCurrentOwner: lockOwnershipGuard.ownsContext,
     getDefaultChatId: proactivePushChatIdGetter,
     isProactivePushEnabled,
+    getContextUsageFooter: Pi.getExtensionContextUsageFooter,
     recordRuntimeEvent,
     getActiveToolExecutions: lifecycle.getActiveToolExecutions,
     setActiveToolExecutions: lifecycle.setActiveToolExecutions,

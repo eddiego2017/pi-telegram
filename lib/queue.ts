@@ -778,13 +778,13 @@ export interface TelegramAgentEndRuntimeDeps<
     chatId: number,
     markdown: string,
     replyToMessageId: number,
-    options?: { replyMarkup?: TReplyMarkup },
+    options?: { replyMarkup?: TReplyMarkup; displayFooter?: string },
   ) => Promise<boolean>;
   sendMarkdownReply: (
     chatId: number,
     replyToMessageId: number | undefined,
     markdown: string,
-    options?: { replyMarkup?: TReplyMarkup },
+    options?: { replyMarkup?: TReplyMarkup; displayFooter?: string },
   ) => Promise<unknown>;
   sendTextReply: (
     chatId: number,
@@ -804,6 +804,7 @@ export interface TelegramAgentEndRuntimeDeps<
   ) => Promise<void>;
   getDefaultChatId?: () => number | undefined;
   isProactivePushEnabled?: () => boolean;
+  displayFooter?: string;
   recordRuntimeEvent?: (
     category: string,
     error: unknown,
@@ -850,6 +851,7 @@ export interface TelegramAgentEndHookRuntimeDeps<
   sendOutboundReplyArtifacts?: TelegramAgentEndRuntimeDeps<TTurn>["sendOutboundReplyArtifacts"];
   getDefaultChatId?: TelegramAgentEndRuntimeDeps<TTurn>["getDefaultChatId"];
   isProactivePushEnabled?: TelegramAgentEndRuntimeDeps<TTurn>["isProactivePushEnabled"];
+  getContextUsageFooter?: (ctx: TContext) => string | undefined;
   recordRuntimeEvent?: TelegramAgentEndRuntimeDeps<TTurn>["recordRuntimeEvent"];
 }
 
@@ -969,6 +971,7 @@ export function createTelegramAgentEndHook<
       sendOutboundReplyArtifacts: deps.sendOutboundReplyArtifacts,
       getDefaultChatId: deps.getDefaultChatId,
       isProactivePushEnabled: deps.isProactivePushEnabled,
+      displayFooter: turn ? deps.getContextUsageFooter?.(ctx) : undefined,
       recordRuntimeEvent: deps.recordRuntimeEvent,
     });
   };
@@ -1064,7 +1067,7 @@ export async function handleTelegramAgentEndRuntime<
         turn.chatId,
         finalText,
         turn.replyToMessageId,
-        { replyMarkup },
+        { replyMarkup, displayFooter: deps.displayFooter },
       );
       if (!finalized) {
         await deps.clearPreview(turn.chatId);
@@ -1072,7 +1075,7 @@ export async function handleTelegramAgentEndRuntime<
           turn.chatId,
           turn.replyToMessageId,
           finalText,
-          { replyMarkup },
+          { replyMarkup, displayFooter: deps.displayFooter },
         );
       }
     } catch (error) {

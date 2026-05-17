@@ -142,6 +142,16 @@ test("Media helpers keep raw text command-safe and add reply context only for pr
     extractTelegramMessagesPromptText([captionReply]),
     "caption reply\n\n[reply] quoted caption",
   );
+  assert.equal(
+    extractTelegramMessagePromptText({
+      message_id: 3,
+      text: "next",
+      reply_to_message: {
+        text: "answer\n\n—\n📊 ctx 25.6K/400K 6.4%",
+      },
+    }),
+    "next\n\n[reply] answer",
+  );
 });
 
 test("Media helpers truncate long reply context for prompt text", () => {

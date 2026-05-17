@@ -6,6 +6,8 @@
 
 import { basename, dirname } from "node:path";
 
+import { stripTelegramContextUsageFooter } from "./context-usage.ts";
+
 const TELEGRAM_MEDIA_GROUP_DEBOUNCE_MS = 1200;
 const TELEGRAM_REPLY_CONTEXT_MAX_LENGTH = 1000;
 
@@ -187,10 +189,12 @@ function truncateTelegramReplyContextText(text: string): string {
 export function extractTelegramReplyContextText(
   message: TelegramMediaMessage,
 ): string {
-  const quoted = (
-    message.reply_to_message?.text ||
-    message.reply_to_message?.caption ||
-    ""
+  const quoted = stripTelegramContextUsageFooter(
+    (
+      message.reply_to_message?.text ||
+      message.reply_to_message?.caption ||
+      ""
+    ).trim(),
   ).trim();
   return quoted ? truncateTelegramReplyContextText(quoted) : "";
 }

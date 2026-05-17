@@ -9,6 +9,7 @@ import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
+import { appendTelegramContextUsageFooter } from "./context-usage.ts";
 import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
 import type { PendingTelegramTurn } from "./queue.ts";
 import { buildTelegramMultipartReplyParameters } from "./replies.ts";
@@ -110,7 +111,7 @@ export interface TelegramOutboundTextReplyRuntimeDeps<TReplyMarkup = unknown> {
     chatId: number,
     replyToMessageId: number | undefined,
     markdown: string,
-    options?: { replyMarkup?: TReplyMarkup },
+    options?: { replyMarkup?: TReplyMarkup; displayFooter?: string },
   ) => Promise<number | undefined>;
   cwd?: string;
   recordRuntimeEvent?: TelegramVoiceReplySenderDeps["recordRuntimeEvent"];
@@ -140,7 +141,7 @@ export interface TelegramOutboundTextPreviewRuntimeDeps<TReplyMarkup = unknown> 
     chatId: number,
     markdown: string,
     replyToMessageId: number,
-    options?: { replyMarkup?: TReplyMarkup },
+    options?: { replyMarkup?: TReplyMarkup; displayFooter?: string },
   ) => Promise<boolean>;
   cwd?: string;
   recordRuntimeEvent?: TelegramVoiceReplySenderDeps["recordRuntimeEvent"];
@@ -870,12 +871,21 @@ export function createTelegramOutboundTextReplyRuntime<TReplyMarkup = unknown>(
         recordRuntimeEvent: deps.recordRuntimeEvent,
         replyMarkup: options?.replyMarkup,
       });
-      return deps.sendMarkdownReply(chatId, replyToMessageId, transformed.text, {
-        ...options,
-        ...(transformed.replyMarkup
-          ? { replyMarkup: transformed.replyMarkup }
-          : {}),
-      });
+      return deps.sendMarkdownReply(
+        chatId,
+        replyToMessageId,
+        appendTelegramContextUsageFooter(
+          transformed.text,
+          options?.displayFooter,
+        ),
+        {
+          ...(transformed.replyMarkup
+            ? { replyMarkup: transformed.replyMarkup }
+            : options?.replyMarkup
+              ? { replyMarkup: options.replyMarkup }
+              : {}),
+        },
+      );
     },
   };
 }
@@ -897,13 +907,17 @@ export function createTelegramOutboundTextPreviewRuntime<TReplyMarkup = unknown>
       });
       return deps.finalizeMarkdownPreview(
         chatId,
-        transformed.text,
+        appendTelegramContextUsageFooter(
+          transformed.text,
+          options?.displayFooter,
+        ),
         replyToMessageId,
         {
-          ...options,
           ...(transformed.replyMarkup
             ? { replyMarkup: transformed.replyMarkup }
-            : {}),
+            : options?.replyMarkup
+              ? { replyMarkup: options.replyMarkup }
+              : {}),
         },
       );
     },

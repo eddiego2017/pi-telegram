@@ -1121,8 +1121,8 @@ test("Agent end hook binds assistant extraction and runtime ports", async () => 
     setPreviewPendingText: (text) => {
       events.push(`preview:${text}`);
     },
-    finalizeMarkdownPreview: async (_chatId, markdown) => {
-      events.push(`finalize:${markdown}`);
+    finalizeMarkdownPreview: async (_chatId, markdown, _replyTo, options) => {
+      events.push(`finalize:${markdown}:${options?.displayFooter}`);
       return true;
     },
     sendMarkdownReply: async () => {
@@ -1134,6 +1134,7 @@ test("Agent end hook binds assistant extraction and runtime ports", async () => 
     sendQueuedAttachments: async () => {
       events.push("attachments");
     },
+    getContextUsageFooter: (ctx) => `footer:${ctx.id}`,
   });
   await hook({ messages: ["a", "b"] }, { id: "ctx" });
   assert.deepEqual(events, [
@@ -1141,7 +1142,7 @@ test("Agent end hook binds assistant extraction and runtime ports", async () => 
     "reset",
     "status:ctx",
     "preview:final",
-    "finalize:final",
+    "finalize:final:footer:ctx",
     "attachments",
   ]);
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1150,7 +1151,7 @@ test("Agent end hook binds assistant extraction and runtime ports", async () => 
     "reset",
     "status:ctx",
     "preview:final",
-    "finalize:final",
+    "finalize:final:footer:ctx",
     "attachments",
     "dispatch:ctx",
   ]);

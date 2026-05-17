@@ -17,6 +17,8 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 
+import { formatTelegramContextUsageFooter } from "./context-usage.ts";
+
 export type {
   AgentEndEvent,
   AgentStartEvent,
@@ -125,6 +127,14 @@ export function hasExtensionContextPendingMessages(
   ctx: ExtensionContext,
 ): boolean {
   return ctx.hasPendingMessages();
+}
+
+export function getExtensionContextUsageFooter(
+  ctx: ExtensionContext,
+): string | undefined {
+  return typeof ctx.getContextUsage === "function"
+    ? formatTelegramContextUsageFooter(ctx.getContextUsage())
+    : undefined;
 }
 
 export function compactExtensionContext(

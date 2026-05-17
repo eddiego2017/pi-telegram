@@ -133,6 +133,35 @@ test("Outbound text handler preserves inline buttons on transformed replies", as
   ]);
 });
 
+test("Outbound text handler appends display footer after text transforms", async () => {
+  const sent: string[] = [];
+  const calls: string[] = [];
+  const runtime = createTelegramOutboundTextReplyRuntime({
+    getHandlers: () => [{ type: "text", template: "/tools/translate" }],
+    execCommand: async (_command, _args, options) => {
+      calls.push(options?.stdin ?? "");
+      return {
+        stdout: `translated:${options?.stdin ?? ""}`,
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
+    },
+    sendTextReply: async () => 1,
+    sendMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+      sent.push(markdown);
+      return 2;
+    },
+  });
+  await runtime.sendMarkdownReply(1, 2, "**hello**", {
+    displayFooter: "—\n📊 ctx 25.6K/400K 6.4%",
+  });
+  assert.deepEqual(calls, ["**hello**"]);
+  assert.deepEqual(sent, [
+    "translated:**hello**\n\n—\n📊 ctx 25.6K/400K 6.4%",
+  ]);
+});
+
 test("Outbound text handler transforms finalized markdown previews", async () => {
   const finalized: string[] = [];
   const previewOptions: unknown[] = [];
