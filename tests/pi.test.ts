@@ -36,8 +36,10 @@ function getHarnessModelId(model: PiRuntimeModel): string {
 test("Pi API runtime ports bind methods without losing receiver context", async () => {
   const api: PiRuntimeApiHarness = {
     events: [],
-    sendUserMessage(content) {
-      this.events.push(`send:${String(content)}`);
+    sendUserMessage(content, options) {
+      this.events.push(
+        `send:${String(content)}:${options?.deliverAs ?? "default"}`,
+      );
     },
     async exec(command, args) {
       this.events.push(`exec:${command}:${args.join(",")}`);
@@ -60,7 +62,7 @@ test("Pi API runtime ports bind methods without losing receiver context", async 
     },
   };
   const runtime = createExtensionApiRuntimePorts(api);
-  runtime.sendUserMessage("hello");
+  runtime.sendUserMessage("hello", { deliverAs: "followUp" });
   assert.deepEqual(await runtime.exec("cmd", ["arg"]), {
     stdout: "ok",
     stderr: "",
@@ -72,7 +74,7 @@ test("Pi API runtime ports bind methods without losing receiver context", async 
   runtime.setThinkingLevel("low");
   assert.equal(await runtime.setModel(createHarnessModel("gpt-5")), true);
   assert.deepEqual(api.events, [
-    "send:hello",
+    "send:hello:followUp",
     "exec:cmd:arg",
     "commands",
     "get-thinking",

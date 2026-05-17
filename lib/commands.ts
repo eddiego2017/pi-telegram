@@ -34,6 +34,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   llm: "🧬",
   thinking: "🧠",
   compact: "🗜",
+  reload: "🔄",
   new: "🆕",
   clone: "📑",
   resume: "📂",
@@ -80,6 +81,13 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       description: formatTelegramBotCommandDescription(
         "compact",
         "Compact current session",
+      ),
+    },
+    {
+      command: "reload",
+      description: formatTelegramBotCommandDescription(
+        "reload",
+        "Reload π runtime",
       ),
     },
     {
@@ -268,6 +276,14 @@ export function registerTelegramBridgeCommands(
       deps.updateStatus(ctx);
     },
   });
+  // Internal command used by Telegram /reload. Not user-facing.
+  pi.registerCommand("telegram-reload-runtime", {
+    description: "Reload pi runtime from Telegram",
+    handler: async (_args, ctx) => {
+      await ctx.reload();
+      return;
+    },
+  });
   // Internal command used by Telegram /resume callback. Not user-facing.
   // Receives an absolute session file path and switches to it via the
   // ExtensionCommandContext API.
@@ -328,6 +344,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "status",
   "queue",
   "compact",
+  "reload",
   "new",
   "clone",
   "resume",
@@ -364,6 +381,7 @@ export type TelegramCommandAction =
   | { kind: "continue"; executionMode: "immediate" }
   | { kind: "queue"; executionMode: "immediate" }
   | { kind: "compact"; executionMode: "immediate" }
+  | { kind: "reload"; executionMode: "immediate" }
   | { kind: "new"; executionMode: "immediate" }
   | { kind: "clone"; executionMode: "immediate" }
   | { kind: "resume"; executionMode: "immediate" }
@@ -388,6 +406,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleContinue: (message: TMessage, ctx: TContext) => Promise<void>;
   handleQueue: (message: TMessage, ctx: TContext) => Promise<void>;
   handleCompact: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleReload: (message: TMessage, ctx: TContext) => Promise<void>;
   handleNew: (message: TMessage, ctx: TContext) => Promise<void>;
   handleClone: (message: TMessage, ctx: TContext) => Promise<void>;
   handleResume: (message: TMessage, ctx: TContext) => Promise<void>;
@@ -733,6 +752,7 @@ export interface TelegramCommandRuntimeDeps<
     ctx: TContext,
     callbacks: { onComplete: () => void; onError: (error: unknown) => void },
   ) => void;
+  queueReloadRuntimeCommand: () => void | Promise<void>;
   injectNewSession: () => Promise<void>;
   injectClone: () => Promise<void>;
   enqueueControlItem: (
@@ -771,6 +791,7 @@ export const TELEGRAM_APP_MENU_INTRO_HTML = [
   "",
   `${formatTelegramCommandEmojiPrefix("start")}/start — Open menu / Pair bridge`,
   `${formatTelegramCommandEmojiPrefix("compact")}/compact — Compact current session`,
+  `${formatTelegramCommandEmojiPrefix("reload")}/reload — Reload π runtime`,
   `${formatTelegramCommandEmojiPrefix("new")}/new — Start a new session`,
   `${formatTelegramCommandEmojiPrefix("clone")}/clone — Clone current session at current position`,
   `${formatTelegramCommandEmojiPrefix("resume")}/resume — Resume a previous session`,
@@ -844,6 +865,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   status: { kind: "status", executionMode: "immediate" },
   queue: { kind: "queue", executionMode: "immediate" },
   compact: { kind: "compact", executionMode: "immediate" },
+  reload: { kind: "reload", executionMode: "immediate" },
   new: { kind: "new", executionMode: "immediate" },
   clone: { kind: "clone", executionMode: "immediate" },
   resume: { kind: "resume", executionMode: "immediate" },
@@ -1035,6 +1057,21 @@ export async function handleTelegramCompactCommand(
   }
   await deps.sendTextReply("Compaction started.");
   if (compactionStillInProgress) deps.startTypingLoop?.();
+}
+
+export async function handleTelegramReloadCommand(deps: {
+  queueReloadRuntimeCommand: () => void | Promise<void>;
+  sendTextReply: (text: string) => Promise<void>;
+  recordRuntimeEvent?: TelegramRuntimeEventRecorderPort["recordRuntimeEvent"];
+}): Promise<void> {
+  await deps.sendTextReply("Reload queued.");
+  try {
+    await deps.queueReloadRuntimeCommand();
+  } catch (error) {
+    deps.recordRuntimeEvent?.("reload", error);
+    const errorMessage = getTelegramCommandErrorMessage(error);
+    await deps.sendTextReply(`Reload queue failed: ${errorMessage}`);
+  }
 }
 
 export async function handleTelegramNewSessionCommand(
@@ -1266,6 +1303,9 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
     case "compact":
       await deps.handleCompact(message, ctx);
       return true;
+    case "reload":
+      await deps.handleReload(message, ctx);
+      return true;
     case "new":
       await deps.handleNew(message, ctx);
       return true;
@@ -1367,6 +1407,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     stopTypingLoop: deps.stopTypingLoop,
     enqueueContinueTurn: deps.enqueueContinueTurn,
     compact: deps.compact,
+    queueReloadRuntimeCommand: deps.queueReloadRuntimeCommand,
     injectNewSession: deps.injectNewSession,
     injectClone: deps.injectClone,
     enqueueControlItem: commandTargetRuntime.enqueueControlItem,
@@ -1578,6 +1619,13 @@ async function handleTelegramCommandRuntime<
             ? () => deps.startTypingLoop?.(commandCtx, nextMessage.chat.id)
             : undefined,
           stopTypingLoop: deps.stopTypingLoop,
+          sendTextReply: sendReplyFor(nextMessage),
+          recordRuntimeEvent: deps.recordRuntimeEvent,
+        });
+      },
+      handleReload: async (nextMessage) => {
+        await handleTelegramReloadCommand({
+          queueReloadRuntimeCommand: deps.queueReloadRuntimeCommand,
           sendTextReply: sendReplyFor(nextMessage),
           recordRuntimeEvent: deps.recordRuntimeEvent,
         });

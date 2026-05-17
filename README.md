@@ -86,6 +86,7 @@ Use these inside the Telegram DM with your bot. The main entrypoint is `/start`:
 
 - **`/start`**: Pair the first Telegram user when needed, register bot commands, and open the inline application menu with command help, prompt-template commands, status rows, model controls, thinking controls, settings, and queue controls.
 - **`/compact`**: Start session compaction when the session is idle; Telegram shows the native typing indicator while compaction is running.
+- **`/reload`**: Queue a safe π runtime reload from Telegram. The bridge acknowledges first, then sends an internal `/telegram-reload-runtime` follow-up so `ctx.reload()` runs inside π's command context instead of the Telegram update handler.
 - **`/new`**: Start a fresh π session when the session is idle and the Telegram queue is empty. *Fork-local workaround*: π's built-in `/new` lives in the interactive editor (not as an extension command), so the bridge injects `/new` into the host tmux pane (`pi:0`) where the π REPL runs. Requires tmux and assumes this fork's deployment topology.
 - **`/resume`**: List previous π sessions for the current working directory in a paginated inline keyboard. Session rows stay full width for readable previews; use `🗑 Delete sessions` to enter fake-checkbox delete mode, select one or more stale sessions, then confirm batch deletion.
 - **`/name [new name]`**: Show, set, or clear the current π session display name directly from Telegram. `/name <new name>` appends a session-info entry, `/name` shows the current name plus usage, and `/name --clear` clears it.

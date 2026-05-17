@@ -136,7 +136,10 @@ export interface TelegramInboundRouteRuntimeDeps<
     identity: Commands.TelegramAvailableLlmModel,
     ctx: TContext,
   ) => TModel | undefined;
-  sendUserMessage?: (message: string) => void;
+  sendUserMessage?: (
+    message: string,
+    options?: { deliverAs?: "steer" | "followUp" },
+  ) => void;
   isIdle: (ctx: TContext) => boolean;
   hasPendingMessages: (ctx: TContext) => boolean;
   compact: (
@@ -373,6 +376,14 @@ export function createTelegramInboundRouteRuntime<
     stopTypingLoop: deps.stopTypingLoop,
     enqueueContinueTurn,
     compact: deps.compact,
+    queueReloadRuntimeCommand: () => {
+      if (!deps.sendUserMessage) {
+        throw new Error("sendUserMessage is unavailable");
+      }
+      deps.sendUserMessage("/telegram-reload-runtime", {
+        deliverAs: "followUp",
+      });
+    },
     injectNewSession: deps.injectNewSession,
     injectClone: deps.injectClone,
     getSessionName: deps.getSessionName,

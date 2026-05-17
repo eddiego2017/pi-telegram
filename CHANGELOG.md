@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `[Commands]` Added Telegram-side `/reload`: the bot replies `Reload queued.`, then queues internal `/telegram-reload-runtime` as a `followUp` so `ctx.reload()` runs from `ExtensionCommandContext`. The bot command menu now lists 🔄 `/reload`, and `reload` is a Telegram-reserved command name.
+- `[Pi SDK]` Preserved `sendUserMessage(content, options)` through the local π adapter so `deliverAs: "followUp"` reaches π core.
+- `[Tests]` Added regressions for `/reload` command parsing, bot-command registration, internal runtime reload command registration, Telegram acknowledgement/queue failure behavior, runtime wiring, and `sendUserMessage` option forwarding.
 - `[Commands]` Added Telegram-side `/name`: `/name <new name>` sets the current π session display name via session-info entries, `/name` shows the current name plus usage, and `/name --clear` clears the display name. The bot command menu now lists 🏷️ `/name`, and `name` is a Telegram-reserved command name.
 - `[Tests]` Added `/name` regressions for action parsing/dispatch, runtime wiring, and show/set/clear handler behavior.
 - `[Resume Menu]` Added a `🗑 Delete sessions` mode to Telegram `/resume`. Normal session rows stay full width for readable previews; delete mode now shows full-width fake-checkbox rows (`☐`/`☑`), supports multi-select plus `Clear selection`, opens a two-button confirmation (`❌ No` / `🗑 Yes, delete`), unlinks all selected stale session files on confirmation, refreshes the cached page, reindexes remaining callback rows, and still refuses current-session deletion defensively.

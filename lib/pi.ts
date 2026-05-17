@@ -64,7 +64,7 @@ export function createExtensionApiRuntimePorts(
   >,
 ): PiExtensionApiRuntimePorts {
   return {
-    sendUserMessage: (content) => api.sendUserMessage(content),
+    sendUserMessage: (content, options) => api.sendUserMessage(content, options),
     exec: (command, args, options) => api.exec(command, args, options),
     getCommands: () => api.getCommands(),
     getThinkingLevel: () => api.getThinkingLevel(),

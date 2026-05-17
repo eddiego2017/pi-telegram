@@ -25,6 +25,7 @@ import {
   getTelegramCommandMessageTarget,
   handleTelegramCompactCommand,
   handleTelegramLlmCommand,
+  handleTelegramReloadCommand,
   handleTelegramNewSessionCommand,
   handleTelegramCloneSessionCommand,
   handleTelegramSessionNameCommand,
@@ -72,6 +73,7 @@ function createBridgeCommandContext(
   notify: (message: string) => void = () => {},
   confirm: () => Promise<boolean> | boolean = () => false,
   select?: (title: string, items: string[]) => Promise<string | undefined>,
+  reload: () => Promise<void> = async () => {},
 ): ExtensionCommandContext {
   return {
     cwd: "/repo",
@@ -83,6 +85,7 @@ function createBridgeCommandContext(
         fg: (_color: string, value: string) => value,
       },
     },
+    reload,
   } as unknown as ExtensionCommandContext;
 }
 
@@ -90,6 +93,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.model, "🤖");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.thinking, "🧠");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.name, "🏷️");
+  assert.deepEqual(TELEGRAM_COMMAND_EMOJI.reload, "🔄");
   assert.equal(formatTelegramCommandEmojiPrefix("model"), "🤖 ");
   const expectedBuiltins = [
     {
@@ -97,6 +101,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
       description: "🟢 Open menu / Pair bridge",
     },
     { command: "compact", description: "🗜 Compact current session" },
+    { command: "reload", description: "🔄 Reload π runtime" },
     { command: "new", description: "🆕 Start a new session" },
     {
       command: "clone",
@@ -140,7 +145,7 @@ test("Command helpers register Telegram bot commands through deps", async () => 
   assert.deepEqual(calls, [TELEGRAM_BOT_COMMANDS, TELEGRAM_BOT_COMMANDS]);
 });
 
-test("Command helpers register pi setup and status commands", async () => {
+test("Command helpers register pi setup, status, and reload commands", async () => {
   const harness = createCommandRegistrationApiHarness();
   const events: string[] = [];
   registerTelegramBridgeCommands(harness.api, {
@@ -163,15 +168,26 @@ test("Command helpers register pi setup and status commands", async () => {
     },
   });
   const notifications: string[] = [];
-  const ctx = createBridgeCommandContext((message) => {
-    notifications.push(message);
-  });
+  const ctx = createBridgeCommandContext(
+    (message) => {
+      notifications.push(message);
+    },
+    undefined,
+    undefined,
+    async () => {
+      events.push("runtime-reload");
+    },
+  );
   await getRequiredCommand(harness.commands, "telegram-setup").handler("", ctx);
   await getRequiredCommand(harness.commands, "telegram-status").handler(
     "",
     ctx,
   );
-  assert.deepEqual(events, ["setup"]);
+  await getRequiredCommand(harness.commands, "telegram-reload-runtime").handler(
+    "",
+    ctx,
+  );
+  assert.deepEqual(events, ["setup", "runtime-reload"]);
   assert.deepEqual(notifications, ["bot: @demo\npolling: stopped"]);
 });
 
@@ -451,6 +467,10 @@ test("Command helpers build command actions", () => {
     kind: "compact",
     executionMode: "immediate",
   });
+  assert.deepEqual(buildTelegramCommandAction("reload"), {
+    kind: "reload",
+    executionMode: "immediate",
+  });
   assert.deepEqual(buildTelegramCommandAction("status"), {
     kind: "status",
     executionMode: "immediate",
@@ -497,6 +517,7 @@ test("Command execution mode contract keeps Telegram controls immediate", () => 
   const cases: Array<[string | undefined, string]> = [
     ["stop", "immediate"],
     ["compact", "immediate"],
+    ["reload", "immediate"],
     ["help", "immediate"],
     ["start", "immediate"],
     ["continue", "immediate"],
@@ -792,6 +813,37 @@ test("Command helpers report compact errors", async () => {
   ]);
 });
 
+test("Command helpers acknowledge and queue reload commands", async () => {
+  const events: string[] = [];
+  await handleTelegramReloadCommand({
+    queueReloadRuntimeCommand: () => {
+      events.push("queue");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+  await handleTelegramReloadCommand({
+    queueReloadRuntimeCommand: () => {
+      throw new Error("cannot enqueue");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+    recordRuntimeEvent: (category, error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      events.push(`event:${category}:${message}`);
+    },
+  });
+  assert.deepEqual(events, [
+    "reply:Reload queued.",
+    "queue",
+    "reply:Reload queued.",
+    "event:reload:cannot enqueue",
+    "reply:Reload queue failed: cannot enqueue",
+  ]);
+});
+
 test("Command helpers execute status and model controls immediately", async () => {
   const events: string[] = [];
   await handleTelegramStatusCommand({
@@ -876,6 +928,9 @@ test("Command handler target runtime binds command targets into command handling
       calls.push(`continue:${ctx}`);
     },
     compact: () => {},
+    queueReloadRuntimeCommand: () => {
+      calls.push("reload");
+    },
     injectNewSession: async () => undefined,
     injectClone: async () => undefined,
     getSessionName: () => undefined,
@@ -956,6 +1011,9 @@ test("Command runtime routes commands through runtime ports", async () => {
     ) => {
       events.push("compact:start");
       compactComplete = callbacks.onComplete;
+    },
+    queueReloadRuntimeCommand: () => {
+      events.push("reload:queue");
     },
     startTypingLoop: (_ctx: { idle: boolean }, chatId?: number) => {
       events.push(`typing:start:${chatId ?? "default"}`);
@@ -1062,6 +1120,10 @@ test("Command runtime routes commands through runtime ports", async () => {
   );
   compactComplete?.();
   assert.equal(
+    await handleCommand("reload", "", message, { idle: true }),
+    true,
+  );
+  assert.equal(
     await handleCommand("name", "mobile task", message, { idle: true }),
     true,
   );
@@ -1097,6 +1159,8 @@ test("Command runtime routes commands through runtime ports", async () => {
     "status",
     "dispatch",
     "reply:99:Compaction completed.",
+    "reply:99:Reload queued.",
+    "reload:queue",
     "session-name:mobile task",
     "status",
     "reply:99:Session name set:\nmobile task",
@@ -1151,6 +1215,9 @@ test("Command helpers execute command actions through provided handlers", async 
     },
     handleCompact: async () => {
       events.push("compact");
+    },
+    handleReload: async () => {
+      events.push("reload");
     },
     handleStatus: async () => {
       events.push("status");
@@ -1221,6 +1288,15 @@ test("Command helpers execute command actions through provided handlers", async 
   );
   assert.equal(
     await executeTelegramCommandAction(
+      { kind: "reload", executionMode: "immediate" },
+      {},
+      {},
+      deps,
+    ),
+    true,
+  );
+  assert.equal(
+    await executeTelegramCommandAction(
       { kind: "name", args: "label", executionMode: "immediate" },
       {},
       {},
@@ -1228,7 +1304,7 @@ test("Command helpers execute command actions through provided handlers", async 
     ),
     true,
   );
-  assert.deepEqual(events, ["stop", "help:start", "name:label"]);
+  assert.deepEqual(events, ["stop", "help:start", "reload", "name:label"]);
 });
 
 test("Command helpers guard and complete /new session flow", async () => {
