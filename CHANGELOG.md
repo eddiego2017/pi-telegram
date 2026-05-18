@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `[Tree Menu]` Fixed tmux-injected internal navigation commands (`/telegram-tree-exec`) so they clear any stale π editor draft before sending the slash command. This prevents a previous `/tree` prefilled prompt from swallowing a later branch switch as normal user text.
+- `[Tests]` Added a dynamic tmux injector regression covering stale-editor clearing before `/telegram-tree-exec` injection.
 - `[Resume Menu]` Changed `/resume` row counts to show visible user/assistant messages only, excluding hidden thinking blocks, assistant tool-call-only turns, and tool results while keeping the core session-list count as a read-failure fallback.
 - `[Tests]` Extended `/resume` regressions for visible-message counting that excludes thinking/tool noise.
 - `[Resume Menu]` Added inactive branch-leaf stats to `/resume` rows (`🌿N` after message count) so branched sessions are visible before switching; linear sessions stay unchanged.

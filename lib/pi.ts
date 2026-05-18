@@ -178,7 +178,7 @@ export function createTmuxSlashCommandInjector(
 ): () => Promise<void> {
   const { exec, target, command, recordRuntimeEvent } = options;
   return async function injectTmuxSlashCommand(): Promise<void> {
-    const script = `sleep 1 && tmux send-keys -t ${target} ${JSON.stringify(command)} Enter`;
+    const script = `sleep 1 && tmux send-keys -t ${target} C-u ${JSON.stringify(command)} Enter`;
     const result = await exec("nohup", ["bash", "-c", script]);
     if (result.code !== 0) {
       const error = new Error(
@@ -271,7 +271,7 @@ export function createTmuxDynamicSlashCommandInjector(
     arg?: string,
   ): Promise<void> {
     const fullCommand = arg ? `${command} ${arg}` : command;
-    const script = `sleep 1 && tmux send-keys -t ${target} ${JSON.stringify(fullCommand)} Enter`;
+    const script = `sleep 1 && tmux send-keys -t ${target} C-u ${JSON.stringify(fullCommand)} Enter`;
     const result = await exec("nohup", ["bash", "-c", script]);
     if (result.code !== 0) {
       const error = new Error(

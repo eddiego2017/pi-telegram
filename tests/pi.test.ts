@@ -154,7 +154,30 @@ test("Pi tmux slash-command injector wraps send-keys in nohup/sleep and quotes t
       args: [
         "bash",
         "-c",
-        'sleep 1 && tmux send-keys -t pi:0 "/new" Enter',
+        'sleep 1 && tmux send-keys -t pi:0 C-u "/new" Enter',
+      ],
+    },
+  ]);
+});
+
+test("Pi dynamic tmux slash-command injector clears stale editor text", async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const { createTelegramTreeExecInjector } = await import("../lib/pi.ts");
+  const inject = createTelegramTreeExecInjector({
+    exec: async (command, args) => {
+      calls.push({ command, args });
+      return { stdout: "", stderr: "", code: 0, killed: false };
+    },
+    target: "pi:0",
+  });
+  await inject("94911c33", false);
+  assert.deepEqual(calls, [
+    {
+      command: "nohup",
+      args: [
+        "bash",
+        "-c",
+        'sleep 1 && tmux send-keys -t pi:0 C-u "/telegram-tree-exec 94911c33 none" Enter',
       ],
     },
   ]);
