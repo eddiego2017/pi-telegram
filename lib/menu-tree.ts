@@ -298,12 +298,16 @@ function pageSlice<T>(items: readonly T[], page: number): readonly T[] {
   return items.slice(start, start + TELEGRAM_TREE_PAGE_SIZE);
 }
 
-function formatTreeButton(entry: TelegramTreeMenuEntry): string {
+function formatTreeLine(entry: TelegramTreeMenuEntry): string {
   const marker = entry.active ? "●" : "○";
   const index = String(entry.index + 1).padStart(2, "0");
-  const role = roleButtonLabel(entry.role).padEnd(6);
+  const role = entry.kind === "branch" ? "branch" : roleButtonLabel(entry.role);
   const text = entry.summary || "(empty)";
-  return `${marker} ${index} ${role} ${text}`.trim();
+  return `${marker} <code>${escapeHtml(index)}</code> ${escapeHtml(role)}  ${escapeHtml(text)}`;
+}
+
+function formatTreeButton(entry: TelegramTreeMenuEntry): string {
+  return String(entry.index + 1).padStart(2, "0");
 }
 
 export const TELEGRAM_TREE_MENU_TITLE = "<b>🌳 Session tree</b>";
@@ -326,12 +330,15 @@ export function buildTelegramTreeListText(
   const body = filter === "branches"
     ? ["Other branches", "Pick a branch to switch to:"]
     : ["Active path · user prompts only", "Pick a prompt to replace:"];
+  const visibleEntries = pageSlice(entries, safePage).map(formatTreeLine);
   return [
     `${TELEGRAM_TREE_MENU_TITLE}${suffix}`,
     "",
     `<code>${escapeHtml(snapshot.cwd)}</code>`,
     `Leaf: <code>${escapeHtml(leaf)}</code> · ${start + 1}-${end}/${entries.length}`,
     ...body,
+    "",
+    ...visibleEntries,
   ].join("\n");
 }
 
@@ -347,9 +354,15 @@ export function buildTelegramTreeListReplyMarkup(
       ? { text: "🟢 Active path", callback_data: "tree:filter:active" }
       : { text: "🌿 Branches", callback_data: "tree:filter:branches" },
   ]);
+  const buttonRow: TelegramTreeReplyMarkup["inline_keyboard"][number] = [];
   for (const entry of pageSlice(entries, safePage)) {
-    rows.push([{ text: formatTreeButton(entry), callback_data: `tree:entry:${entry.index}` }]);
+    buttonRow.push({ text: formatTreeButton(entry), callback_data: `tree:entry:${entry.index}` });
+    if (buttonRow.length === 4) {
+      rows.push([...buttonRow]);
+      buttonRow.length = 0;
+    }
   }
+  if (buttonRow.length > 0) rows.push(buttonRow);
   if (entries.length === 0) rows.push([{ text: "(no entries)", callback_data: "tree:noop" }]);
   const count = pageCount(entries.length);
   if (count > 1) {

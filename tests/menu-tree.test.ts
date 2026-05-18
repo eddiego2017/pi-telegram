@@ -65,7 +65,7 @@ test("Tree menu entries show active-branch user prompts only", () => {
     ],
   );
   assert.equal(entries[0]?.summary, "first prompt");
-  assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "active").inline_keyboard.length, 3);
+  assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "active").inline_keyboard.length, 2);
   assert.match(buildTelegramTreeDetailText(entries[0]!), /first prompt/);
 });
 
