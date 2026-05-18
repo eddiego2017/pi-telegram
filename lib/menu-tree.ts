@@ -358,15 +358,23 @@ export function buildTelegramTreeDetailText(entry: TelegramTreeMenuEntry): strin
 export function buildTelegramTreeDetailReplyMarkup(
   entry: TelegramTreeMenuEntry,
 ): TelegramTreeReplyMarkup {
+  const rewritesPrompt = entry.role === "user" || entry.role === "custom";
   return {
     inline_keyboard: [
       [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
       [
-        { text: "↩ Rewind here", callback_data: `tree:rewind:${entry.index}:none` },
+        {
+          text: rewritesPrompt
+            ? "↩ Rewind and replace this prompt"
+            : "↩ Rewind here",
+          callback_data: `tree:rewind:${entry.index}:none`,
+        },
       ],
       [
         {
-          text: "📝 Rewind + summary",
+          text: rewritesPrompt
+            ? "📝 Replace + summary"
+            : "📝 Rewind + summary",
           callback_data: `tree:rewind:${entry.index}:summary`,
         },
       ],
