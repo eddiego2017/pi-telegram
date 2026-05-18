@@ -10,6 +10,7 @@ import {
   buildTelegramTreeDetailText,
   buildTelegramTreeMenuEntries,
   buildTelegramTreeListReplyMarkup,
+  buildTelegramTreeListText,
   createTelegramTreeMenuStore,
   getTelegramTreeEntryEditorText,
   createTelegramTreeNavigationGate,
@@ -95,6 +96,18 @@ test("Tree menu branch list shows inactive branch leaves", () => {
     entries.map((entry) => [entry.entryId, entry.kind, entry.summary]),
     [["a-old", "branch", "old branch prompt"]],
   );
+  assert.equal(entries[0]?.forkIndex, 1);
+  assert.equal(entries[0]?.forkSummary, "first prompt");
+  assert.equal(entries[0]?.activeNextSummary, "second prompt");
+  assert.equal(entries[0]?.branchNextSummary, "old branch prompt");
+  assert.equal(entries[0]?.branchPromptCount, 1);
+  assert.equal(entries[0]?.leafShortId, "a-old");
+  const listText = buildTelegramTreeListText(snapshot, entries, 0, "branches");
+  assert.match(listText, /fork #01 first prompt/);
+  assert.match(listText, /🟢 now second prompt/);
+  assert.match(listText, /🌿 this old branch prompt/);
+  assert.match(buildTelegramTreeDetailText(entries[0]!), /First difference/);
+  assert.match(buildTelegramTreeDetailText(entries[0]!), /Leaf id: <code>a-old<\/code>/);
   assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "branches").inline_keyboard[0]?.[0]?.text, "🟢 Active path");
 });
 
