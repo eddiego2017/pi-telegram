@@ -13,8 +13,11 @@ import {
   buildTelegramSessionHistoryText,
   buildTelegramSessionMainReplyMarkup,
   buildTelegramSessionMainText,
+  buildTelegramSessionReplayPlan,
+  buildTelegramSessionReplayTurns,
   buildTelegramSessionStats,
   createTelegramSessionMenuRuntime,
+  formatTelegramSessionReplayMessage,
   handleTelegramSessionMenuCallback,
   type TelegramSessionSnapshot,
 } from "../lib/menu-session.ts";
@@ -111,7 +114,13 @@ test("Session menu builds compact stats and escaped latest preview", () => {
   assert.match(text, /hello &lt;world&gt;/);
   assert.match(text, /Hi &amp; welcome/);
   assert.deepEqual(buildTelegramSessionMainReplyMarkup(true), {
-    inline_keyboard: [[{ text: "📜 History", callback_data: "session:history" }]],
+    inline_keyboard: [
+      [
+        { text: "📜 Last 5 turns", callback_data: "session:replay:last5" },
+        { text: "📜 Full replay", callback_data: "session:replay:full" },
+      ],
+      [{ text: "📜 History", callback_data: "session:history" }],
+    ],
   });
 });
 
@@ -139,6 +148,149 @@ test("Session history renders active-branch chat lines without tool rows", () =>
   assert.match(buildTelegramSessionDetailText(items[1]), /tools ×1/);
 });
 
+test("Session replay groups by user turns and hides tool/thinking noise", () => {
+  const branch: TelegramSessionSnapshot["branch"] = [
+    {
+      type: "message",
+      id: "orphan-assistant",
+      timestamp: "2026-05-18T00:00:00Z",
+      message: { role: "assistant", content: [{ type: "text", text: "before user" }] },
+    },
+  ];
+  for (let i = 1; i <= 6; i += 1) {
+    branch.push({
+      type: "message",
+      id: `u${i}`,
+      timestamp: `2026-05-18T00:0${i}:00Z`,
+      message: { role: "user", content: `[telegram] prompt ${i}\n[reply]\nhidden` },
+    });
+    branch.push({
+      type: "message",
+      id: `a${i}`,
+      timestamp: `2026-05-18T00:0${i}:01Z`,
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "secret reasoning" },
+          { type: "toolCall", id: `tc${i}`, name: "read", arguments: {} },
+          { type: "text", text: `answer ${i}` },
+        ],
+      },
+    });
+    branch.push({
+      type: "message",
+      id: `tool${i}`,
+      timestamp: `2026-05-18T00:0${i}:02Z`,
+      message: { role: "toolResult", content: [{ type: "text", text: `tool result ${i}` }] },
+    });
+  }
+  branch.push({
+    type: "custom_message",
+    id: "c6",
+    timestamp: "2026-05-18T00:06:03Z",
+    display: true,
+    content: [{ type: "text", text: "visible custom" }],
+  });
+  branch.push({
+    type: "custom_message",
+    id: "hidden-custom",
+    display: false,
+    content: [{ type: "text", text: "hidden custom" }],
+  });
+  const snapshot: TelegramSessionSnapshot = {
+    cwd: "/repo",
+    sessionId: "session-replay",
+    entries: branch,
+    branch,
+  };
+
+  const turns = buildTelegramSessionReplayTurns(snapshot);
+  assert.equal(turns.length, 6);
+  assert.deepEqual(
+    turns.map((turn) => turn.user.text),
+    ["prompt 1", "prompt 2", "prompt 3", "prompt 4", "prompt 5", "prompt 6"],
+  );
+
+  const last5 = buildTelegramSessionReplayPlan(snapshot, "last5");
+  assert.equal(last5.turns.length, 5);
+  assert.equal(last5.messages[0].entryId, "u2");
+  assert.deepEqual(
+    last5.messages.map((message) => message.text),
+    [
+      "prompt 2",
+      "answer 2",
+      "prompt 3",
+      "answer 3",
+      "prompt 4",
+      "answer 4",
+      "prompt 5",
+      "answer 5",
+      "prompt 6",
+      "answer 6",
+      "visible custom",
+    ],
+  );
+  assert.doesNotMatch(
+    last5.messages.map((message) => message.text).join("\n"),
+    /secret reasoning|tool result|hidden custom|before user|\[reply\]/,
+  );
+  assert.equal(
+    formatTelegramSessionReplayMessage(last5.messages[0]),
+    "Replay msg 2026-05-18 00:02 user\nprompt 2",
+  );
+});
+
+test("Session replay callback uses current snapshot and sends normal messages", async () => {
+  const initial = makeSnapshot();
+  const current: TelegramSessionSnapshot = {
+    cwd: "/repo",
+    sessionId: "session-current",
+    entries: [],
+    branch: [
+      {
+        type: "message",
+        id: "u-current",
+        timestamp: "2026-05-18T01:00:00Z",
+        message: { role: "user", content: "[telegram] current prompt" },
+      },
+      {
+        type: "message",
+        id: "a-current",
+        timestamp: "2026-05-18T01:00:01Z",
+        message: { role: "assistant", content: [{ type: "text", text: "current answer" }] },
+      },
+    ],
+  };
+  current.entries = current.branch;
+  let snapshot = initial;
+  const replayed: string[] = [];
+  const runtime = createTelegramSessionMenuRuntime<string>({
+    getSnapshot: () => snapshot,
+    sendInteractiveMessage: async () => 77,
+    editInteractiveMessage: async () => {},
+    sendReplayMessage: async (_chatId, _replyToMessageId, text) => {
+      replayed.push(text);
+      return 78;
+    },
+    answerCallbackQuery: async (_id, text) => {
+      replayed.push(`answer:${text ?? ""}`);
+    },
+  });
+
+  await runtime.openSessionMenu(7, 11, "ctx");
+  snapshot = current;
+  await runtime.handleCallbackQuery(
+    { id: "cb-replay", data: "session:replay:last5", message: { chat: { id: 7 }, message_id: 77 } },
+    "ctx",
+  );
+
+  assert.deepEqual(replayed, [
+    "answer:Replaying 2 messages.",
+    "Replay msg 2026-05-18 01:00 user\ncurrent prompt",
+    "Replay msg 2026-05-18 01:00 agent\ncurrent answer",
+  ]);
+});
+
 test("Session menu runtime opens, pages, details, and refreshes", async () => {
   const events: string[] = [];
   const snapshot = makeSnapshot();
@@ -150,6 +302,10 @@ test("Session menu runtime opens, pages, details, and refreshes", async () => {
     },
     editInteractiveMessage: async (chatId, messageId, text, mode, markup) => {
       events.push(`edit:${chatId}:${messageId}:${mode}:${text.split("\n")[0]}:${markup.inline_keyboard.length}`);
+    },
+    sendReplayMessage: async (chatId, _replyToMessageId, text) => {
+      events.push(`replay:${chatId}:${text.split("\n")[0]}`);
+      return 100;
     },
     answerCallbackQuery: async (id, text) => {
       events.push(`answer:${id}:${text ?? ""}`);
@@ -171,13 +327,13 @@ test("Session menu runtime opens, pages, details, and refreshes", async () => {
   );
 
   assert.deepEqual(events, [
-    "send:7:html:<b>🧭 Session</b>:1",
+    "send:7:html:<b>🧭 Session</b>:2",
     "answer:cb1:",
     "edit:7:99:html:<b>📜 History</b>:1",
     "answer:cb2:",
     "edit:7:99:html:<b>🤖 Assistant</b>:2",
     "answer:cb3:Refreshed.",
-    "edit:7:99:html:<b>🧭 Session</b>:1",
+    "edit:7:99:html:<b>🧭 Session</b>:2",
   ]);
 });
 
@@ -199,6 +355,7 @@ test("Session callback failures are answered and swallowed", async () => {
       editSessionMessage: async () => {
         throw new Error("Telegram edit failed");
       },
+      sendReplayMessage: async () => 100,
       answerCallbackQuery: async (_id, text) => {
         answers.push(text ?? "");
       },

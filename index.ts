@@ -372,6 +372,7 @@ export default function (pi: Pi.ExtensionAPI) {
     getSnapshot: Pi.getExtensionContextSessionSnapshot,
     sendInteractiveMessage,
     editInteractiveMessage,
+    sendReplayMessage: sendMarkdownReply,
     answerCallbackQuery,
   });
   const canNavigateTree = MenuTree.createTelegramTreeNavigationGate<

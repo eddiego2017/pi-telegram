@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `[Session Menu]` Added direct `📜 Last 5 turns` and `📜 Full replay` buttons to `/session`. Replay is pure session-branch logic (no LLM call), counts user turns rather than raw entries, sends each visible user/agent/custom message through the existing Telegram rendering/chunking pipeline with a `Replay msg {timestamp} {role}` header, hides thinking/tool-call/tool-result noise, and caps very large full replays with a clear notice.
+- `[Tests]` Extended `tests/menu-session.test.ts` for replay user-turn grouping, tool/thinking filtering, current-snapshot callback behavior, and replay message formatting.
 - `[Tree Menu]` Added Telegram-side `/tree`, an active-path prompt-history rewind MVP backed by `ctx.sessionManager`: user/custom prompts only, paginated prompt rows, prompt detail views, a `🌿 Branches` toggle for inactive branch leaves, strict idle/empty-queue rewind/switch gating, a single `↩️ Rewind and replace this prompt` action for active prompts, and Telegram outcome notices. Navigation executes through internal `/telegram-tree-exec <entryId> none` so `ctx.navigateTree()` runs from an `ExtensionCommandContext`; when native tree navigation returns editor text for the selected prompt, the bot sends it back for manual copy/edit/resend because Telegram cannot prefill π's TUI editor.
 - `[Commands]` The bot command menu now lists 🌳 `/tree`, `tree` is Telegram-reserved, and `tree:` is a pi-telegram-owned callback prefix alongside `session:`/`resume:`/menu prefixes.
 - `[Tests]` Added `tests/menu-tree.test.ts` for tree flattening/filtering, idle navigation gating, callback injection, and outcome notices; updated command/runtime wiring tests for `/tree` and internal `telegram-tree-exec` registration.

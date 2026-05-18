@@ -12,6 +12,7 @@ const TELEGRAM_SESSION_SUMMARY_LEN = 54;
 const TELEGRAM_SESSION_HISTORY_TABLE_WIDTH = 37;
 const TELEGRAM_SESSION_HISTORY_ROLE_WIDTH = 9;
 const TELEGRAM_SESSION_DETAIL_TEXT_LEN = 3000;
+const TELEGRAM_SESSION_REPLAY_FULL_MESSAGE_CAP = 80;
 const TELEGRAM_SESSION_GRAPHEME_SEGMENTER =
   typeof Intl.Segmenter === "function"
     ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
@@ -96,6 +97,31 @@ export interface TelegramSessionHistoryItem {
   detail: string;
   toolCallCount: number;
   tokenOutput?: number;
+}
+
+export type TelegramSessionReplayMode = "last5" | "full";
+export type TelegramSessionReplayRole = "user" | "agent" | "custom";
+
+export interface TelegramSessionReplayMessage {
+  entryId: string;
+  timestamp?: string;
+  role: TelegramSessionReplayRole;
+  text: string;
+}
+
+export interface TelegramSessionReplayTurn {
+  user: TelegramSessionReplayMessage;
+  messages: TelegramSessionReplayMessage[];
+}
+
+export interface TelegramSessionReplayPlan {
+  mode: TelegramSessionReplayMode;
+  turns: TelegramSessionReplayTurn[];
+  messages: TelegramSessionReplayMessage[];
+  totalTurns: number;
+  totalMessages: number;
+  capped: boolean;
+  cap: number;
 }
 
 export interface TelegramSessionStats {
@@ -328,6 +354,122 @@ export function buildTelegramSessionHistoryItems(
   return items;
 }
 
+function cleanReplayUserText(text: string): string {
+  return text
+    .replace(/^\[telegram\]\s*/i, "")
+    .replace(/\n\[(?:reply|attachments|outputs)\][\s\S]*$/i, "")
+    .trim();
+}
+
+function replayMessageFromEntry(
+  entry: TelegramSessionEntry,
+): TelegramSessionReplayMessage | undefined {
+  if (entry.type === "message") {
+    const message = entry.message;
+    if (!message) return undefined;
+    if (message.role === "user") {
+      const text = cleanReplayUserText(contentText(message.content));
+      return {
+        entryId: entry.id,
+        timestamp: entry.timestamp,
+        role: "user",
+        text: text || "(empty user message)",
+      };
+    }
+    if (message.role === "assistant") {
+      const text = contentText(message.content).trim();
+      if (!text) return undefined;
+      return {
+        entryId: entry.id,
+        timestamp: entry.timestamp,
+        role: "agent",
+        text,
+      };
+    }
+    return undefined;
+  }
+  if (entry.type === "custom_message" && entry.display !== false) {
+    const text =
+      contentText(entry.content).trim() || `custom: ${entry.customType ?? "message"}`;
+    return {
+      entryId: entry.id,
+      timestamp: entry.timestamp,
+      role: "custom",
+      text,
+    };
+  }
+  return undefined;
+}
+
+export function buildTelegramSessionReplayTurns(
+  snapshot: TelegramSessionSnapshot,
+): TelegramSessionReplayTurn[] {
+  const turns: TelegramSessionReplayTurn[] = [];
+  let current: TelegramSessionReplayTurn | undefined;
+  for (const entry of snapshot.branch) {
+    const message = replayMessageFromEntry(entry);
+    if (!message) continue;
+    if (message.role === "user") {
+      current = { user: message, messages: [message] };
+      turns.push(current);
+      continue;
+    }
+    if (current) current.messages.push(message);
+  }
+  return turns;
+}
+
+function flattenReplayTurns(
+  turns: readonly TelegramSessionReplayTurn[],
+): TelegramSessionReplayMessage[] {
+  return turns.flatMap((turn) => turn.messages);
+}
+
+export function buildTelegramSessionReplayPlan(
+  snapshot: TelegramSessionSnapshot,
+  mode: TelegramSessionReplayMode,
+): TelegramSessionReplayPlan {
+  const allTurns = buildTelegramSessionReplayTurns(snapshot);
+  const totalMessages = flattenReplayTurns(allTurns).length;
+  let turns = mode === "last5" ? allTurns.slice(-5) : allTurns.slice();
+  let messages = flattenReplayTurns(turns);
+  let capped = false;
+  if (mode === "full" && messages.length > TELEGRAM_SESSION_REPLAY_FULL_MESSAGE_CAP) {
+    capped = true;
+    while (turns.length > 1 && messages.length > TELEGRAM_SESSION_REPLAY_FULL_MESSAGE_CAP) {
+      turns = turns.slice(1);
+      messages = flattenReplayTurns(turns);
+    }
+    if (messages.length > TELEGRAM_SESSION_REPLAY_FULL_MESSAGE_CAP) {
+      messages = messages.slice(-TELEGRAM_SESSION_REPLAY_FULL_MESSAGE_CAP);
+    }
+  }
+  return {
+    mode,
+    turns,
+    messages,
+    totalTurns: allTurns.length,
+    totalMessages,
+    capped,
+    cap: TELEGRAM_SESSION_REPLAY_FULL_MESSAGE_CAP,
+  };
+}
+
+function formatReplayTimestamp(timestamp: string | undefined): string {
+  if (!timestamp) return "unknown";
+  const parsed = Date.parse(timestamp);
+  if (Number.isFinite(parsed)) {
+    return new Date(parsed).toISOString().slice(0, 16).replace("T", " ");
+  }
+  return timestamp.slice(0, 16).replace("T", " ");
+}
+
+export function formatTelegramSessionReplayMessage(
+  message: TelegramSessionReplayMessage,
+): string {
+  return `Replay msg ${formatReplayTimestamp(message.timestamp)} ${message.role}\n${message.text || "(empty)"}`;
+}
+
 function pageCount(total: number): number {
   return total <= 0 ? 1 : Math.ceil(total / TELEGRAM_SESSION_HISTORY_PAGE_SIZE);
 }
@@ -478,6 +620,16 @@ export function buildTelegramSessionMainReplyMarkup(
   hasHistory: boolean,
 ): TelegramSessionReplyMarkup {
   const rows: TelegramSessionReplyMarkup["inline_keyboard"] = [];
+  rows.push([
+    {
+      text: hasHistory ? "📜 Last 5 turns" : "📜 Last 5 (empty)",
+      callback_data: hasHistory ? "session:replay:last5" : "session:noop",
+    },
+    {
+      text: hasHistory ? "📜 Full replay" : "📜 Full (empty)",
+      callback_data: hasHistory ? "session:replay:full" : "session:noop",
+    },
+  ]);
   rows.push([
     {
       text: hasHistory ? "📜 History" : "📜 History (empty)",
@@ -636,6 +788,11 @@ export interface TelegramSessionMenuCallbackDeps {
     text: string,
     replyMarkup: TelegramSessionReplyMarkup,
   ) => Promise<void>;
+  sendReplayMessage: (
+    chatId: number,
+    replyToMessageId: number | undefined,
+    text: string,
+  ) => Promise<number | undefined>;
   answerCallbackQuery: (
     callbackQueryId: string,
     text?: string,
@@ -680,6 +837,34 @@ async function handleTelegramSessionMenuCallbackUnsafe(
       buildTelegramSessionMainReplyMarkup(history.length > 0),
     );
     updateState({ view: "main", page: 0, detailIndex: undefined });
+    return true;
+  }
+
+  if (data === "session:replay:last5" || data === "session:replay:full") {
+    const mode: TelegramSessionReplayMode = data.endsWith(":full") ? "full" : "last5";
+    const plan = buildTelegramSessionReplayPlan(snapshot, mode);
+    if (plan.messages.length === 0) {
+      await deps.answerCallbackQuery(query.id, "No visible turns to replay.");
+      return true;
+    }
+    await deps.answerCallbackQuery(
+      query.id,
+      `Replaying ${plan.messages.length} message${plan.messages.length === 1 ? "" : "s"}.`,
+    );
+    if (plan.capped) {
+      await deps.sendReplayMessage(
+        chatId,
+        undefined,
+        `Full replay capped to the latest ${plan.messages.length} visible messages (${plan.totalMessages} total).`,
+      );
+    }
+    for (const message of plan.messages) {
+      await deps.sendReplayMessage(
+        chatId,
+        undefined,
+        formatTelegramSessionReplayMessage(message),
+      );
+    }
     return true;
   }
 
@@ -801,6 +986,11 @@ export interface TelegramSessionMenuRuntimeDeps<TContext> {
     mode: "html",
     replyMarkup: TelegramSessionReplyMarkup,
   ) => Promise<void>;
+  sendReplayMessage: (
+    chatId: number,
+    replyToMessageId: number | undefined,
+    text: string,
+  ) => Promise<number | undefined>;
   answerCallbackQuery: (
     callbackQueryId: string,
     text?: string,
@@ -829,6 +1019,7 @@ export function createTelegramSessionMenuRuntime<TContext>(
         getSnapshot: () => deps.getSnapshot(ctx),
         editSessionMessage: (chatId, messageId, text, replyMarkup) =>
           deps.editInteractiveMessage(chatId, messageId, text, "html", replyMarkup),
+        sendReplayMessage: deps.sendReplayMessage,
         answerCallbackQuery: deps.answerCallbackQuery,
       });
     },
