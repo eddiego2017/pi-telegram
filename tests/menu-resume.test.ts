@@ -14,6 +14,7 @@ import {
   buildTelegramResumeMenuText,
   clampTelegramResumeMenuPage,
   countTelegramResumeInactiveBranchLeaves,
+  countTelegramResumeVisibleMessages,
   createTelegramResumeMenuStore,
   getTelegramResumeMenuPageCount,
   handleTelegramResumeMenuCallback,
@@ -110,6 +111,56 @@ test("countTelegramResumeInactiveBranchLeaves ignores old flat sessions", () => 
     { type: "message", id: "old-2" },
   ];
   assert.equal(countTelegramResumeInactiveBranchLeaves(fileEntries), 0);
+});
+
+test("countTelegramResumeVisibleMessages excludes thinking, tool calls, and tool results", () => {
+  const fileEntries = [
+    { type: "session", id: "session-id" },
+    { type: "model_change", id: "model" },
+    {
+      type: "message",
+      id: "user-1",
+      message: { role: "user", content: [{ type: "text", text: "hello" }] },
+    },
+    {
+      type: "message",
+      id: "assistant-tool-call",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "hidden reasoning" },
+          { type: "toolCall", name: "bash", arguments: {} },
+        ],
+      },
+    },
+    {
+      type: "message",
+      id: "tool-result",
+      message: { role: "toolResult", content: [{ type: "text", text: "stdout" }] },
+    },
+    {
+      type: "message",
+      id: "assistant-text",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "hidden reasoning" },
+          { type: "text", text: "visible answer" },
+        ],
+      },
+    },
+    {
+      type: "message",
+      id: "assistant-empty",
+      message: { role: "assistant", content: [{ type: "text", text: "   " }] },
+    },
+    {
+      type: "message",
+      id: "user-2",
+      message: { role: "user", content: [{ type: "image", url: "file://img.png" }] },
+    },
+  ];
+  assert.equal(countTelegramResumeVisibleMessages(fileEntries), 3);
 });
 
 test("buildTelegramResumeMenuText shows delete selections in body rows", () => {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `[Resume Menu]` Changed `/resume` row counts to show visible user/assistant messages only, excluding hidden thinking blocks, assistant tool-call-only turns, and tool results while keeping the core session-list count as a read-failure fallback.
+- `[Tests]` Extended `/resume` regressions for visible-message counting that excludes thinking/tool noise.
 - `[Resume Menu]` Added inactive branch-leaf stats to `/resume` rows (`🌿N` after message count) so branched sessions are visible before switching; linear sessions stay unchanged.
 - `[Tests]` Extended `/resume` regressions for inactive branch count rendering and old flat-session safety.
 - `[Tree Menu]` Changed the `/tree` `🌿 Branches` view from plain inactive-leaf rows to compact compare cards that show each branch's fork point, current-path next prompt, inactive-branch next prompt, prompt distance, and leaf id without noisy active-path ordinals; branch detail views now repeat the same first-difference metadata before the full branch prompt.

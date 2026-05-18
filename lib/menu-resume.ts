@@ -393,8 +393,66 @@ interface TelegramResumeTreeEntry {
   parentId?: unknown;
 }
 
-function isTelegramResumeTreeEntry(entry: unknown): entry is TelegramResumeTreeEntry {
+interface TelegramResumeSessionEntry extends TelegramResumeTreeEntry {
+  message?: unknown;
+}
+
+interface TelegramResumeSessionMessage {
+  role?: unknown;
+  content?: unknown;
+}
+
+interface TelegramResumeSessionContentBlock {
+  type?: unknown;
+  text?: unknown;
+}
+
+interface TelegramResumeSessionFileStats {
+  inactiveBranchCount: number;
+  visibleMessageCount: number;
+}
+
+function isTelegramResumeObject(entry: unknown): entry is Record<string, unknown> {
   return typeof entry === "object" && entry !== null;
+}
+
+function isTelegramResumeTreeEntry(entry: unknown): entry is TelegramResumeTreeEntry {
+  return isTelegramResumeObject(entry);
+}
+
+function isTelegramResumeSessionEntry(entry: unknown): entry is TelegramResumeSessionEntry {
+  return isTelegramResumeObject(entry);
+}
+
+function isTelegramResumeSessionMessage(
+  message: unknown,
+): message is TelegramResumeSessionMessage {
+  return isTelegramResumeObject(message);
+}
+
+function hasTelegramResumeVisibleText(content: unknown): boolean {
+  if (typeof content === "string") return content.trim().length > 0;
+  if (!Array.isArray(content)) return false;
+  return content.some((block): block is TelegramResumeSessionContentBlock =>
+    isTelegramResumeObject(block) &&
+    block.type === "text" &&
+    typeof block.text === "string" &&
+    block.text.trim().length > 0
+  );
+}
+
+export function countTelegramResumeVisibleMessages(
+  fileEntries: unknown[],
+): number {
+  return fileEntries.filter((entry) => {
+    if (!isTelegramResumeSessionEntry(entry) || entry.type !== "message") {
+      return false;
+    }
+    if (!isTelegramResumeSessionMessage(entry.message)) return false;
+    if (entry.message.role === "user") return true;
+    if (entry.message.role !== "assistant") return false;
+    return hasTelegramResumeVisibleText(entry.message.content);
+  }).length;
 }
 
 export function countTelegramResumeInactiveBranchLeaves(
@@ -425,9 +483,9 @@ export function countTelegramResumeInactiveBranchLeaves(
   ).length;
 }
 
-async function readTelegramResumeInactiveBranchCount(
+async function readTelegramResumeSessionFileStats(
   sessionPath: string,
-): Promise<number | undefined> {
+): Promise<TelegramResumeSessionFileStats | undefined> {
   try {
     const content = await readFile(sessionPath, "utf8");
     const fileEntries: unknown[] = [];
@@ -439,20 +497,27 @@ async function readTelegramResumeInactiveBranchCount(
         // Ignore malformed lines, matching pi core session-list behavior.
       }
     }
-    return countTelegramResumeInactiveBranchLeaves(fileEntries);
+    return {
+      inactiveBranchCount: countTelegramResumeInactiveBranchLeaves(fileEntries),
+      visibleMessageCount: countTelegramResumeVisibleMessages(fileEntries),
+    };
   } catch {
     return undefined;
   }
 }
 
-async function addResumeMenuBranchStats(
+async function addResumeMenuFileStats(
   entries: TelegramResumeMenuEntry[],
 ): Promise<TelegramResumeMenuEntry[]> {
   return Promise.all(
-    entries.map(async (entry) => ({
-      ...entry,
-      inactiveBranchCount: await readTelegramResumeInactiveBranchCount(entry.path),
-    })),
+    entries.map(async (entry) => {
+      const stats = await readTelegramResumeSessionFileStats(entry.path);
+      return {
+        ...entry,
+        messageCount: stats?.visibleMessageCount ?? entry.messageCount,
+        inactiveBranchCount: stats?.inactiveBranchCount,
+      };
+    }),
   );
 }
 
@@ -517,7 +582,7 @@ export async function openTelegramResumeMenu(
   const cwd = deps.getCwd();
   const currentSessionFile = deps.getCurrentSessionFile();
   const sessions = await deps.listSessions(cwd);
-  const entries = await addResumeMenuBranchStats(
+  const entries = await addResumeMenuFileStats(
     buildResumeMenuEntries(sessions, currentSessionFile),
   );
   const page = 0;
