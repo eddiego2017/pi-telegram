@@ -21,6 +21,7 @@ const TELEGRAM_RESUME_MENU_STATE_TTL_MS = 10 * 60 * 1000;
 const TELEGRAM_RESUME_MENU_SUMMARY_LEN = 48;
 const TELEGRAM_RESUME_MENU_LINE_WIDTH = 37;
 const TELEGRAM_RESUME_MENU_BUTTON_COLUMNS = 4;
+const TELEGRAM_RESUME_MENU_PAGE_MARKERS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧"];
 
 const graphemeSegmenter = typeof Intl.Segmenter === "function"
   ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
@@ -150,11 +151,6 @@ function truncateDisplay(s: string, width: number): string {
   return `${result}…`;
 }
 
-function padRight(s: string, width: number): string {
-  const padding = width - displayWidth(s);
-  return padding > 0 ? s + " ".repeat(padding) : s;
-}
-
 function truncateSummary(s: string, n: number): string {
   const clean = cleanText(s);
   return clean.length > n ? clean.slice(0, n - 1) + "…" : clean;
@@ -168,42 +164,40 @@ function formatAgo(d: Date, nowMs: number): string {
   return `${Math.floor(s / 86400)}d`;
 }
 
-function formatTelegramResumeMenuIndex(entry: TelegramResumeMenuEntry): string {
-  return String(entry.index + 1).padStart(2, "0");
+function formatTelegramResumePageMarker(pageIndex: number): string {
+  return TELEGRAM_RESUME_MENU_PAGE_MARKERS[pageIndex] ?? String(pageIndex + 1);
 }
 
 function formatTelegramResumeMeta(
   entry: TelegramResumeMenuEntry,
   nowMs: number,
 ): string {
-  return `${formatAgo(entry.modified, nowMs)}|${entry.messageCount}msg`;
+  return `${formatAgo(entry.modified, nowMs)} · ${entry.messageCount}msg`;
 }
 
 function formatTelegramResumeLine(
   entry: TelegramResumeMenuEntry,
+  pageIndex: number,
   nowMs: number,
-  metaWidth: number,
   mode: TelegramResumeMenuMode,
   selected: boolean,
 ): string {
-  const marker = mode === "delete" ? `${selected ? "☑" : "☐"} ` : "";
-  const index = formatTelegramResumeMenuIndex(entry);
+  const marker = formatTelegramResumePageMarker(pageIndex);
+  const selectedPrefix = mode === "delete" ? `${selected ? "☑" : "☐"} ` : "";
   const meta = formatTelegramResumeMeta(entry, nowMs);
-  const prefixWidth = displayWidth(`${marker}${index}  ${padRight(meta, metaWidth)}  `);
-  const summaryWidth = Math.max(10, TELEGRAM_RESUME_MENU_LINE_WIDTH - prefixWidth);
   const summary = truncateDisplay(
     entry.name || entry.firstMessage || "(no preview)",
-    summaryWidth,
+    TELEGRAM_RESUME_MENU_LINE_WIDTH,
   );
-  return `${escapeHtml(marker)}<code>${escapeHtml(index)}</code>  <code>${escapeHtml(padRight(meta, metaWidth))}</code>  ${escapeHtml(summary)}`;
+  return `${escapeHtml(selectedPrefix)}${escapeHtml(marker)} <code>${escapeHtml(meta)}</code>\n${escapeHtml(summary)}`;
 }
 
 function formatTelegramResumeButtonText(
-  entry: TelegramResumeMenuEntry,
+  pageIndex: number,
   mode: TelegramResumeMenuMode,
   selected: boolean,
 ): string {
-  const index = formatTelegramResumeMenuIndex(entry);
+  const index = String(pageIndex + 1);
   return mode === "delete" ? `${selected ? "☑" : "☐"}${index}` : index;
 }
 
@@ -245,31 +239,28 @@ export function buildTelegramResumeMenuText(
   }
   const pageCount = getTelegramResumeMenuPageCount(entries.length);
   const safePage = clampTelegramResumeMenuPage(page, entries.length);
-  const suffix =
+  const pageLine =
     pageCount > 1
-      ? ` (Page ${safePage + 1}/${pageCount} · ${entries.length} sessions)`
-      : "";
+      ? `Page ${safePage + 1}/${pageCount} · ${entries.length} sessions`
+      : undefined;
   const prompt =
     mode === "delete"
       ? "Select sessions to delete:"
       : "Pick a session to switch to:";
   const pageEntries = sliceTelegramResumeMenuPage(entries, safePage);
-  const metaWidth = Math.max(
-    ...pageEntries.map((entry) => displayWidth(formatTelegramResumeMeta(entry, nowMs))),
-    1,
-  );
   const selectedPaths = new Set(selectedDeletePaths);
-  const lines = pageEntries.map((entry) =>
+  const lines = pageEntries.map((entry, pageIndex) =>
     formatTelegramResumeLine(
       entry,
+      pageIndex,
       nowMs,
-      metaWidth,
       mode,
       selectedPaths.has(entry.path),
     ),
   );
   return [
-    `${TELEGRAM_RESUME_MENU_TITLE}${suffix}`,
+    TELEGRAM_RESUME_MENU_TITLE,
+    ...(pageLine ? [pageLine] : []),
     "",
     `<code>${escapeHtml(cwd)}</code>`,
     prompt,
@@ -315,10 +306,10 @@ export function buildTelegramResumeMenuReplyMarkup(
   const safePage = clampTelegramResumeMenuPage(page, entries.length);
   const pageEntries = sliceTelegramResumeMenuPage(entries, safePage);
   const buttonRow: TelegramResumeMenuReplyMarkup["inline_keyboard"][number] = [];
-  for (const entry of pageEntries) {
+  for (const [pageIndex, entry] of pageEntries.entries()) {
     const selected = selectedPaths.has(entry.path);
     buttonRow.push({
-      text: formatTelegramResumeButtonText(entry, mode, selected),
+      text: formatTelegramResumeButtonText(pageIndex, mode, selected),
       callback_data:
         mode === "delete"
           ? `resume:select:${entry.index}`

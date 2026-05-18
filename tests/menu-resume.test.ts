@@ -69,7 +69,7 @@ test("buildTelegramResumeMenuText appends page suffix only when paginated", () =
   assert.ok(paginated.includes(`${many.length} sessions`));
 });
 
-test("buildTelegramResumeMenuText renders indexed body rows", () => {
+test("buildTelegramResumeMenuText renders two-line list items", () => {
   const entries = makeEntries(2);
   entries[0].modified = new Date(Date.UTC(2025, 0, 1, 10));
   entries[0].messageCount = 14;
@@ -81,11 +81,11 @@ test("buildTelegramResumeMenuText renders indexed body rows", () => {
   const text = buildTelegramResumeMenuText(entries, "/cwd", 0, "open", now);
   assert.match(
     text,
-    /<code>01<\/code>  <code>2h\|14msg<\/code>  Fix telegram resume UI/,
+    /① <code>2h · 14msg<\/code>\nFix telegram resume UI/,
   );
   assert.match(
     text,
-    /<code>02<\/code>  <code>5h\|8msg\s+<\/code>  k8s registry debug/,
+    /② <code>5h · 8msg<\/code>\nk8s registry debug/,
   );
 });
 
@@ -100,15 +100,15 @@ test("buildTelegramResumeMenuText shows delete selections in body rows", () => {
     now,
     ["/sessions/s1.json"],
   );
-  assert.match(text, /☐ <code>01<\/code>/);
-  assert.match(text, /☑ <code>02<\/code>/);
+  assert.match(text, /☐ ① <code>1h · 0msg<\/code>/);
+  assert.match(text, /☑ ② <code>59m · 1msg<\/code>/);
 });
 
 test("buildTelegramResumeMenuReplyMarkup keeps page-1 open index stable and adds nav row", () => {
   const total = TELEGRAM_RESUME_MENU_PAGE_SIZE * 2 + 1; // 3 pages
   const entries = makeEntries(total);
   const page1 = buildTelegramResumeMenuReplyMarkup(entries, 0, 1);
-  // Row 0: Delete mode; last row: nav; in-between: compact index buttons with global indices.
+  // Row 0: Delete mode; last row: nav; in-between: compact page-local numeric buttons.
   const rows = page1.inline_keyboard;
   const navRow = rows[rows.length - 1];
   assert.equal(rows[0][0].callback_data, "resume:mode:delete");
@@ -120,7 +120,7 @@ test("buildTelegramResumeMenuReplyMarkup keeps page-1 open index stable and adds
   assert.equal(navRow[2].callback_data, "resume:page:2");
   const firstEntryRow = rows[1];
   assert.equal(firstEntryRow.length, 4);
-  assert.equal(firstEntryRow[0].text, "09");
+  assert.equal(firstEntryRow[0].text, "1");
   assert.equal(
     firstEntryRow[0].callback_data,
     `resume:open:${TELEGRAM_RESUME_MENU_PAGE_SIZE}`,
@@ -142,9 +142,9 @@ test("buildTelegramResumeMenuReplyMarkup uses compact checkbox index buttons in 
   assert.equal(rows[2][0].callback_data, "resume:clear-selected");
   assert.equal(rows[3].length, 3);
   assert.equal(rows[3][0].callback_data, "resume:select:0");
-  assert.equal(rows[3][0].text, "☐01");
+  assert.equal(rows[3][0].text, "☐1");
   assert.equal(rows[3][1].callback_data, "resume:select:1");
-  assert.equal(rows[3][1].text, "☑02");
+  assert.equal(rows[3][1].text, "☑2");
 });
 
 test("buildTelegramResumeMenuReplyMarkup hides Prev on first / Next on last page", () => {
