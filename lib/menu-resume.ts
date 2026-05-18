@@ -21,7 +21,16 @@ const TELEGRAM_RESUME_MENU_STATE_TTL_MS = 10 * 60 * 1000;
 const TELEGRAM_RESUME_MENU_SUMMARY_LEN = 48;
 const TELEGRAM_RESUME_MENU_LINE_WIDTH = 37;
 const TELEGRAM_RESUME_MENU_BUTTON_COLUMNS = 4;
-const TELEGRAM_RESUME_MENU_PAGE_MARKERS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧"];
+const TELEGRAM_RESUME_MENU_PAGE_MARKERS = [
+  "①\uFE0E",
+  "②\uFE0E",
+  "③\uFE0E",
+  "④\uFE0E",
+  "⑤\uFE0E",
+  "⑥\uFE0E",
+  "⑦\uFE0E",
+  "⑧\uFE0E",
+];
 
 const graphemeSegmenter = typeof Intl.Segmenter === "function"
   ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
@@ -107,7 +116,8 @@ function codePointWidth(char: string): number {
   if (
     codePoint === 0 ||
     codePoint < 32 ||
-    (codePoint >= 0x300 && codePoint <= 0x36f)
+    (codePoint >= 0x300 && codePoint <= 0x36f) ||
+    (codePoint >= 0xfe00 && codePoint <= 0xfe0f)
   ) {
     return 0;
   }

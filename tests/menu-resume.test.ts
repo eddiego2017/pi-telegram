@@ -81,11 +81,11 @@ test("buildTelegramResumeMenuText renders two-line list items", () => {
   const text = buildTelegramResumeMenuText(entries, "/cwd", 0, "open", now);
   assert.match(
     text,
-    /① <code>2h · 14msg<\/code>\nFix telegram resume UI/,
+    /①\uFE0E <code>2h · 14msg<\/code>\nFix telegram resume UI/,
   );
   assert.match(
     text,
-    /② <code>5h · 8msg<\/code>\nk8s registry debug/,
+    /②\uFE0E <code>5h · 8msg<\/code>\nk8s registry debug/,
   );
 });
 
@@ -100,8 +100,8 @@ test("buildTelegramResumeMenuText shows delete selections in body rows", () => {
     now,
     ["/sessions/s1.json"],
   );
-  assert.match(text, /☐ ① <code>1h · 0msg<\/code>/);
-  assert.match(text, /☑ ② <code>59m · 1msg<\/code>/);
+  assert.match(text, /☐ ①\uFE0E <code>1h · 0msg<\/code>/);
+  assert.match(text, /☑ ②\uFE0E <code>59m · 1msg<\/code>/);
 });
 
 test("buildTelegramResumeMenuReplyMarkup keeps page-1 open index stable and adds nav row", () => {

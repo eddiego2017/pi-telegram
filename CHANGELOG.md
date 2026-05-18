@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `[Resume Menu]` Changed `/resume` from compact table-like rows to mobile-friendly two-line list items (`① age · Nmsg` followed by the session summary), moved the page indicator onto its own line, and switched inline buttons to page-local numeric buttons while preserving stable global callback indices. Delete mode shows fake-checkbox state in both the body rows and short buttons.
+- `[Resume Menu]` Changed `/resume` from compact table-like rows to mobile-friendly two-line list items (`① age · Nmsg` followed by the session summary), moved the page indicator onto its own line, forced text-style circled markers in the body, and switched inline buttons to page-local numeric buttons while preserving stable global callback indices. Delete mode shows fake-checkbox state in both the body rows and short buttons.
 - `[Tests]` Updated `/resume` regressions for two-line list rendering, page-local numeric button grids, and delete-mode checkbox labels.
 - `[Session Menu]` Added direct `📜 Last 5 turns` and `📜 Full replay` buttons to `/session`. Replay is pure session-branch logic (no LLM call), counts user turns rather than raw entries, sends each visible user/agent/custom message through the existing Telegram rendering/chunking pipeline with a `Replay msg {timestamp} {role}` header, hides thinking/tool-call/tool-result noise, and caps very large full replays with a clear notice.
 - `[Tests]` Extended `tests/menu-session.test.ts` for replay user-turn grouping, tool/thinking filtering, current-snapshot callback behavior, and replay message formatting.
