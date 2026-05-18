@@ -65,8 +65,33 @@ test("Tree menu entries show active-branch user prompts only", () => {
     ],
   );
   assert.equal(entries[0]?.summary, "first prompt");
-  assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "active").inline_keyboard.length, 2);
+  assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "active").inline_keyboard.length, 3);
   assert.match(buildTelegramTreeDetailText(entries[0]!), /first prompt/);
+});
+
+test("Tree menu branch list shows inactive branch leaves", () => {
+  const oldUser = {
+    type: "message",
+    id: "u-old",
+    parentId: "a1",
+    timestamp: "2026-01-01T00:00:04.000Z",
+    message: { role: "user", content: [{ type: "text", text: "old branch prompt" }] },
+  };
+  const oldAssistant = {
+    type: "message",
+    id: "a-old",
+    parentId: "u-old",
+    timestamp: "2026-01-01T00:00:05.000Z",
+    message: { role: "assistant", content: [{ type: "text", text: "old answer" }] },
+  };
+  const snapshot = createSnapshot();
+  snapshot.entries.push(oldUser, oldAssistant);
+  const entries = buildTelegramTreeMenuEntries(snapshot, "branches");
+  assert.deepEqual(
+    entries.map((entry) => [entry.entryId, entry.kind, entry.summary]),
+    [["a-old", "branch", "old branch prompt"]],
+  );
+  assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "branches").inline_keyboard[0]?.[0]?.text, "🟢 Active path");
 });
 
 test("Tree navigation gate rejects any busy queue or pi state", () => {
