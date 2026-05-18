@@ -6,7 +6,7 @@
  * (see lib/pi.ts createTmuxDynamicSlashCommandInjector + index.ts wiring).
  */
 
-import { unlink } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 
 import {
   type SessionInfo,
@@ -47,6 +47,8 @@ export interface TelegramResumeMenuEntry {
   name?: string;
   firstMessage: string;
   messageCount: number;
+  /** Count of inactive leaf branches in the session tree. Hidden when zero/undefined. */
+  inactiveBranchCount?: number;
   modified: Date;
 }
 
@@ -182,7 +184,11 @@ function formatTelegramResumeMeta(
   entry: TelegramResumeMenuEntry,
   nowMs: number,
 ): string {
-  return `${formatAgo(entry.modified, nowMs)} · ${entry.messageCount}msg`;
+  const parts = [`${formatAgo(entry.modified, nowMs)}`, `${entry.messageCount}msg`];
+  if ((entry.inactiveBranchCount ?? 0) > 0) {
+    parts.push(`🌿${entry.inactiveBranchCount}`);
+  }
+  return parts.join(" · ");
 }
 
 function formatTelegramResumeLine(
@@ -381,6 +387,75 @@ function buildResumeMenuEntries(
     }));
 }
 
+interface TelegramResumeTreeEntry {
+  type?: unknown;
+  id?: unknown;
+  parentId?: unknown;
+}
+
+function isTelegramResumeTreeEntry(entry: unknown): entry is TelegramResumeTreeEntry {
+  return typeof entry === "object" && entry !== null;
+}
+
+export function countTelegramResumeInactiveBranchLeaves(
+  fileEntries: unknown[],
+): number {
+  const entries = fileEntries.filter((entry): entry is TelegramResumeTreeEntry =>
+    isTelegramResumeTreeEntry(entry) &&
+    entry.type !== "session" &&
+    typeof entry.id === "string" &&
+    Object.hasOwn(entry, "parentId")
+  );
+  if (entries.length <= 1) return 0;
+
+  const childIds = new Set<string>();
+  let leafId: string | undefined;
+  for (const entry of entries) {
+    leafId = entry.id as string;
+    if (typeof entry.parentId === "string" && entry.parentId.length > 0) {
+      childIds.add(entry.parentId);
+    }
+  }
+  if (!leafId) return 0;
+
+  return entries.filter((entry) =>
+    typeof entry.id === "string" &&
+    entry.id !== leafId &&
+    !childIds.has(entry.id)
+  ).length;
+}
+
+async function readTelegramResumeInactiveBranchCount(
+  sessionPath: string,
+): Promise<number | undefined> {
+  try {
+    const content = await readFile(sessionPath, "utf8");
+    const fileEntries: unknown[] = [];
+    for (const line of content.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        fileEntries.push(JSON.parse(line));
+      } catch {
+        // Ignore malformed lines, matching pi core session-list behavior.
+      }
+    }
+    return countTelegramResumeInactiveBranchLeaves(fileEntries);
+  } catch {
+    return undefined;
+  }
+}
+
+async function addResumeMenuBranchStats(
+  entries: TelegramResumeMenuEntry[],
+): Promise<TelegramResumeMenuEntry[]> {
+  return Promise.all(
+    entries.map(async (entry) => ({
+      ...entry,
+      inactiveBranchCount: await readTelegramResumeInactiveBranchCount(entry.path),
+    })),
+  );
+}
+
 function buildTelegramResumeDeleteConfirmationText(
   entries: TelegramResumeMenuEntry[],
 ): string {
@@ -442,7 +517,9 @@ export async function openTelegramResumeMenu(
   const cwd = deps.getCwd();
   const currentSessionFile = deps.getCurrentSessionFile();
   const sessions = await deps.listSessions(cwd);
-  const entries = buildResumeMenuEntries(sessions, currentSessionFile);
+  const entries = await addResumeMenuBranchStats(
+    buildResumeMenuEntries(sessions, currentSessionFile),
+  );
   const page = 0;
   const nowMs = now();
   const text = buildTelegramResumeMenuText(entries, cwd, page, "open", nowMs);

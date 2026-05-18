@@ -13,6 +13,7 @@ import {
   buildTelegramResumeMenuReplyMarkup,
   buildTelegramResumeMenuText,
   clampTelegramResumeMenuPage,
+  countTelegramResumeInactiveBranchLeaves,
   createTelegramResumeMenuStore,
   getTelegramResumeMenuPageCount,
   handleTelegramResumeMenuCallback,
@@ -73,20 +74,42 @@ test("buildTelegramResumeMenuText renders two-line list items", () => {
   const entries = makeEntries(2);
   entries[0].modified = new Date(Date.UTC(2025, 0, 1, 10));
   entries[0].messageCount = 14;
+  entries[0].inactiveBranchCount = 2;
   entries[0].firstMessage = "Fix telegram resume UI";
   entries[1].modified = new Date(Date.UTC(2025, 0, 1, 7));
   entries[1].messageCount = 8;
+  entries[1].inactiveBranchCount = 0;
   entries[1].firstMessage = "k8s registry debug";
   const now = Date.UTC(2025, 0, 1, 12);
   const text = buildTelegramResumeMenuText(entries, "/cwd", 0, "open", now);
   assert.match(
     text,
-    /①\uFE0E <code>2h · 14msg<\/code>\nFix telegram resume UI/,
+    /①\uFE0E <code>2h · 14msg · 🌿2<\/code>\nFix telegram resume UI/,
   );
   assert.match(
     text,
     /②\uFE0E <code>5h · 8msg<\/code>\nk8s registry debug/,
   );
+});
+
+test("countTelegramResumeInactiveBranchLeaves counts inactive leaves only", () => {
+  const fileEntries = [
+    { type: "session", id: "session-id" },
+    { type: "message", id: "root", parentId: null },
+    { type: "message", id: "main-1", parentId: "root" },
+    { type: "message", id: "old-branch", parentId: "root" },
+    { type: "message", id: "main-2", parentId: "main-1" },
+  ];
+  assert.equal(countTelegramResumeInactiveBranchLeaves(fileEntries), 1);
+});
+
+test("countTelegramResumeInactiveBranchLeaves ignores old flat sessions", () => {
+  const fileEntries = [
+    { type: "session", id: "session-id" },
+    { type: "message", id: "old-1" },
+    { type: "message", id: "old-2" },
+  ];
+  assert.equal(countTelegramResumeInactiveBranchLeaves(fileEntries), 0);
 });
 
 test("buildTelegramResumeMenuText shows delete selections in body rows", () => {
