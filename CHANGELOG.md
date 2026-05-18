@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `[Tree Menu]` Changed the `/tree` `🌿 Branches` view from plain inactive-leaf rows to compact compare cards that show each branch's fork point, current-path next prompt, inactive-branch next prompt, prompt distance, and leaf id; branch detail views now repeat the same first-difference metadata before the full branch prompt.
+- `[Tree Menu]` Changed the `/tree` `🌿 Branches` view from plain inactive-leaf rows to compact compare cards that show each branch's fork point, current-path next prompt, inactive-branch next prompt, prompt distance, and leaf id without noisy active-path ordinals; branch detail views now repeat the same first-difference metadata before the full branch prompt.
 - `[Tests]` Extended `/tree` regressions for branch compare metadata, list rendering, and branch detail leaf display.
 - `[Resume Menu]` Changed `/resume` from compact table-like rows to mobile-friendly two-line list items (`① age · Nmsg` followed by the session summary), moved the page indicator onto its own line, forced text-style circled markers in the body, and switched inline buttons to page-local numeric buttons while preserving stable global callback indices. Delete mode shows fake-checkbox state in both the body rows and short buttons.
 - `[Tests]` Updated `/resume` regressions for two-line list rendering, page-local numeric button grids, and delete-mode checkbox labels.

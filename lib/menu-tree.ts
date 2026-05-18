@@ -371,16 +371,13 @@ function formatPromptTreeLine(entry: TelegramTreeMenuEntry): string {
 
 function formatBranchTreeLine(entry: TelegramTreeMenuEntry): string {
   const count = entry.branchPromptCount ?? 1;
-  const forkLabel = entry.forkIndex === undefined
-    ? "root"
-    : `#${String(entry.forkIndex).padStart(2, "0")}`;
-  const forkSummary = entry.forkSummary ? ` ${entry.forkSummary}` : "";
+  const forkSummary = entry.forkSummary || "root";
   const activeNext = entry.activeNextSummary || "(current leaf)";
   const branchNext = entry.branchNextSummary || entry.summary || "(empty)";
   const leaf = entry.leafShortId || entry.entryId.slice(0, 8);
   return [
     `<code>${escapeHtml(formatTreeIndex(entry))}</code> +${count} prompt${count === 1 ? "" : "s"} · leaf <code>${escapeHtml(leaf)}</code>`,
-    `↳ fork ${escapeHtml(forkLabel + forkSummary)}`,
+    `↳ fork ${escapeHtml(forkSummary)}`,
     `🟢 now ${escapeHtml(activeNext)}`,
     `🌿 this ${escapeHtml(branchNext)}`,
   ].join("\n");
@@ -479,9 +476,7 @@ export function buildTelegramTreeDetailText(entry: TelegramTreeMenuEntry): strin
     ? rawDetail.slice(0, TELEGRAM_TREE_DETAIL_TEXT_LEN - 1) + "…"
     : rawDetail;
   if (entry.kind === "branch") {
-    const forkLabel = entry.forkIndex === undefined
-      ? "root"
-      : `#${String(entry.forkIndex).padStart(2, "0")}`;
+    const forkSummary = entry.forkSummary || "root";
     const leaf = entry.leafShortId || entry.entryId.slice(0, 8);
     const count = entry.branchPromptCount ?? 1;
     return [
@@ -489,8 +484,8 @@ export function buildTelegramTreeDetailText(entry: TelegramTreeMenuEntry): strin
       `#${entry.index + 1} · leaf <code>${escapeHtml(leaf)}</code>`,
       "Inactive branch leaf. Switch jumps to this branch.",
       "",
-      `<b>Fork point</b>: ${escapeHtml(forkLabel)}`,
-      entry.forkSummary ? escapeHtml(entry.forkSummary) : "(root)",
+      "<b>Fork point</b>",
+      escapeHtml(forkSummary),
       "",
       "<b>First difference</b>",
       `🟢 Active: ${escapeHtml(entry.activeNextSummary || "(current leaf)")}`,

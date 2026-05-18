@@ -103,7 +103,8 @@ test("Tree menu branch list shows inactive branch leaves", () => {
   assert.equal(entries[0]?.branchPromptCount, 1);
   assert.equal(entries[0]?.leafShortId, "a-old");
   const listText = buildTelegramTreeListText(snapshot, entries, 0, "branches");
-  assert.match(listText, /fork #01 first prompt/);
+  assert.match(listText, /fork first prompt/);
+  assert.doesNotMatch(listText, /fork #01/);
   assert.match(listText, /🟢 now second prompt/);
   assert.match(listText, /🌿 this old branch prompt/);
   assert.match(buildTelegramTreeDetailText(entries[0]!), /First difference/);
