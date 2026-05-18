@@ -19,7 +19,7 @@ export type TelegramTreeEntryRole =
   | "custom"
   | "summary"
   | "other";
-export type TelegramTreeFilter = "chat" | "all";
+export type TelegramTreeFilter = "active";
 
 export interface TelegramTreeContentBlock {
   type?: string;
@@ -190,13 +190,9 @@ function roleButtonLabel(role: TelegramTreeEntryRole): string {
   }
 }
 
-function includeEntry(entry: TelegramTreeSessionEntry, filter: TelegramTreeFilter): boolean {
-  if (filter === "all") return true;
+function includeEntry(entry: TelegramTreeSessionEntry, _filter: TelegramTreeFilter): boolean {
   const role = entryRole(entry);
-  if (role === "user" || role === "assistant" || role === "custom" || role === "summary") {
-    return entryDetail(entry).trim().length > 0;
-  }
-  return false;
+  return (role === "user" || role === "custom") && entryDetail(entry).trim().length > 0;
 }
 
 function sortedByTimestamp(entries: TelegramTreeSessionEntry[]): TelegramTreeSessionEntry[] {
@@ -209,41 +205,25 @@ function sortedByTimestamp(entries: TelegramTreeSessionEntry[]): TelegramTreeSes
 
 export function buildTelegramTreeMenuEntries(
   snapshot: TelegramTreeSnapshot,
-  filter: TelegramTreeFilter = "chat",
+  filter: TelegramTreeFilter = "active",
 ): TelegramTreeMenuEntry[] {
-  const byParent = new Map<string | null, TelegramTreeSessionEntry[]>();
-  const ids = new Set(snapshot.entries.map((entry) => entry.id));
-  const branchIds = new Set(snapshot.branch.map((entry) => entry.id));
-  for (const entry of snapshot.entries) {
-    const parent = entry.parentId ?? null;
-    const safeParent = parent === null || ids.has(parent) ? parent : null;
-    const siblings = byParent.get(safeParent) ?? [];
-    siblings.push(entry);
-    byParent.set(safeParent, siblings);
-  }
-  for (const [parent, entries] of byParent.entries()) {
-    byParent.set(parent, sortedByTimestamp(entries));
-  }
   const result: TelegramTreeMenuEntry[] = [];
-  const visit = (entry: TelegramTreeSessionEntry, depth: number): void => {
+  for (const entry of snapshot.branch) {
     const role = entryRole(entry);
     const detail = entryDetail(entry);
-    if (includeEntry(entry, filter)) {
-      result.push({
-        index: result.length,
-        entryId: entry.id,
-        parentId: entry.parentId,
-        depth,
-        role,
-        title: roleTitle(role),
-        summary: truncate(detail, TELEGRAM_TREE_SUMMARY_LEN),
-        detail,
-        active: snapshot.leafId === entry.id || branchIds.has(entry.id),
-      });
-    }
-    for (const child of byParent.get(entry.id) ?? []) visit(child, depth + 1);
-  };
-  for (const root of byParent.get(null) ?? []) visit(root, 0);
+    if (!includeEntry(entry, filter)) continue;
+    result.push({
+      index: result.length,
+      entryId: entry.id,
+      parentId: entry.parentId,
+      depth: 0,
+      role,
+      title: roleTitle(role),
+      summary: truncate(detail, TELEGRAM_TREE_SUMMARY_LEN),
+      detail,
+      active: snapshot.leafId === entry.id,
+    });
+  }
   return result.map((entry, index) => ({ ...entry, index }));
 }
 
@@ -265,11 +245,10 @@ function pageSlice<T>(items: readonly T[], page: number): readonly T[] {
 
 function formatTreeButton(entry: TelegramTreeMenuEntry): string {
   const marker = entry.active ? "●" : "○";
-  const indent = "·".repeat(Math.min(entry.depth, 4));
   const index = String(entry.index + 1).padStart(2, "0");
   const role = roleButtonLabel(entry.role).padEnd(6);
   const text = entry.summary || "(empty)";
-  return `${marker} ${indent}${index} ${role} ${text}`.trim();
+  return `${marker} ${index} ${role} ${text}`.trim();
 }
 
 export const TELEGRAM_TREE_MENU_TITLE = "<b>🌳 Session tree</b>";
@@ -294,8 +273,8 @@ export function buildTelegramTreeListText(
     "",
     `<code>${escapeHtml(snapshot.cwd)}</code>`,
     `Leaf: <code>${escapeHtml(leaf)}</code> · ${start + 1}-${end}/${entries.length}`,
-    `Filter: ${filter}`,
-    "Pick an entry to inspect:",
+    "Active path · user prompts only",
+    "Pick a prompt to replace:",
   ].join("\n");
 }
 
@@ -306,16 +285,7 @@ export function buildTelegramTreeListReplyMarkup(
 ): TelegramTreeReplyMarkup {
   const safePage = clampPage(page, entries.length);
   const rows: TelegramTreeReplyMarkup["inline_keyboard"] = [];
-  rows.push([
-    {
-      text: filter === "chat" ? "☑ Chat" : "Chat",
-      callback_data: "tree:filter:chat",
-    },
-    {
-      text: filter === "all" ? "☑ All" : "All",
-      callback_data: "tree:filter:all",
-    },
-  ]);
+  void filter;
   for (const entry of pageSlice(entries, safePage)) {
     rows.push([{ text: formatTreeButton(entry), callback_data: `tree:entry:${entry.index}` }]);
   }
@@ -358,24 +328,14 @@ export function buildTelegramTreeDetailText(entry: TelegramTreeMenuEntry): strin
 export function buildTelegramTreeDetailReplyMarkup(
   entry: TelegramTreeMenuEntry,
 ): TelegramTreeReplyMarkup {
-  const rewritesPrompt = entry.role === "user" || entry.role === "custom";
+  void entry;
   return {
     inline_keyboard: [
       [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
       [
         {
-          text: rewritesPrompt
-            ? "↩ Rewind and replace this prompt"
-            : "↩ Rewind here",
+          text: "↩️ Rewind and replace this prompt",
           callback_data: `tree:rewind:${entry.index}:none`,
-        },
-      ],
-      [
-        {
-          text: rewritesPrompt
-            ? "📝 Replace + summary"
-            : "📝 Rewind + summary",
-          callback_data: `tree:rewind:${entry.index}:summary`,
         },
       ],
     ],
@@ -405,7 +365,7 @@ export async function openTelegramTreeMenu(
 ): Promise<void> {
   const now = deps.now ?? Date.now;
   const snapshot = deps.getSnapshot();
-  const filter: TelegramTreeFilter = "chat";
+  const filter: TelegramTreeFilter = "active";
   const entries = buildTelegramTreeMenuEntries(snapshot, filter);
   const messageId = await deps.sendTreeMenu(
     buildTelegramTreeListText(snapshot, entries, 0, filter),
@@ -473,22 +433,6 @@ async function handleTelegramTreeMenuCallbackUnsafe(
   const updateState = (next: Partial<TelegramTreeMenuState>) => {
     deps.setState({ ...state, ...next, updatedAt: now() });
   };
-
-  if (data.startsWith("tree:filter:")) {
-    const filter = data.endsWith(":all") ? "all" : "chat";
-    const snapshot = deps.getSnapshot();
-    const entries = buildTelegramTreeMenuEntries(snapshot, filter);
-    const page = clampPage(0, entries.length);
-    await deps.editTreeMessage(
-      chatId,
-      messageId,
-      buildTelegramTreeListText(snapshot, entries, page, filter),
-      buildTelegramTreeListReplyMarkup(entries, page, filter),
-    );
-    updateState({ entries, page, filter, view: "list", detailIndex: undefined });
-    await deps.answerCallbackQuery(query.id);
-    return true;
-  }
 
   if (data === "tree:back:list" || data.startsWith("tree:page:")) {
     const requested = data.startsWith("tree:page:")

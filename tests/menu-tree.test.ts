@@ -55,18 +55,17 @@ function createSnapshot(): TelegramTreeSnapshot {
   };
 }
 
-test("Tree menu entries flatten chat entries and hide tool noise by default", () => {
+test("Tree menu entries show active-branch user prompts only", () => {
   const entries = buildTelegramTreeMenuEntries(createSnapshot());
   assert.deepEqual(
     entries.map((entry) => [entry.entryId, entry.role, entry.depth, entry.active]),
     [
-      ["u1", "user", 0, true],
-      ["a1", "assistant", 1, true],
-      ["u2", "user", 2, true],
+      ["u1", "user", 0, false],
+      ["u2", "user", 0, true],
     ],
   );
   assert.equal(entries[0]?.summary, "first prompt");
-  assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "chat").inline_keyboard.length, 4);
+  assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "active").inline_keyboard.length, 2);
   assert.match(buildTelegramTreeDetailText(entries[0]!), /first prompt/);
 });
 
@@ -84,7 +83,7 @@ test("Tree navigation gate rejects any busy queue or pi state", () => {
   assert.equal(gate({ idle: true, pending: true }), false);
 });
 
-test("Tree callback injects selected entry and summary mode", async () => {
+test("Tree callback injects selected prompt without summary", async () => {
   const snapshot = createSnapshot();
   const entries = buildTelegramTreeMenuEntries(snapshot);
   const store = createTelegramTreeMenuStore();
@@ -94,7 +93,7 @@ test("Tree callback injects selected entry and summary mode", async () => {
     entries,
     page: 0,
     view: "detail",
-    filter: "chat",
+    filter: "active",
     detailIndex: 1,
     updatedAt: Date.now(),
   });
@@ -102,7 +101,7 @@ test("Tree callback injects selected entry and summary mode", async () => {
   const handled = await handleTelegramTreeMenuCallback(
     {
       id: "cb",
-      data: "tree:rewind:1:summary",
+      data: "tree:rewind:1:none",
       message: { chat: { id: 7 }, message_id: 99 },
     },
     {
@@ -122,7 +121,7 @@ test("Tree callback injects selected entry and summary mode", async () => {
     },
   );
   assert.equal(handled, true);
-  assert.deepEqual(events, ["inject:a1:true", "edit:true", "answer:Rewinding…"]);
+  assert.deepEqual(events, ["inject:u2:false", "edit:true", "answer:Rewinding…"]);
 });
 
 test("Tree outcome notifier includes returned editor text", async () => {
