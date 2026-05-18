@@ -195,6 +195,67 @@ test("Command helpers register pi setup, status, and reload commands", async () 
   assert.deepEqual(notifications, ["bot: @demo\npolling: stopped"]);
 });
 
+test("Command helpers register tree exec command and prefill selected prompt", async () => {
+  const harness = createCommandRegistrationApiHarness();
+  const outcomes: unknown[] = [];
+  registerTelegramBridgeCommands(harness.api, {
+    promptForConfig: async () => undefined,
+    getStatusLines: () => [],
+    reloadConfig: async () => undefined,
+    hasBotToken: () => true,
+    startPolling: async () => undefined,
+    stopPolling: async () => undefined,
+    updateStatus: () => undefined,
+    notifyTreeOutcome: async (outcome) => {
+      outcomes.push(outcome);
+    },
+  });
+  const events: string[] = [];
+  let editorText = "";
+  const ctx = {
+    sessionManager: {
+      getEntry: (entryId: string) => ({
+        type: "message",
+        id: entryId,
+        parentId: null,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "[telegram] full prompt body" }],
+        },
+      }),
+    },
+    navigateTree: async (entryId: string, options: { summarize?: boolean }) => {
+      events.push(`navigate:${entryId}:${options.summarize ?? false}`);
+      return { cancelled: false };
+    },
+    ui: {
+      notify: () => undefined,
+      getEditorText: () => editorText,
+      setEditorText: (text: string) => {
+        editorText = text;
+        events.push(`editor:${text}`);
+      },
+    },
+  } as unknown as ExtensionCommandContext;
+  await getRequiredCommand(harness.commands, "telegram-tree-exec").handler(
+    "u1 none",
+    ctx,
+  );
+  assert.deepEqual(events, [
+    "navigate:u1:false",
+    "editor:[telegram] full prompt body",
+  ]);
+  assert.equal(editorText, "[telegram] full prompt body");
+  assert.deepEqual(outcomes, [
+    {
+      ok: true,
+      entryId: "u1",
+      summarize: false,
+      editorText: "[telegram] full prompt body",
+    },
+  ]);
+});
+
 test("Command helpers register pi connect and disconnect commands", async () => {
   const harness = createCommandRegistrationApiHarness();
   const events: string[] = [];

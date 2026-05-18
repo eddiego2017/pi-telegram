@@ -5,7 +5,10 @@
  */
 
 import { pairTelegramUserIfNeeded } from "./config.ts";
-import type { TelegramTreeOutcome } from "./menu-tree.ts";
+import {
+  getTelegramTreeEntryEditorText,
+  type TelegramTreeOutcome,
+} from "./menu-tree.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "./pi.ts";
 import {
   createTelegramControlItemBuilder,
@@ -377,10 +380,10 @@ export function registerTelegramBridgeCommands(
         return;
       }
       try {
-        const result = await ctx.navigateTree(entryId, { summarize }) as {
-          cancelled?: boolean;
-          editorText?: string;
-        };
+        const editorText = getTelegramTreeEntryEditorText(
+          ctx.sessionManager.getEntry(entryId),
+        );
+        const result = await ctx.navigateTree(entryId, { summarize });
         if (result.cancelled) {
           ctx.ui.notify(`Tree rewind cancelled for ${entryId}`, "warning");
           await deps.notifyTreeOutcome?.({
@@ -391,11 +394,14 @@ export function registerTelegramBridgeCommands(
           });
           return;
         }
+        if (editorText?.trim() && !ctx.ui.getEditorText().trim()) {
+          ctx.ui.setEditorText(editorText);
+        }
         await deps.notifyTreeOutcome?.({
           ok: true,
           entryId,
           summarize,
-          editorText: result.editorText,
+          editorText,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

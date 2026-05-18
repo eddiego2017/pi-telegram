@@ -11,6 +11,7 @@ import {
   buildTelegramTreeMenuEntries,
   buildTelegramTreeListReplyMarkup,
   createTelegramTreeMenuStore,
+  getTelegramTreeEntryEditorText,
   createTelegramTreeNavigationGate,
   createTelegramTreeOutcomeNotifier,
   handleTelegramTreeMenuCallback,
@@ -56,7 +57,8 @@ function createSnapshot(): TelegramTreeSnapshot {
 }
 
 test("Tree menu entries show active-branch user prompts only", () => {
-  const entries = buildTelegramTreeMenuEntries(createSnapshot());
+  const snapshot = createSnapshot();
+  const entries = buildTelegramTreeMenuEntries(snapshot);
   assert.deepEqual(
     entries.map((entry) => [entry.entryId, entry.role, entry.depth, entry.active]),
     [
@@ -67,6 +69,8 @@ test("Tree menu entries show active-branch user prompts only", () => {
   assert.equal(entries[0]?.summary, "first prompt");
   assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "active").inline_keyboard.length, 2);
   assert.match(buildTelegramTreeDetailText(entries[0]!), /first prompt/);
+  assert.equal(getTelegramTreeEntryEditorText(snapshot.entries[0]), "[telegram] first prompt");
+  assert.equal(getTelegramTreeEntryEditorText(snapshot.entries[1]), undefined);
 });
 
 test("Tree menu branch list shows inactive branch leaves", () => {

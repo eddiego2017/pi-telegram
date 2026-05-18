@@ -150,6 +150,17 @@ function entryRole(entry: TelegramTreeSessionEntry): TelegramTreeEntryRole {
   return "other";
 }
 
+export function getTelegramTreeEntryEditorText(
+  entry: TelegramTreeSessionEntry | undefined,
+): string | undefined {
+  if (!entry) return undefined;
+  if (entry.type === "message" && entry.message?.role === "user") {
+    return contentText(entry.message.content);
+  }
+  if (entry.type === "custom_message") return contentText(entry.content);
+  return undefined;
+}
+
 function entryDetail(entry: TelegramTreeSessionEntry): string {
   if (entry.type === "message") {
     return contentText(entry.message?.content) || `(${entry.message?.role ?? "message"})`;
@@ -821,7 +832,7 @@ function formatTelegramTreeOutcomeText(outcome: TelegramTreeOutcome): string {
   if (!outcome.editorText?.trim()) return base;
   const text = outcome.editorText.trim();
   const safeText = text.length > 3000 ? text.slice(0, 2999) + "…" : text;
-  return `${base}\n\nSelected entry returned prompt text. Telegram cannot prefill π's editor; copy/edit/send if needed:\n\n${safeText}`;
+  return `${base}\n\nπ editor was prefilled when UI is available. Telegram cannot prefill your chat compose box; copy/edit/send if needed:\n\n${safeText}`;
 }
 
 export function createTelegramTreeOutcomeNotifier(
