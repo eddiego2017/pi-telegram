@@ -185,17 +185,17 @@ test("buildTelegramResumeMenuReplyMarkup keeps page-1 open index stable and adds
   const total = TELEGRAM_RESUME_MENU_PAGE_SIZE * 2 + 1; // 3 pages
   const entries = makeEntries(total);
   const page1 = buildTelegramResumeMenuReplyMarkup(entries, 0, 1);
-  // Row 0: Delete mode; last row: nav; in-between: compact page-local numeric buttons.
+  // Last row: nav; preceding rows: compact page-local numeric buttons.
   const rows = page1.inline_keyboard;
   const navRow = rows[rows.length - 1];
-  assert.equal(rows[0][0].callback_data, "resume:mode:delete");
   assert.ok(!rows.flat().some((button) => button.text.includes("Main menu")));
+  assert.ok(!rows.flat().some((button) => button.callback_data === "resume:mode:delete"));
   assert.equal(navRow.length, 3);
   assert.equal(navRow[0].callback_data, "resume:page:0");
   assert.equal(navRow[1].callback_data, "resume:noop");
   assert.equal(navRow[1].text, "2/3");
   assert.equal(navRow[2].callback_data, "resume:page:2");
-  const firstEntryRow = rows[1];
+  const firstEntryRow = rows[0];
   assert.equal(firstEntryRow.length, 4);
   assert.equal(firstEntryRow[0].text, "1");
   assert.equal(
@@ -214,15 +214,14 @@ test("buildTelegramResumeMenuReplyMarkup uses compact checkbox index buttons in 
     ["/sessions/s1.json"],
   );
   const rows = markup.inline_keyboard;
-  assert.equal(rows[0][0].callback_data, "resume:mode:open");
-  assert.equal(rows[1][0].callback_data, "resume:delete-selected");
-  assert.equal(rows[2][0].callback_data, "resume:select-page");
-  assert.equal(rows[2][1].callback_data, "resume:clear-selected");
-  assert.equal(rows[3].length, 3);
-  assert.equal(rows[3][0].callback_data, "resume:select:0");
-  assert.equal(rows[3][0].text, "☐1");
-  assert.equal(rows[3][1].callback_data, "resume:select:1");
-  assert.equal(rows[3][1].text, "☑2");
+  assert.equal(rows[0][0].callback_data, "delete:delete-selected");
+  assert.equal(rows[1][0].callback_data, "delete:select-page");
+  assert.equal(rows[1][1].callback_data, "delete:clear-selected");
+  assert.equal(rows[2].length, 3);
+  assert.equal(rows[2][0].callback_data, "delete:select:0");
+  assert.equal(rows[2][0].text, "☐1");
+  assert.equal(rows[2][1].callback_data, "delete:select:1");
+  assert.equal(rows[2][1].text, "☑2");
 });
 
 test("buildTelegramResumeMenuReplyMarkup uses standalone multi-select delete controls", () => {
@@ -237,9 +236,9 @@ test("buildTelegramResumeMenuReplyMarkup uses standalone multi-select delete con
     "delete",
   );
   const rows = markup.inline_keyboard;
-  assert.equal(rows[0][0].callback_data, "resume:select-page");
-  assert.ok(!rows.flat().some((button) => button.callback_data === "resume:mode:open"));
-  assert.equal(rows[2][0].callback_data, "resume:cancel-menu");
+  assert.equal(rows[0][0].callback_data, "delete:select-page");
+  assert.ok(!rows.flat().some((button) => button.callback_data.startsWith("resume:")));
+  assert.equal(rows[2][0].callback_data, "delete:cancel-menu");
 });
 
 test("buildTelegramResumeMenuReplyMarkup uses single-select delete buttons", () => {
@@ -265,9 +264,9 @@ test("buildTelegramResumeMenuReplyMarkup uses single-select delete buttons", () 
   assert.match(text, /<b>🗑 Delete session<\/b>/);
   assert.match(text, /Pick a session to delete:/);
   assert.ok(!text.includes("☐"));
-  assert.equal(rows[0][0].callback_data, "resume:delete:0");
+  assert.equal(rows[0][0].callback_data, "delete:delete:0");
   assert.equal(rows[0][0].text, "1");
-  assert.equal(rows[1][0].callback_data, "resume:cancel-menu");
+  assert.equal(rows[1][0].callback_data, "delete:cancel-menu");
 });
 
 test("buildTelegramResumeMenuReplyMarkup hides Prev on first / Next on last page", () => {
@@ -285,7 +284,7 @@ test("buildTelegramResumeMenuReplyMarkup hides Prev on first / Next on last page
 test("buildTelegramResumeMenuReplyMarkup omits nav row when single page", () => {
   const entries = makeEntries(3);
   const markup = buildTelegramResumeMenuReplyMarkup(entries, 0, 0);
-  // Just the delete-mode row + compact index rows; no nav row appended.
+  // Just compact index rows; no nav row appended.
   const flat = markup.inline_keyboard.flat();
   assert.ok(!flat.some((b) => b.text.includes("Main menu")));
   assert.ok(!flat.some((b) => b.callback_data.startsWith("resume:page:")));
@@ -430,11 +429,12 @@ test("handleTelegramResumeMenuCallback rejects invalid open index", async () => 
 test("handleTelegramResumeMenuCallback toggles fake checkbox selection", async () => {
   const state = makeState(3, 0);
   state.mode = "delete";
+  state.source = "delete";
   const { store, events, deps } = makeCallbackDeps(state);
   await handleTelegramResumeMenuCallback(
     {
       id: "sel",
-      data: "resume:select:1",
+      data: "delete:select:1",
       message: { chat: { id: 1 }, message_id: 100 },
     },
     deps,
@@ -444,7 +444,7 @@ test("handleTelegramResumeMenuCallback toggles fake checkbox selection", async (
   await handleTelegramResumeMenuCallback(
     {
       id: "unsel",
-      data: "resume:select:1",
+      data: "delete:select:1",
       message: { chat: { id: 1 }, message_id: 100 },
     },
     deps,
@@ -455,13 +455,14 @@ test("handleTelegramResumeMenuCallback toggles fake checkbox selection", async (
 test("handleTelegramResumeMenuCallback selects only the current delete page", async () => {
   const state = makeState(TELEGRAM_RESUME_MENU_PAGE_SIZE + 5, 1);
   state.mode = "delete";
+  state.source = "delete";
   state.currentSessionFile = "/sessions/s21.json";
   state.selectedDeletePaths = ["/sessions/s0.json"];
   const { store, events, deps } = makeCallbackDeps(state);
   await handleTelegramResumeMenuCallback(
     {
       id: "select-page",
-      data: "resume:select-page",
+      data: "delete:select-page",
       message: { chat: { id: 1 }, message_id: 100 },
     },
     deps,
@@ -479,12 +480,13 @@ test("handleTelegramResumeMenuCallback selects only the current delete page", as
 test("handleTelegramResumeMenuCallback opens selected delete confirmation", async () => {
   const state = makeState(3, 0);
   state.mode = "delete";
+  state.source = "delete";
   state.selectedDeletePaths = ["/sessions/s1.json", "/sessions/s2.json"];
   const { events, deps } = makeCallbackDeps(state);
   await handleTelegramResumeMenuCallback(
     {
       id: "del",
-      data: "resume:delete-selected",
+      data: "delete:delete-selected",
       message: { chat: { id: 1 }, message_id: 100 },
     },
     deps,
@@ -495,11 +497,12 @@ test("handleTelegramResumeMenuCallback opens selected delete confirmation", asyn
 test("handleTelegramResumeMenuCallback cancels delete confirmation", async () => {
   const state = makeState(3, 0);
   state.mode = "delete";
+  state.source = "delete";
   const { events, deps } = makeCallbackDeps(state);
   await handleTelegramResumeMenuCallback(
     {
       id: "cancel",
-      data: "resume:cancel-delete",
+      data: "delete:cancel-delete",
       message: { chat: { id: 1 }, message_id: 100 },
     },
     deps,
@@ -507,7 +510,7 @@ test("handleTelegramResumeMenuCallback cancels delete confirmation", async () =>
   assert.deepEqual(events, ["edit:1:100:delete-list", "answer:cancel:Cancelled."]);
 });
 
-test("handleTelegramResumeMenuCallback switches list modes", async () => {
+test("handleTelegramResumeMenuCallback ignores removed /resume delete mode callbacks", async () => {
   const state = makeState(3, 0);
   const { store, events, deps } = makeCallbackDeps(state);
   await handleTelegramResumeMenuCallback(
@@ -518,19 +521,20 @@ test("handleTelegramResumeMenuCallback switches list modes", async () => {
     },
     deps,
   );
-  assert.deepEqual(events, ["edit:1:100:delete-list", "answer:mode:"]);
-  assert.equal(store.get(100)?.mode, "delete");
+  assert.deepEqual(events, ["answer:mode:"]);
+  assert.equal(store.get(100)?.mode, undefined);
 });
 
 test("handleTelegramResumeMenuCallback deletes selected sessions and reindexes rows", async () => {
   const state = makeState(4, 0);
   state.mode = "delete";
+  state.source = "delete";
   state.selectedDeletePaths = ["/sessions/s1.json", "/sessions/s3.json"];
   const { store, events, deps } = makeCallbackDeps(state);
   await handleTelegramResumeMenuCallback(
     {
       id: "confirm",
-      data: "resume:confirm-delete-selected",
+      data: "delete:confirm-delete-selected",
       message: { chat: { id: 1 }, message_id: 100 },
     },
     deps,
@@ -556,13 +560,15 @@ test("handleTelegramResumeMenuCallback deletes selected sessions and reindexes r
 
 test("handleTelegramResumeMenuCallback refuses to delete current session", async () => {
   const state = makeState(3, 0);
+  state.mode = "delete";
+  state.source = "delete";
   state.currentSessionFile = "/sessions/s1.json";
   state.selectedDeletePaths = ["/sessions/s1.json"];
   const { events, deps } = makeCallbackDeps(state);
   await handleTelegramResumeMenuCallback(
     {
       id: "current",
-      data: "resume:confirm-delete-selected",
+      data: "delete:confirm-delete-selected",
       message: { chat: { id: 1 }, message_id: 100 },
     },
     deps,
@@ -572,6 +578,8 @@ test("handleTelegramResumeMenuCallback refuses to delete current session", async
 
 test("handleTelegramResumeMenuCallback checks the live current session before delete", async () => {
   const state = makeState(3, 0);
+  state.mode = "delete";
+  state.source = "delete";
   const { events, deps } = makeCallbackDeps(
     state,
     () => "/sessions/s1.json",
@@ -579,7 +587,7 @@ test("handleTelegramResumeMenuCallback checks the live current session before de
   await handleTelegramResumeMenuCallback(
     {
       id: "live-current",
-      data: "resume:delete:1",
+      data: "delete:delete:1",
       message: { chat: { id: 1 }, message_id: 100 },
     },
     deps,
@@ -590,12 +598,13 @@ test("handleTelegramResumeMenuCallback checks the live current session before de
 test("handleTelegramResumeMenuCallback opens single delete confirmation", async () => {
   const state = makeState(3, 0);
   state.mode = "delete";
+  state.source = "delete";
   state.deleteStyle = "single";
   const { store, events, deps } = makeCallbackDeps(state);
   await handleTelegramResumeMenuCallback(
     {
       id: "single",
-      data: "resume:delete:1",
+      data: "delete:delete:1",
       message: { chat: { id: 1 }, message_id: 100 },
     },
     deps,
@@ -608,13 +617,14 @@ test("handleTelegramResumeMenuCallback opens single delete confirmation", async 
 test("handleTelegramResumeMenuCallback deletes one session with success actions", async () => {
   const state = makeState(3, 0);
   state.mode = "delete";
+  state.source = "delete";
   state.deleteStyle = "single";
   state.selectedDeletePaths = ["/sessions/s1.json"];
   const { store, events, deps } = makeCallbackDeps(state);
   await handleTelegramResumeMenuCallback(
     {
       id: "confirm-single",
-      data: "resume:confirm-delete:1",
+      data: "delete:confirm-delete:1",
       message: { chat: { id: 1 }, message_id: 100 },
     },
     deps,

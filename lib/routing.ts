@@ -190,6 +190,7 @@ const TELEGRAM_OWNED_CALLBACK_PREFIXES = [
   "model:",
   "queue:",
   "resume:",
+  "delete:",
   "section:",
   "session:",
   "settings:",
