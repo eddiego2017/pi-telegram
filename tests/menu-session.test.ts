@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildTelegramSessionDeleteConfirmReplyMarkup,
+  buildTelegramSessionDeleteConfirmText,
   buildTelegramSessionDetailText,
   buildTelegramSessionHistoryItems,
   buildTelegramSessionHistoryReplyMarkup,
@@ -113,15 +115,21 @@ test("Session menu builds compact stats and escaped latest preview", () => {
   assert.match(text, /Ctx: 612K\/1.0M · 61.2%/);
   assert.match(text, /hello &lt;world&gt;/);
   assert.match(text, /Hi &amp; welcome/);
-  assert.deepEqual(buildTelegramSessionMainReplyMarkup(true), {
+  assert.deepEqual(buildTelegramSessionMainReplyMarkup(true, true), {
     inline_keyboard: [
       [
         { text: "📜 Last 5 turns", callback_data: "session:replay:last5" },
         { text: "📜 Full replay", callback_data: "session:replay:full" },
       ],
       [{ text: "📜 History", callback_data: "session:history" }],
+      [{ text: "🗑 Delete this session", callback_data: "session:delete-current" }],
     ],
   });
+  assert.match(buildTelegramSessionDeleteConfirmText(snapshot), /Delete current session/);
+  assert.deepEqual(buildTelegramSessionDeleteConfirmReplyMarkup().inline_keyboard, [
+    [{ text: "✅ Delete & start new", callback_data: "session:delete-current:confirm" }],
+    [{ text: "Cancel", callback_data: "session:delete-current:cancel" }],
+  ]);
 });
 
 test("Session history renders active-branch chat lines without tool rows", () => {
@@ -327,13 +335,49 @@ test("Session menu runtime opens, pages, details, and refreshes", async () => {
   );
 
   assert.deepEqual(events, [
-    "send:7:html:<b>🧭 Session</b>:2",
+    "send:7:html:<b>🧭 Session</b>:3",
     "answer:cb1:",
     "edit:7:99:html:<b>📜 History</b>:1",
     "answer:cb2:",
     "edit:7:99:html:<b>🤖 Assistant</b>:2",
     "answer:cb3:Refreshed.",
-    "edit:7:99:html:<b>🧭 Session</b>:2",
+    "edit:7:99:html:<b>🧭 Session</b>:3",
+  ]);
+});
+
+test("Session delete callback confirms and injects current session path", async () => {
+  const events: string[] = [];
+  const snapshot = makeSnapshot();
+  const runtime = createTelegramSessionMenuRuntime<string>({
+    getSnapshot: () => snapshot,
+    sendInteractiveMessage: async () => 99,
+    editInteractiveMessage: async (chatId, messageId, text, mode, markup) => {
+      events.push(`edit:${chatId}:${messageId}:${mode}:${text.split("\n")[0]}:${markup.inline_keyboard.length}`);
+    },
+    sendReplayMessage: async () => 100,
+    answerCallbackQuery: async (id, text) => {
+      events.push(`answer:${id}:${text ?? ""}`);
+    },
+    injectDeleteCurrentSession: async (path) => {
+      events.push(`inject:${path}`);
+    },
+  });
+
+  await runtime.openSessionMenu(7, 11, "ctx");
+  await runtime.handleCallbackQuery(
+    { id: "cb-delete", data: "session:delete-current", message: { chat: { id: 7 }, message_id: 99 } },
+    "ctx",
+  );
+  await runtime.handleCallbackQuery(
+    { id: "cb-confirm", data: "session:delete-current:confirm", message: { chat: { id: 7 }, message_id: 99 } },
+    "ctx",
+  );
+
+  assert.deepEqual(events, [
+    "answer:cb-delete:",
+    "edit:7:99:html:<b>⚠️ Delete current session?</b>:2",
+    "answer:cb-confirm:Delete queued.",
+    "inject:/tmp/session.jsonl",
   ]);
 });
 

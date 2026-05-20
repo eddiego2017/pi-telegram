@@ -4,7 +4,10 @@
  * Owns Telegram slash-command normalization, bot command metadata, and pi-side command registration behind runtime ports
  */
 
+import { unlink } from "node:fs/promises";
+
 import { pairTelegramUserIfNeeded } from "./config.ts";
+import type { TelegramSessionDeleteOutcome } from "./menu-session.ts";
 import {
   getTelegramTreeEntryEditorText,
   type TelegramTreeOutcome,
@@ -217,9 +220,17 @@ export interface TelegramTreeExecBridgeDeps {
   notifyTreeOutcome?: (outcome: TelegramTreeOutcome) => Promise<void>;
 }
 
+export interface TelegramDeleteCurrentSessionExecBridgeDeps {
+  notifySessionDeleteOutcome?: (
+    outcome: TelegramSessionDeleteOutcome,
+  ) => Promise<void>;
+  deleteSessionFile?: (sessionPath: string) => Promise<void>;
+}
+
 export interface TelegramBridgeCommandRegistrationDeps
   extends TelegramResumeExecBridgeDeps,
-    TelegramTreeExecBridgeDeps {
+    TelegramTreeExecBridgeDeps,
+    TelegramDeleteCurrentSessionExecBridgeDeps {
   promptForConfig: (ctx: ExtensionCommandContext) => Promise<void>;
   getStatusLines: () => string[];
   reloadConfig: () => Promise<void>;
@@ -357,6 +368,47 @@ export function registerTelegramBridgeCommands(
           sessionPath,
           error: message,
         });
+      }
+    },
+  });
+  pi.registerCommand("telegram-delete-current-session-exec", {
+    description:
+      "(internal) Start a new session, then delete the previous current session. Used by Telegram /session callback.",
+    handler: async (args, ctx) => {
+      const expectedSessionPath = args.trim();
+      const sessionPath = ctx.sessionManager.getSessionFile();
+      const fail = async (error: string, path = sessionPath ?? expectedSessionPath) => {
+        await deps.notifySessionDeleteOutcome?.({
+          ok: false,
+          sessionPath: path,
+          error,
+        });
+      };
+      if (!sessionPath) {
+        await fail("current session is not persisted", "");
+        return;
+      }
+      if (expectedSessionPath && expectedSessionPath !== sessionPath) {
+        await fail("current session changed before deletion", expectedSessionPath);
+        return;
+      }
+      try {
+        await ctx.waitForIdle();
+        const liveSessionPath = ctx.sessionManager.getSessionFile();
+        if (liveSessionPath !== sessionPath) {
+          await fail("current session changed before deletion", sessionPath);
+          return;
+        }
+        const result = await ctx.newSession({ parentSession: sessionPath });
+        if (result.cancelled) {
+          await fail("newSession cancelled", sessionPath);
+          return;
+        }
+        await (deps.deleteSessionFile ?? unlink)(sessionPath);
+        await deps.notifySessionDeleteOutcome?.({ ok: true, sessionPath });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await fail(message, sessionPath);
       }
     },
   });

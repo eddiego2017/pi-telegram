@@ -111,6 +111,12 @@ export default function (pi: Pi.ExtensionAPI) {
     target: "pi:0",
     recordRuntimeEvent,
   });
+  const injectDeleteCurrentSessionExec =
+    Pi.createTelegramDeleteCurrentSessionExecInjector({
+      exec: piRuntime.exec,
+      target: "pi:0",
+      recordRuntimeEvent,
+    });
   const mediaGroupRuntime = Media.createTelegramMediaGroupController<
     Api.TelegramMessage,
     Pi.ExtensionContext
@@ -374,6 +380,7 @@ export default function (pi: Pi.ExtensionAPI) {
     editInteractiveMessage,
     sendReplayMessage: sendMarkdownReply,
     answerCallbackQuery,
+    injectDeleteCurrentSession: injectDeleteCurrentSessionExec,
   });
   const canNavigateTree = MenuTree.createTelegramTreeNavigationGate<
     Pi.ExtensionContext
@@ -403,6 +410,11 @@ export default function (pi: Pi.ExtensionAPI) {
     getAllowedUserId: configStore.getAllowedUserId,
     sendTextReply,
   });
+  const notifySessionDeleteOutcome =
+    MenuSession.createTelegramSessionDeleteOutcomeNotifier({
+      getAllowedUserId: configStore.getAllowedUserId,
+      sendTextReply,
+    });
 
   // --- Polling ---
 
@@ -556,6 +568,7 @@ export default function (pi: Pi.ExtensionAPI) {
     updateStatus,
     notifyResumeOutcome,
     notifyTreeOutcome,
+    notifySessionDeleteOutcome,
   });
 
   // --- Lifecycle Hooks ---

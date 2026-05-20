@@ -226,6 +226,15 @@ export function createTelegramTreeExecInjector(
   };
 }
 
+export function createTelegramDeleteCurrentSessionExecInjector(
+  options: TmuxDynamicSlashCommandInjectorOptions,
+): (expectedSessionPath: string) => Promise<void> {
+  const dynamic = createTmuxDynamicSlashCommandInjector(options);
+  return function injectTelegramDeleteCurrentSessionExec(expectedSessionPath: string) {
+    return dynamic("/telegram-delete-current-session-exec", expectedSessionPath);
+  };
+}
+
 export function getExtensionContextSessionFile(
   ctx: ExtensionContext,
 ): string | undefined {

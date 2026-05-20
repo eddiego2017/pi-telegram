@@ -19,7 +19,7 @@ const TELEGRAM_SESSION_GRAPHEME_SEGMENTER =
     : undefined;
 
 export type TelegramSessionReplyMarkup = TelegramInlineKeyboardMarkup;
-export type TelegramSessionView = "main" | "history" | "detail";
+export type TelegramSessionView = "main" | "history" | "detail" | "deleteConfirm";
 
 export interface TelegramSessionContextUsage {
   tokens: number | null;
@@ -618,6 +618,7 @@ export function buildTelegramSessionMainText(
 
 export function buildTelegramSessionMainReplyMarkup(
   hasHistory: boolean,
+  canDeleteCurrent = false,
 ): TelegramSessionReplyMarkup {
   const rows: TelegramSessionReplyMarkup["inline_keyboard"] = [];
   rows.push([
@@ -636,7 +637,35 @@ export function buildTelegramSessionMainReplyMarkup(
       callback_data: hasHistory ? "session:history" : "session:noop",
     },
   ]);
+  if (canDeleteCurrent) {
+    rows.push([
+      {
+        text: "🗑 Delete this session",
+        callback_data: "session:delete-current",
+      },
+    ]);
+  }
   return { inline_keyboard: rows };
+}
+
+export function buildTelegramSessionDeleteConfirmText(
+  snapshot: TelegramSessionSnapshot,
+): string {
+  return [
+    "<b>⚠️ Delete current session?</b>",
+    "",
+    "This will start a new session first, then delete this session file.",
+    `File: <code>${escapeHtml(shortSessionFile(snapshot.sessionFile))}</code>`,
+  ].join("\n");
+}
+
+export function buildTelegramSessionDeleteConfirmReplyMarkup(): TelegramSessionReplyMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: "✅ Delete & start new", callback_data: "session:delete-current:confirm" }],
+      [{ text: "Cancel", callback_data: "session:delete-current:cancel" }],
+    ],
+  };
 }
 
 export function buildTelegramSessionHistoryText(
@@ -760,7 +789,7 @@ export async function openTelegramSessionMenu(
   const history = buildTelegramSessionHistoryItems(snapshot);
   const messageId = await deps.sendSessionMenu(
     buildTelegramSessionMainText(snapshot),
-    buildTelegramSessionMainReplyMarkup(history.length > 0),
+    buildTelegramSessionMainReplyMarkup(history.length > 0, Boolean(snapshot.sessionFile)),
   );
   if (messageId === undefined) return;
   deps.storeState({
@@ -797,6 +826,7 @@ export interface TelegramSessionMenuCallbackDeps {
     callbackQueryId: string,
     text?: string,
   ) => Promise<void>;
+  injectDeleteCurrentSession?: (expectedSessionPath: string) => Promise<void>;
   now?: () => number;
 }
 
@@ -834,9 +864,51 @@ async function handleTelegramSessionMenuCallbackUnsafe(
       chatId,
       messageId,
       buildTelegramSessionMainText(snapshot),
-      buildTelegramSessionMainReplyMarkup(history.length > 0),
+      buildTelegramSessionMainReplyMarkup(history.length > 0, Boolean(snapshot.sessionFile)),
     );
     updateState({ view: "main", page: 0, detailIndex: undefined });
+    return true;
+  }
+
+  if (data === "session:delete-current") {
+    if (!snapshot.sessionFile) {
+      await deps.answerCallbackQuery(query.id, "No session file to delete.");
+      return true;
+    }
+    await deps.answerCallbackQuery(query.id);
+    await deps.editSessionMessage(
+      chatId,
+      messageId,
+      buildTelegramSessionDeleteConfirmText(snapshot),
+      buildTelegramSessionDeleteConfirmReplyMarkup(),
+    );
+    updateState({ view: "deleteConfirm", page: 0, detailIndex: undefined });
+    return true;
+  }
+
+  if (data === "session:delete-current:cancel") {
+    await deps.answerCallbackQuery(query.id, "Cancelled.");
+    await deps.editSessionMessage(
+      chatId,
+      messageId,
+      buildTelegramSessionMainText(snapshot),
+      buildTelegramSessionMainReplyMarkup(history.length > 0, Boolean(snapshot.sessionFile)),
+    );
+    updateState({ view: "main", page: 0, detailIndex: undefined });
+    return true;
+  }
+
+  if (data === "session:delete-current:confirm") {
+    if (!snapshot.sessionFile) {
+      await deps.answerCallbackQuery(query.id, "No session file to delete.");
+      return true;
+    }
+    if (!deps.injectDeleteCurrentSession) {
+      await deps.answerCallbackQuery(query.id, "Delete is not configured.");
+      return true;
+    }
+    await deps.answerCallbackQuery(query.id, "Delete queued.");
+    await deps.injectDeleteCurrentSession(snapshot.sessionFile);
     return true;
   }
 
@@ -959,6 +1031,47 @@ export async function handleTelegramSessionMenuCallback(
   }
 }
 
+export type TelegramSessionDeleteOutcome =
+  | { ok: true; sessionPath: string }
+  | { ok: false; sessionPath: string; error: string };
+
+export interface TelegramSessionDeleteOutcomeNotifierDeps {
+  getAllowedUserId: () => number | undefined;
+  sendTextReply: (
+    chatId: number,
+    replyToMessageId: number,
+    text: string,
+  ) => Promise<unknown>;
+}
+
+function formatTelegramSessionDeleteOutcomeText(
+  outcome: TelegramSessionDeleteOutcome,
+): string {
+  const tail = outcome.sessionPath
+    ? (outcome.sessionPath.split("/").pop() ?? outcome.sessionPath)
+    : "(unknown)";
+  if (outcome.ok) return `✅ Deleted session: ${tail}`;
+  return `⚠️ Delete failed (${tail}): ${outcome.error}`;
+}
+
+export function createTelegramSessionDeleteOutcomeNotifier(
+  deps: TelegramSessionDeleteOutcomeNotifierDeps,
+): (outcome: TelegramSessionDeleteOutcome) => Promise<void> {
+  return async function notifyTelegramSessionDeleteOutcome(outcome) {
+    const chatId = deps.getAllowedUserId();
+    if (typeof chatId !== "number") return;
+    try {
+      await deps.sendTextReply(
+        chatId,
+        0,
+        formatTelegramSessionDeleteOutcomeText(outcome),
+      );
+    } catch {
+      // best-effort notification only
+    }
+  };
+}
+
 export interface TelegramSessionMenuRuntime<TContext> {
   openSessionMenu: (
     chatId: number,
@@ -995,6 +1108,7 @@ export interface TelegramSessionMenuRuntimeDeps<TContext> {
     callbackQueryId: string,
     text?: string,
   ) => Promise<void>;
+  injectDeleteCurrentSession?: (expectedSessionPath: string) => Promise<void>;
   store?: TelegramSessionMenuStore;
 }
 
@@ -1021,6 +1135,7 @@ export function createTelegramSessionMenuRuntime<TContext>(
           deps.editInteractiveMessage(chatId, messageId, text, "html", replyMarkup),
         sendReplayMessage: deps.sendReplayMessage,
         answerCallbackQuery: deps.answerCallbackQuery,
+        injectDeleteCurrentSession: deps.injectDeleteCurrentSession,
       });
     },
   };
