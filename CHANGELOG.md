@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Resume Menu]` Increased `/resume` pagination from 8 to 20 sessions per page and extended the body row markers through `⑳`, so more previous sessions are visible at once without changing callback semantics.
 - `[Tree Menu]` Fixed tmux-injected internal navigation commands (`/telegram-tree-exec`) so they clear any stale π editor draft before sending the slash command. This prevents a previous `/tree` prefilled prompt from swallowing a later branch switch as normal user text.
 - `[Tests]` Added a dynamic tmux injector regression covering stale-editor clearing before `/telegram-tree-exec` injection.
 - `[Resume Menu]` Changed `/resume` row counts to show visible user/assistant messages only, excluding hidden thinking blocks, assistant tool-call-only turns, and tool results while keeping the core session-list count as a read-failure fallback.

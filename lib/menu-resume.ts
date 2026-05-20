@@ -15,7 +15,7 @@ import {
 
 import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
 
-export const TELEGRAM_RESUME_MENU_PAGE_SIZE = 8;
+export const TELEGRAM_RESUME_MENU_PAGE_SIZE = 20;
 export const TELEGRAM_RESUME_MENU_MAX_ITEMS = 200;
 const TELEGRAM_RESUME_MENU_STATE_TTL_MS = 10 * 60 * 1000;
 const TELEGRAM_RESUME_MENU_SUMMARY_LEN = 48;
@@ -30,6 +30,18 @@ const TELEGRAM_RESUME_MENU_PAGE_MARKERS = [
   "⑥\uFE0E",
   "⑦\uFE0E",
   "⑧\uFE0E",
+  "⑨\uFE0E",
+  "⑩\uFE0E",
+  "⑪\uFE0E",
+  "⑫\uFE0E",
+  "⑬\uFE0E",
+  "⑭\uFE0E",
+  "⑮\uFE0E",
+  "⑯\uFE0E",
+  "⑰\uFE0E",
+  "⑱\uFE0E",
+  "⑲\uFE0E",
+  "⑳\uFE0E",
 ];
 
 const graphemeSegmenter = typeof Intl.Segmenter === "function"

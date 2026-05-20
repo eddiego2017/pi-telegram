@@ -35,6 +35,7 @@ function makeEntries(n: number): TelegramResumeMenuEntry[] {
 }
 
 test("getTelegramResumeMenuPageCount handles empty and partial pages", () => {
+  assert.equal(TELEGRAM_RESUME_MENU_PAGE_SIZE, 20);
   assert.equal(getTelegramResumeMenuPageCount(0), 1);
   assert.equal(getTelegramResumeMenuPageCount(1), 1);
   assert.equal(getTelegramResumeMenuPageCount(TELEGRAM_RESUME_MENU_PAGE_SIZE), 1);
@@ -72,7 +73,7 @@ test("buildTelegramResumeMenuText appends page suffix only when paginated", () =
 });
 
 test("buildTelegramResumeMenuText renders two-line list items", () => {
-  const entries = makeEntries(2);
+  const entries = makeEntries(20);
   entries[0].modified = new Date(Date.UTC(2025, 0, 1, 10));
   entries[0].messageCount = 14;
   entries[0].inactiveBranchCount = 2;
@@ -81,6 +82,7 @@ test("buildTelegramResumeMenuText renders two-line list items", () => {
   entries[1].messageCount = 8;
   entries[1].inactiveBranchCount = 0;
   entries[1].firstMessage = "k8s registry debug";
+  entries[19].firstMessage = "twentieth session";
   const now = Date.UTC(2025, 0, 1, 12);
   const text = buildTelegramResumeMenuText(entries, "/cwd", 0, "open", now);
   assert.match(
@@ -91,6 +93,7 @@ test("buildTelegramResumeMenuText renders two-line list items", () => {
     text,
     /②\uFE0E <code>5h · 8msg<\/code>\nk8s registry debug/,
   );
+  assert.match(text, /⑳\uFE0E <code>11h · 19msg<\/code>\ntwentieth session/);
 });
 
 test("countTelegramResumeInactiveBranchLeaves counts inactive leaves only", () => {
