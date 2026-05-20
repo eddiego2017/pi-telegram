@@ -216,12 +216,30 @@ test("buildTelegramResumeMenuReplyMarkup uses compact checkbox index buttons in 
   const rows = markup.inline_keyboard;
   assert.equal(rows[0][0].callback_data, "resume:mode:open");
   assert.equal(rows[1][0].callback_data, "resume:delete-selected");
-  assert.equal(rows[2][0].callback_data, "resume:clear-selected");
+  assert.equal(rows[2][0].callback_data, "resume:select-page");
+  assert.equal(rows[2][1].callback_data, "resume:clear-selected");
   assert.equal(rows[3].length, 3);
   assert.equal(rows[3][0].callback_data, "resume:select:0");
   assert.equal(rows[3][0].text, "☐1");
   assert.equal(rows[3][1].callback_data, "resume:select:1");
   assert.equal(rows[3][1].text, "☑2");
+});
+
+test("buildTelegramResumeMenuReplyMarkup uses standalone multi-select delete controls", () => {
+  const entries = makeEntries(3);
+  const markup = buildTelegramResumeMenuReplyMarkup(
+    entries,
+    0,
+    0,
+    "delete",
+    [],
+    "multi",
+    "delete",
+  );
+  const rows = markup.inline_keyboard;
+  assert.equal(rows[0][0].callback_data, "resume:select-page");
+  assert.ok(!rows.flat().some((button) => button.callback_data === "resume:mode:open"));
+  assert.equal(rows[2][0].callback_data, "resume:cancel-menu");
 });
 
 test("buildTelegramResumeMenuReplyMarkup uses single-select delete buttons", () => {
@@ -432,6 +450,30 @@ test("handleTelegramResumeMenuCallback toggles fake checkbox selection", async (
     deps,
   );
   assert.deepEqual(store.get(100)?.selectedDeletePaths, []);
+});
+
+test("handleTelegramResumeMenuCallback selects only the current delete page", async () => {
+  const state = makeState(TELEGRAM_RESUME_MENU_PAGE_SIZE + 5, 1);
+  state.mode = "delete";
+  state.currentSessionFile = "/sessions/s21.json";
+  state.selectedDeletePaths = ["/sessions/s0.json"];
+  const { store, events, deps } = makeCallbackDeps(state);
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "select-page",
+      data: "resume:select-page",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, ["edit:1:100:delete-list", "answer:select-page:Page selected."]);
+  assert.deepEqual(store.get(100)?.selectedDeletePaths, [
+    "/sessions/s0.json",
+    "/sessions/s20.json",
+    "/sessions/s22.json",
+    "/sessions/s23.json",
+    "/sessions/s24.json",
+  ]);
 });
 
 test("handleTelegramResumeMenuCallback opens selected delete confirmation", async () => {
