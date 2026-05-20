@@ -442,6 +442,7 @@ export default function (pi: Pi.ExtensionAPI) {
     openSettingsMenu: settingsMenuRuntime.openSettingsMenu,
     settingsMenuCallbackHandler: settingsMenuRuntime.handleCallbackQuery,
     openResumeMenu: resumeMenuRuntime.openResumeMenu,
+    openDeleteMenu: resumeMenuRuntime.openDeleteMenu,
     resumeMenuCallbackHandler: resumeMenuRuntime.handleCallbackQuery,
     openSessionMenu: sessionMenuRuntime.openSessionMenu,
     sessionMenuCallbackHandler: sessionMenuRuntime.handleCallbackQuery,

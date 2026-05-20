@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `[Commands]` Added Telegram-side `/delete`, a dedicated one-session delete picker that opens the session list directly in single-delete mode, shows explicit `🗑 Delete` / Back / Cancel confirmation, then offers `🗑 Delete another` or `📂 Resume` after success. The delete path now prefers the `trash` CLI and falls back to unlinking the session file.
+- `[Tests]` Extended command and `/resume` menu regressions for `/delete` bot-command registration, routing, single-delete list rendering, confirmation, and success actions.
 - `[Resume Menu]` Increased `/resume` pagination from 8 to 20 sessions per page and extended the body row markers through `⑳`, so more previous sessions are visible at once without changing callback semantics.
 - `[Tree Menu]` Fixed tmux-injected internal navigation commands (`/telegram-tree-exec`) so they clear any stale π editor draft before sending the slash command. This prevents a previous `/tree` prefilled prompt from swallowing a later branch switch as normal user text.
 - `[Tests]` Added a dynamic tmux injector regression covering stale-editor clearing before `/telegram-tree-exec` injection.

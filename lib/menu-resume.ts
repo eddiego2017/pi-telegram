@@ -6,6 +6,8 @@
  * (see lib/pi.ts createTmuxDynamicSlashCommandInjector + index.ts wiring).
  */
 
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile, unlink } from "node:fs/promises";
 
 import {
@@ -50,6 +52,12 @@ const graphemeSegmenter = typeof Intl.Segmenter === "function"
 
 export type TelegramResumeMenuReplyMarkup = TelegramInlineKeyboardMarkup;
 export type TelegramResumeMenuMode = "open" | "delete";
+export type TelegramResumeMenuDeleteStyle = "multi" | "single";
+export type TelegramResumeDeleteMethod = "trash" | "unlink";
+
+export interface TelegramResumeDeleteResult {
+  method: TelegramResumeDeleteMethod;
+}
 
 export interface TelegramResumeMenuEntry {
   /** global index in the menu state's `sessions` array (stable across pagination) */
@@ -75,6 +83,8 @@ export interface TelegramResumeMenuState {
   currentSessionFile: string | undefined;
   /** Current list mode; old cached states without this field default to open. */
   mode?: TelegramResumeMenuMode;
+  /** Delete picker style; `/resume` uses multi-select, `/delete` uses single-select. */
+  deleteStyle?: TelegramResumeMenuDeleteStyle;
   /** Session file paths selected in delete mode. */
   selectedDeletePaths?: string[];
   updatedAt: number;
@@ -209,9 +219,10 @@ function formatTelegramResumeLine(
   nowMs: number,
   mode: TelegramResumeMenuMode,
   selected: boolean,
+  deleteStyle: TelegramResumeMenuDeleteStyle,
 ): string {
   const marker = formatTelegramResumePageMarker(pageIndex);
-  const selectedPrefix = mode === "delete" ? `${selected ? "☑" : "☐"} ` : "";
+  const selectedPrefix = mode === "delete" && deleteStyle === "multi" ? `${selected ? "☑" : "☐"} ` : "";
   const meta = formatTelegramResumeMeta(entry, nowMs);
   const summary = truncateDisplay(
     entry.name || entry.firstMessage || "(no preview)",
@@ -224,12 +235,20 @@ function formatTelegramResumeButtonText(
   pageIndex: number,
   mode: TelegramResumeMenuMode,
   selected: boolean,
+  deleteStyle: TelegramResumeMenuDeleteStyle,
 ): string {
   const index = String(pageIndex + 1);
-  return mode === "delete" ? `${selected ? "☑" : "☐"}${index}` : index;
+  return mode === "delete" && deleteStyle === "multi"
+    ? `${selected ? "☑" : "☐"}${index}`
+    : index;
 }
 
 export const TELEGRAM_RESUME_MENU_TITLE = "<b>📂 Resume session</b>";
+export const TELEGRAM_DELETE_MENU_TITLE = "<b>🗑 Delete session</b>";
+
+function getTelegramResumeMenuTitle(mode: TelegramResumeMenuMode): string {
+  return mode === "delete" ? TELEGRAM_DELETE_MENU_TITLE : TELEGRAM_RESUME_MENU_TITLE;
+}
 
 export function getTelegramResumeMenuPageCount(total: number): number {
   if (total <= 0) return 1;
@@ -261,9 +280,11 @@ export function buildTelegramResumeMenuText(
   mode: TelegramResumeMenuMode = "open",
   nowMs: number = Date.now(),
   selectedDeletePaths: string[] = [],
+  deleteStyle: TelegramResumeMenuDeleteStyle = "multi",
 ): string {
+  const title = getTelegramResumeMenuTitle(mode);
   if (entries.length === 0) {
-    return `${TELEGRAM_RESUME_MENU_TITLE}\n\nNo other sessions for <code>${escapeHtml(cwd)}</code>.`;
+    return `${title}\n\nNo other sessions for <code>${escapeHtml(cwd)}</code>.`;
   }
   const pageCount = getTelegramResumeMenuPageCount(entries.length);
   const safePage = clampTelegramResumeMenuPage(page, entries.length);
@@ -273,7 +294,9 @@ export function buildTelegramResumeMenuText(
       : undefined;
   const prompt =
     mode === "delete"
-      ? "Select sessions to delete:"
+      ? deleteStyle === "single"
+        ? "Pick a session to delete:"
+        : "Select sessions to delete:"
       : "Pick a session to switch to:";
   const pageEntries = sliceTelegramResumeMenuPage(entries, safePage);
   const selectedPaths = new Set(selectedDeletePaths);
@@ -284,10 +307,11 @@ export function buildTelegramResumeMenuText(
       nowMs,
       mode,
       selectedPaths.has(entry.path),
+      deleteStyle,
     ),
   );
   return [
-    TELEGRAM_RESUME_MENU_TITLE,
+    title,
     ...(pageLine ? [pageLine] : []),
     "",
     `<code>${escapeHtml(cwd)}</code>`,
@@ -307,17 +331,18 @@ export function buildTelegramResumeMenuReplyMarkup(
   page = 0,
   mode: TelegramResumeMenuMode = "open",
   selectedDeletePaths: string[] = [],
+  deleteStyle: TelegramResumeMenuDeleteStyle = "multi",
 ): TelegramResumeMenuReplyMarkup {
   const selectedPaths = new Set(selectedDeletePaths);
   const selectedCount = entries.filter((entry) => selectedPaths.has(entry.path)).length;
   const rows: TelegramResumeMenuReplyMarkup["inline_keyboard"] = [];
-  if (mode === "delete") {
+  if (mode === "delete" && deleteStyle === "multi") {
     rows.push([{ text: "⬅️ Back to resume list", callback_data: "resume:mode:open" }]);
   }
   if (entries.length > 0 && mode === "open") {
     rows.push([{ text: "🗑 Delete sessions", callback_data: "resume:mode:delete" }]);
   }
-  if (entries.length > 0 && mode === "delete") {
+  if (entries.length > 0 && mode === "delete" && deleteStyle === "multi") {
     if (selectedCount > 0) {
       rows.push([
         {
@@ -337,10 +362,12 @@ export function buildTelegramResumeMenuReplyMarkup(
   for (const [pageIndex, entry] of pageEntries.entries()) {
     const selected = selectedPaths.has(entry.path);
     buttonRow.push({
-      text: formatTelegramResumeButtonText(pageIndex, mode, selected),
+      text: formatTelegramResumeButtonText(pageIndex, mode, selected, deleteStyle),
       callback_data:
         mode === "delete"
-          ? `resume:select:${entry.index}`
+          ? deleteStyle === "single"
+            ? `resume:delete:${entry.index}`
+            : `resume:select:${entry.index}`
           : `resume:open:${entry.index}`,
     });
     if (buttonRow.length === TELEGRAM_RESUME_MENU_BUTTON_COLUMNS) {
@@ -351,6 +378,9 @@ export function buildTelegramResumeMenuReplyMarkup(
   if (buttonRow.length > 0) rows.push(buttonRow);
   if (entries.length === 0) {
     rows.push([{ text: "(no sessions)", callback_data: "resume:noop" }]);
+  }
+  if (mode === "delete" && deleteStyle === "single") {
+    rows.push([{ text: "Cancel", callback_data: "resume:cancel-menu" }]);
   }
   if (pageCount > 1) {
     const prevPage = safePage - 1;
@@ -544,7 +574,29 @@ function buildTelegramResumeDeleteConfirmationText(
     return `• <code>${escapeHtml(headline)}</code>`;
   });
   const more = entries.length > shown.length ? `\n• …and ${entries.length - shown.length} more` : "";
-  return `${TELEGRAM_RESUME_MENU_TITLE}\n\nDelete ${entries.length} selected session${entries.length === 1 ? "" : "s"}?\n\n${shown.join("\n")}${more}`;
+  return `${TELEGRAM_DELETE_MENU_TITLE}\n\nDelete ${entries.length} selected session${entries.length === 1 ? "" : "s"}?\n\n${shown.join("\n")}${more}`;
+}
+
+function buildTelegramSingleDeleteConfirmationText(
+  entry: TelegramResumeMenuEntry,
+  cwd: string,
+  nowMs: number,
+): string {
+  const headline = truncateSummary(
+    entry.name || entry.firstMessage || entry.sessionId,
+    TELEGRAM_RESUME_MENU_SUMMARY_LEN,
+  );
+  return [
+    TELEGRAM_DELETE_MENU_TITLE,
+    "",
+    "Delete this session?",
+    "",
+    `<code>${escapeHtml(headline)}</code>`,
+    `${entry.messageCount} msg · modified ${formatAgo(entry.modified, nowMs)} ago`,
+    `cwd: <code>${escapeHtml(cwd)}</code>`,
+    "",
+    "This cannot be undone here.",
+  ].join("\n");
 }
 
 function buildTelegramResumeDeleteConfirmationReplyMarkup(): TelegramResumeMenuReplyMarkup {
@@ -559,6 +611,47 @@ function buildTelegramResumeDeleteConfirmationReplyMarkup(): TelegramResumeMenuR
       ],
     ],
   };
+}
+
+function buildTelegramSingleDeleteConfirmationReplyMarkup(
+  entryIndex: number,
+): TelegramResumeMenuReplyMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: "🗑 Delete", callback_data: `resume:confirm-delete:${entryIndex}` }],
+      [
+        { text: "⬅️ Back", callback_data: "resume:cancel-delete" },
+        { text: "Cancel", callback_data: "resume:cancel-menu" },
+      ],
+    ],
+  };
+}
+
+function buildTelegramSingleDeleteSuccessText(
+  entry: TelegramResumeMenuEntry,
+  result: TelegramResumeDeleteResult | void,
+): string {
+  const headline = truncateSummary(
+    entry.name || entry.firstMessage || entry.sessionId,
+    TELEGRAM_RESUME_MENU_SUMMARY_LEN,
+  );
+  const status = result?.method === "trash" ? "Session moved to trash." : "Session deleted.";
+  return `${TELEGRAM_DELETE_MENU_TITLE}\n\n${status}\n\n<code>${escapeHtml(headline)}</code>`;
+}
+
+function buildTelegramSingleDeleteSuccessReplyMarkup(): TelegramResumeMenuReplyMarkup {
+  return {
+    inline_keyboard: [
+      [
+        { text: "🗑 Delete another", callback_data: "resume:delete-another" },
+        { text: "📂 Resume", callback_data: "resume:mode:open" },
+      ],
+    ],
+  };
+}
+
+function buildTelegramResumeCancelText(): string {
+  return `${TELEGRAM_DELETE_MENU_TITLE}\n\nDelete cancelled.`;
 }
 
 function parseTelegramResumeMenuIndex(
@@ -584,6 +677,8 @@ export interface TelegramResumeMenuOpenDeps {
   ) => Promise<number | undefined>;
   storeState: (state: TelegramResumeMenuState) => void;
   chatId: number;
+  mode?: TelegramResumeMenuMode;
+  deleteStyle?: TelegramResumeMenuDeleteStyle;
   now?: () => number;
 }
 
@@ -599,8 +694,25 @@ export async function openTelegramResumeMenu(
   );
   const page = 0;
   const nowMs = now();
-  const text = buildTelegramResumeMenuText(entries, cwd, page, "open", nowMs);
-  const replyMarkup = buildTelegramResumeMenuReplyMarkup(entries, nowMs, page);
+  const mode = deps.mode ?? "open";
+  const deleteStyle = deps.deleteStyle ?? "multi";
+  const text = buildTelegramResumeMenuText(
+    entries,
+    cwd,
+    page,
+    mode,
+    nowMs,
+    [],
+    deleteStyle,
+  );
+  const replyMarkup = buildTelegramResumeMenuReplyMarkup(
+    entries,
+    nowMs,
+    page,
+    mode,
+    [],
+    deleteStyle,
+  );
   const messageId = await deps.sendResumeMenu(text, replyMarkup);
   if (messageId === undefined) return;
   deps.storeState({
@@ -609,7 +721,8 @@ export async function openTelegramResumeMenu(
     sessions: entries,
     page,
     currentSessionFile,
-    mode: "open",
+    mode,
+    deleteStyle,
     selectedDeletePaths: [],
     updatedAt: now(),
   });
@@ -631,7 +744,7 @@ export interface TelegramResumeMenuCallbackDeps {
     text?: string,
   ) => Promise<void>;
   injectResumeExec: (sessionPath: string) => Promise<void>;
-  deleteSessionFile: (sessionPath: string) => Promise<void>;
+  deleteSessionFile: (sessionPath: string) => Promise<void | TelegramResumeDeleteResult>;
   now?: () => number;
 }
 
@@ -680,6 +793,7 @@ export async function handleTelegramResumeMenuCallback(
     }
     const cwd = deps.getCwd();
     const mode = state.mode ?? "open";
+    const deleteStyle = state.deleteStyle ?? "multi";
     const selectedDeletePaths = state.selectedDeletePaths ?? [];
     const nowMs = now();
     const text = buildTelegramResumeMenuText(
@@ -689,6 +803,7 @@ export async function handleTelegramResumeMenuCallback(
       mode,
       nowMs,
       selectedDeletePaths,
+      deleteStyle,
     );
     const replyMarkup = buildTelegramResumeMenuReplyMarkup(
       state.sessions,
@@ -696,15 +811,53 @@ export async function handleTelegramResumeMenuCallback(
       nextPage,
       mode,
       selectedDeletePaths,
+      deleteStyle,
     );
     await deps.editResumeMessage(chatId, messageId, text, replyMarkup);
     deps.setState({
       ...state,
       page: nextPage,
       mode,
+      deleteStyle,
       selectedDeletePaths,
       updatedAt: nowMs,
     });
+    await deps.answerCallbackQuery(query.id);
+    return true;
+  }
+  if (data === "resume:cancel-menu") {
+    await deps.editResumeMessage(chatId, messageId, buildTelegramResumeCancelText(), {
+      inline_keyboard: [],
+    });
+    deps.setState({ ...state, updatedAt: now() });
+    await deps.answerCallbackQuery(query.id, "Cancelled.");
+    return true;
+  }
+  if (data === "resume:delete-another") {
+    const cwd = deps.getCwd();
+    const page = clampTelegramResumeMenuPage(state.page, state.sessions.length);
+    const mode: TelegramResumeMenuMode = "delete";
+    const deleteStyle: TelegramResumeMenuDeleteStyle = "single";
+    const nowMs = now();
+    const text = buildTelegramResumeMenuText(
+      state.sessions,
+      cwd,
+      page,
+      mode,
+      nowMs,
+      [],
+      deleteStyle,
+    );
+    const replyMarkup = buildTelegramResumeMenuReplyMarkup(
+      state.sessions,
+      nowMs,
+      page,
+      mode,
+      [],
+      deleteStyle,
+    );
+    await deps.editResumeMessage(chatId, messageId, text, replyMarkup);
+    deps.setState({ ...state, page, mode, deleteStyle, selectedDeletePaths: [], updatedAt: nowMs });
     await deps.answerCallbackQuery(query.id);
     return true;
   }
@@ -712,6 +865,7 @@ export async function handleTelegramResumeMenuCallback(
     const cwd = deps.getCwd();
     const page = clampTelegramResumeMenuPage(state.page, state.sessions.length);
     const mode = state.mode ?? "delete";
+    const deleteStyle = state.deleteStyle ?? "multi";
     const selectedDeletePaths = state.selectedDeletePaths ?? [];
     const nowMs = now();
     const text = buildTelegramResumeMenuText(
@@ -721,6 +875,7 @@ export async function handleTelegramResumeMenuCallback(
       mode,
       nowMs,
       selectedDeletePaths,
+      deleteStyle,
     );
     const replyMarkup = buildTelegramResumeMenuReplyMarkup(
       state.sessions,
@@ -728,15 +883,17 @@ export async function handleTelegramResumeMenuCallback(
       page,
       mode,
       selectedDeletePaths,
+      deleteStyle,
     );
     await deps.editResumeMessage(chatId, messageId, text, replyMarkup);
-    deps.setState({ ...state, page, mode, selectedDeletePaths, updatedAt: nowMs });
+    deps.setState({ ...state, page, mode, deleteStyle, selectedDeletePaths, updatedAt: nowMs });
     await deps.answerCallbackQuery(query.id, "Cancelled.");
     return true;
   }
   if (data.startsWith("resume:mode:")) {
     const mode: TelegramResumeMenuMode =
       data === "resume:mode:delete" ? "delete" : "open";
+    const deleteStyle = mode === "delete" ? "multi" : state.deleteStyle;
     const selectedDeletePaths = mode === "delete" ? (state.selectedDeletePaths ?? []) : [];
     const cwd = deps.getCwd();
     const page = clampTelegramResumeMenuPage(state.page, state.sessions.length);
@@ -748,6 +905,7 @@ export async function handleTelegramResumeMenuCallback(
       mode,
       nowMs,
       selectedDeletePaths,
+      deleteStyle ?? "multi",
     );
     const replyMarkup = buildTelegramResumeMenuReplyMarkup(
       state.sessions,
@@ -755,9 +913,10 @@ export async function handleTelegramResumeMenuCallback(
       page,
       mode,
       selectedDeletePaths,
+      deleteStyle ?? "multi",
     );
     await deps.editResumeMessage(chatId, messageId, text, replyMarkup);
-    deps.setState({ ...state, page, mode, selectedDeletePaths, updatedAt: nowMs });
+    deps.setState({ ...state, page, mode, deleteStyle, selectedDeletePaths, updatedAt: nowMs });
     await deps.answerCallbackQuery(query.id);
     return true;
   }
@@ -765,6 +924,7 @@ export async function handleTelegramResumeMenuCallback(
     const cwd = deps.getCwd();
     const page = clampTelegramResumeMenuPage(state.page, state.sessions.length);
     const mode: TelegramResumeMenuMode = "delete";
+    const deleteStyle = state.deleteStyle ?? "multi";
     const nowMs = now();
     const text = buildTelegramResumeMenuText(
       state.sessions,
@@ -773,6 +933,7 @@ export async function handleTelegramResumeMenuCallback(
       mode,
       nowMs,
       [],
+      deleteStyle,
     );
     const replyMarkup = buildTelegramResumeMenuReplyMarkup(
       state.sessions,
@@ -780,9 +941,10 @@ export async function handleTelegramResumeMenuCallback(
       page,
       mode,
       [],
+      deleteStyle,
     );
     await deps.editResumeMessage(chatId, messageId, text, replyMarkup);
-    deps.setState({ ...state, page, mode, selectedDeletePaths: [], updatedAt: nowMs });
+    deps.setState({ ...state, page, mode, deleteStyle, selectedDeletePaths: [], updatedAt: nowMs });
     await deps.answerCallbackQuery(query.id, "Selection cleared.");
     return true;
   }
@@ -808,6 +970,18 @@ export async function handleTelegramResumeMenuCallback(
       await deps.answerCallbackQuery(query.id, "Can't delete current session.");
       return true;
     }
+    if (prefix === "resume:delete:" && (state.deleteStyle ?? "multi") === "single") {
+      const nowMs = now();
+      await deps.editResumeMessage(
+        chatId,
+        messageId,
+        buildTelegramSingleDeleteConfirmationText(entry, deps.getCwd(), nowMs),
+        buildTelegramSingleDeleteConfirmationReplyMarkup(index),
+      );
+      deps.setState({ ...state, mode: "delete", deleteStyle: "single", selectedDeletePaths: [entry.path], updatedAt: nowMs });
+      await deps.answerCallbackQuery(query.id);
+      return true;
+    }
     const selectedPaths = new Set(state.selectedDeletePaths ?? []);
     if (selectedPaths.has(entry.path)) selectedPaths.delete(entry.path);
     else selectedPaths.add(entry.path);
@@ -815,6 +989,7 @@ export async function handleTelegramResumeMenuCallback(
     const cwd = deps.getCwd();
     const page = clampTelegramResumeMenuPage(state.page, state.sessions.length);
     const mode: TelegramResumeMenuMode = "delete";
+    const deleteStyle = state.deleteStyle ?? "multi";
     const nowMs = now();
     const text = buildTelegramResumeMenuText(
       state.sessions,
@@ -823,6 +998,7 @@ export async function handleTelegramResumeMenuCallback(
       mode,
       nowMs,
       selectedDeletePaths,
+      deleteStyle,
     );
     const replyMarkup = buildTelegramResumeMenuReplyMarkup(
       state.sessions,
@@ -830,12 +1006,14 @@ export async function handleTelegramResumeMenuCallback(
       page,
       mode,
       selectedDeletePaths,
+      deleteStyle,
     );
     await deps.editResumeMessage(chatId, messageId, text, replyMarkup);
     deps.setState({
       ...state,
       page,
       mode,
+      deleteStyle,
       selectedDeletePaths,
       updatedAt: nowMs,
     });
@@ -883,7 +1061,12 @@ export async function handleTelegramResumeMenuCallback(
         await deps.answerCallbackQuery(query.id, "Invalid selection.");
         return true;
       }
-      selectedPaths = new Set([state.sessions[index].path]);
+      const selectedEntry = state.sessions[index];
+      if (!selectedEntry) {
+        await deps.answerCallbackQuery(query.id, "Invalid selection.");
+        return true;
+      }
+      selectedPaths = new Set([selectedEntry.path]);
     }
     const selectedEntries = state.sessions.filter((entry) => selectedPaths.has(entry.path));
     if (selectedEntries.length === 0) {
@@ -899,9 +1082,11 @@ export async function handleTelegramResumeMenuCallback(
       await deps.answerCallbackQuery(query.id, "Can't delete current session.");
       return true;
     }
+    let singleDeleteResult: TelegramResumeDeleteResult | void = undefined;
     try {
       for (const entry of selectedEntries) {
-        await deps.deleteSessionFile(entry.path);
+        const result = await deps.deleteSessionFile(entry.path);
+        if (selectedEntries.length === 1) singleDeleteResult = result;
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -916,27 +1101,36 @@ export async function handleTelegramResumeMenuCallback(
     const cwd = deps.getCwd();
     const mode: TelegramResumeMenuMode = "delete";
     const nowMs = now();
-    const text = buildTelegramResumeMenuText(
-      nextSessions,
-      cwd,
-      page,
-      mode,
-      nowMs,
-      [],
-    );
-    const replyMarkup = buildTelegramResumeMenuReplyMarkup(
-      nextSessions,
-      nowMs,
-      page,
-      mode,
-      [],
-    );
+    const deleteStyle = state.deleteStyle ?? "multi";
+    const isSingleDelete = deleteStyle === "single" && selectedEntries.length === 1;
+    const text = isSingleDelete
+      ? buildTelegramSingleDeleteSuccessText(selectedEntries[0]!, singleDeleteResult)
+      : buildTelegramResumeMenuText(
+        nextSessions,
+        cwd,
+        page,
+        mode,
+        nowMs,
+        [],
+        deleteStyle,
+      );
+    const replyMarkup = isSingleDelete
+      ? buildTelegramSingleDeleteSuccessReplyMarkup()
+      : buildTelegramResumeMenuReplyMarkup(
+        nextSessions,
+        nowMs,
+        page,
+        mode,
+        [],
+        deleteStyle,
+      );
     await deps.editResumeMessage(chatId, messageId, text, replyMarkup);
     deps.setState({
       ...state,
       sessions: nextSessions,
       page,
       mode,
+      deleteStyle,
       selectedDeletePaths: [],
       updatedAt: nowMs,
     });
@@ -985,6 +1179,11 @@ export interface TelegramResumeMenuRuntime<TContext> {
     replyToMessageId: number,
     ctx: TContext,
   ) => Promise<void>;
+  openDeleteMenu: (
+    chatId: number,
+    replyToMessageId: number,
+    ctx: TContext,
+  ) => Promise<void>;
   handleCallbackQuery: (
     query: TelegramResumeMenuCallbackQuery,
     ctx: TContext,
@@ -1013,7 +1212,7 @@ export interface TelegramResumeMenuRuntimeDeps<TContext> {
     text?: string,
   ) => Promise<void>;
   injectResumeExec: (sessionPath: string) => Promise<void>;
-  deleteSessionFile?: (sessionPath: string) => Promise<void>;
+  deleteSessionFile?: (sessionPath: string) => Promise<void | TelegramResumeDeleteResult>;
   store?: TelegramResumeMenuStore;
 }
 
@@ -1064,10 +1263,16 @@ export function defaultTelegramResumeMenuListSessions(
   return SessionManager.list(cwd);
 }
 
-export function defaultTelegramResumeMenuDeleteSessionFile(
+export async function defaultTelegramResumeMenuDeleteSessionFile(
   sessionPath: string,
-): Promise<void> {
-  return unlink(sessionPath);
+): Promise<TelegramResumeDeleteResult> {
+  const trashArgs = sessionPath.startsWith("-") ? ["--", sessionPath] : [sessionPath];
+  const trashResult = spawnSync("trash", trashArgs, { encoding: "utf-8" });
+  if (trashResult.status === 0 || !existsSync(sessionPath)) {
+    return { method: "trash" };
+  }
+  await unlink(sessionPath);
+  return { method: "unlink" };
 }
 
 export interface TelegramResumeMenuRuntimePiContextDeps<TContext> {
@@ -1121,6 +1326,33 @@ export function createTelegramResumeMenuRuntime<TContext>(
           return deps.getCurrentSessionFile(ctx);
         },
         listSessions,
+        sendResumeMenu: function sendResumeMenuForContext(text, replyMarkup) {
+          return deps.sendInteractiveMessage(
+            chatId,
+            text,
+            "html",
+            replyMarkup,
+          );
+        },
+        storeState: store.set,
+      });
+    },
+    openDeleteMenu: function openDeleteMenuForContext(
+      chatId,
+      _replyToMessageId,
+      ctx,
+    ) {
+      return openTelegramResumeMenu({
+        chatId,
+        getCwd: function getCwdForContext() {
+          return deps.getCwd(ctx);
+        },
+        getCurrentSessionFile: function getSessionFileForContext() {
+          return deps.getCurrentSessionFile(ctx);
+        },
+        listSessions,
+        mode: "delete",
+        deleteStyle: "single",
         sendResumeMenu: function sendResumeMenuForContext(text, replyMarkup) {
           return deps.sendInteractiveMessage(
             chatId,
