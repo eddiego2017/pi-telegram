@@ -8,6 +8,7 @@ import * as Api from "./lib/api.ts";
 import * as CommandTemplates from "./lib/command-templates.ts";
 import * as Commands from "./lib/commands.ts";
 import * as Config from "./lib/config.ts";
+import * as DumpExport from "./lib/dump-export.ts";
 import {
   createTelegramExtensionSectionRegistry,
   setGlobalTelegramSectionRegistry,
@@ -19,6 +20,7 @@ import * as Keyboard from "./lib/keyboard.ts";
 import * as Lifecycle from "./lib/lifecycle.ts";
 import * as Locks from "./lib/locks.ts";
 import * as Media from "./lib/media.ts";
+import * as MenuDump from "./lib/menu-dump.ts";
 import * as MenuQueue from "./lib/menu-queue.ts";
 import * as MenuResume from "./lib/menu-resume.ts";
 import * as MenuSession from "./lib/menu-session.ts";
@@ -209,6 +211,9 @@ export default function (pi: Pi.ExtensionAPI) {
   // --- Message Delivery & Preview ---
 
   const sendTreeExportFiles = TreeExport.createTelegramTreeExportFileSender({
+    sendMultipart: callMultipart,
+  });
+  const sendDumpExportFiles = DumpExport.createTelegramDumpExportFileSender({
     sendMultipart: callMultipart,
   });
 
@@ -418,6 +423,18 @@ export default function (pi: Pi.ExtensionAPI) {
     setBranchName: treeBranchMutators.setBranchName,
     deleteBranch: treeBranchMutators.deleteBranch,
   });
+  const dumpMenuRuntime = MenuDump.createTelegramDumpMenuRuntime<
+    Pi.ExtensionContext
+  >({
+    getSnapshot: Pi.getExtensionContextSessionSnapshot,
+    sendInteractiveMessage,
+    editInteractiveMessage,
+    answerCallbackQuery,
+    renderDumpExport: DumpExport.renderTelegramDumpExportFiles,
+    sendDumpExportFiles,
+    publishDumpGist: DumpExport.publishTelegramDumpGist,
+    deleteDumpGist: DumpExport.deleteTelegramDumpGist,
+  });
   const notifyResumeOutcome = MenuResume.createTelegramResumeOutcomeNotifier({
     getAllowedUserId: configStore.getAllowedUserId,
     sendTextReply,
@@ -464,6 +481,8 @@ export default function (pi: Pi.ExtensionAPI) {
     openTreeMenu: treeMenuRuntime.openTreeMenu,
     treeMenuCallbackHandler: treeMenuRuntime.handleCallbackQuery,
     treeMenuMessageHandler: treeMenuRuntime.handleTextMessage,
+    openDumpMenu: dumpMenuRuntime.openDumpMenu,
+    dumpMenuCallbackHandler: dumpMenuRuntime.handleCallbackQuery,
     sectionRegistry,
     buttonActionStore,
     inboundHandlerRuntime,

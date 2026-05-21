@@ -7,6 +7,10 @@
 import { unlink } from "node:fs/promises";
 
 import { pairTelegramUserIfNeeded } from "./config.ts";
+import {
+  parseTelegramDumpTurnLimit,
+  type TelegramDumpMenuRuntime,
+} from "./menu-dump.ts";
 import { parseTelegramResumeFilterTokens } from "./menu-resume.ts";
 import type { TelegramSessionDeleteOutcome } from "./menu-session.ts";
 import {
@@ -48,6 +52,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   resume: "📂",
   session: "🧭",
   tree: "🌳",
+  dump: "🧾",
   name: "🏷️",
   queue: "🔢",
   next: "⏩",
@@ -133,6 +138,13 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       description: formatTelegramBotCommandDescription(
         "tree",
         "Rewind current session tree",
+      ),
+    },
+    {
+      command: "dump",
+      description: formatTelegramBotCommandDescription(
+        "dump",
+        "Export visible transcript",
       ),
     },
     {
@@ -489,6 +501,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "resume",
   "session",
   "tree",
+  "dump",
   "name",
   "model",
   "llm",
@@ -528,6 +541,7 @@ export type TelegramCommandAction =
   | { kind: "resume"; args: string; executionMode: "immediate" }
   | { kind: "session"; executionMode: "immediate" }
   | { kind: "tree"; executionMode: "immediate" }
+  | { kind: "dump"; args: string; executionMode: "immediate" }
   | { kind: "name"; args: string; executionMode: "immediate" }
   | { kind: "status"; executionMode: "immediate" }
   | { kind: "model"; executionMode: "immediate" }
@@ -555,6 +569,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleResume: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleSession: (message: TMessage, ctx: TContext) => Promise<void>;
   handleTree: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleDump: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleName: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
@@ -697,6 +712,7 @@ export interface TelegramCommandTargetRuntimeDeps<TContext> {
     replyToMessageId: number,
     ctx: TContext,
   ) => Promise<void>;
+  openDumpMenu?: TelegramDumpMenuRuntime<TContext>["openDumpMenu"];
   sendTextReply: (
     chatId: number,
     replyToMessageId: number,
@@ -725,6 +741,11 @@ export interface TelegramCommandTargetRuntime<
   ) => Promise<void>;
   openSessionMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openTreeMenu: (message: TMessage, ctx: TContext) => Promise<void>;
+  openDumpMenu: (
+    message: TMessage,
+    ctx: TContext,
+    turnLimit?: number,
+  ) => Promise<void>;
   sendTextReply: (message: TMessage, text: string) => Promise<void>;
 }
 
@@ -813,6 +834,7 @@ export function createTelegramCommandTargetQueueRuntime<
     openResumeMenu: deps.openResumeMenu,
     openSessionMenu: deps.openSessionMenu,
     openTreeMenu: deps.openTreeMenu,
+    openDumpMenu: deps.openDumpMenu,
     sendTextReply: deps.sendTextReply,
   });
 }
@@ -888,6 +910,23 @@ export function createTelegramCommandTargetRuntime<
         return;
       }
       await deps.openTreeMenu(target.chatId, target.replyToMessageId, ctx);
+    },
+    openDumpMenu: async (message, ctx, turnLimit) => {
+      const target = getTelegramCommandMessageTarget(message);
+      if (!deps.openDumpMenu) {
+        await deps.sendTextReply(
+          target.chatId,
+          target.replyToMessageId,
+          "Dump menu is unavailable.",
+        );
+        return;
+      }
+      await deps.openDumpMenu(
+        target.chatId,
+        target.replyToMessageId,
+        ctx,
+        turnLimit ? { turnLimit } : {},
+      );
     },
     sendTextReply: async (message, text) => {
       const target = getTelegramCommandMessageTarget(message);
@@ -970,6 +1009,11 @@ export interface TelegramCommandRuntimeDeps<
   ) => Promise<void>;
   openSessionMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openTreeMenu: (message: TMessage, ctx: TContext) => Promise<void>;
+  openDumpMenu: (
+    message: TMessage,
+    ctx: TContext,
+    turnLimit?: number,
+  ) => Promise<void>;
   getSessionName: (ctx: TContext) => string | undefined;
   setSessionName: (name: string, ctx: TContext) => void | Promise<void>;
   getAllowedUserId: () => number | undefined;
@@ -991,6 +1035,7 @@ export const TELEGRAM_APP_MENU_INTRO_HTML = [
   `${formatTelegramCommandEmojiPrefix("resume")}/resume — Resume/manage previous sessions`,
   `${formatTelegramCommandEmojiPrefix("session")}/session — Show current session`,
   `${formatTelegramCommandEmojiPrefix("tree")}/tree — Rewind current session tree`,
+  `${formatTelegramCommandEmojiPrefix("dump")}/dump [N] — Export visible transcript`,
   `${formatTelegramCommandEmojiPrefix("name")}/name — Set current session name`,
   `${formatTelegramCommandEmojiPrefix("llm")}/llm — List available LLM models`,
   `${formatTelegramCommandEmojiPrefix("next")}/next — Force next turn`,
@@ -1067,6 +1112,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   resume: { kind: "resume", args: "", executionMode: "immediate" },
   session: { kind: "session", executionMode: "immediate" },
   tree: { kind: "tree", executionMode: "immediate" },
+  dump: { kind: "dump", args: "", executionMode: "immediate" },
   name: { kind: "name", args: "", executionMode: "immediate" },
   model: { kind: "model", executionMode: "immediate" },
   llm: { kind: "llm", args: "", executionMode: "immediate" },
@@ -1084,7 +1130,12 @@ export function buildTelegramCommandAction(
     return { kind: "ignore", executionMode: "ignored" };
   }
   const baseAction = TELEGRAM_COMMAND_ACTIONS[commandName];
-  if (baseAction.kind === "llm" || baseAction.kind === "name" || baseAction.kind === "resume") {
+  if (
+    baseAction.kind === "llm" ||
+    baseAction.kind === "name" ||
+    baseAction.kind === "resume" ||
+    baseAction.kind === "dump"
+  ) {
     return { ...baseAction, args: args ?? "" };
   }
   return baseAction;
@@ -1519,6 +1570,9 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
     case "tree":
       await deps.handleTree(message, ctx);
       return true;
+    case "dump":
+      await deps.handleDump(message, action.args, ctx);
+      return true;
     case "name":
       await deps.handleName(message, action.args, ctx);
       return true;
@@ -1558,6 +1612,7 @@ export interface TelegramCommandHandlerTargetRuntimeDeps<
       | "openResumeMenu"
       | "openSessionMenu"
       | "openTreeMenu"
+      | "openDumpMenu"
       | "sendTextReply"
       | "registerBotCommands"
     >,
@@ -1594,6 +1649,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     openResumeMenu: deps.openResumeMenu,
     openSessionMenu: deps.openSessionMenu,
     openTreeMenu: deps.openTreeMenu,
+    openDumpMenu: deps.openDumpMenu,
     sendTextReply: deps.sendTextReply,
   });
   return createTelegramCommandHandler({
@@ -1630,6 +1686,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     openResumeMenu: commandTargetRuntime.openResumeMenu,
     openSessionMenu: commandTargetRuntime.openSessionMenu,
     openTreeMenu: commandTargetRuntime.openTreeMenu,
+    openDumpMenu: commandTargetRuntime.openDumpMenu,
     getSessionName: deps.getSessionName,
     setSessionName: deps.setSessionName,
     getAllowedUserId: deps.getAllowedUserId,
@@ -1804,6 +1861,14 @@ async function handleTelegramCommandRuntime<
       },
       handleTree: async (nextMessage, commandCtx) => {
         await deps.openTreeMenu(nextMessage, commandCtx);
+      },
+      handleDump: async (nextMessage, args, commandCtx) => {
+        const turnLimit = parseTelegramDumpTurnLimit(args);
+        if (turnLimit === null) {
+          await deps.sendTextReply(nextMessage, "Usage: /dump or /dump 20");
+          return;
+        }
+        await deps.openDumpMenu(nextMessage, commandCtx, turnLimit);
       },
       handleName: async (nextMessage, args, commandCtx) => {
         await handleTelegramSessionNameCommand<TContext>({

@@ -11,6 +11,7 @@ import type { TelegramSectionRegistry } from "./extension-sections.ts";
 import type { TelegramInboundHandlerRuntime } from "./inbound-handlers.ts";
 import * as Media from "./media.ts";
 import * as Menu from "./menu.ts";
+import * as MenuDump from "./menu-dump.ts";
 import * as MenuSession from "./menu-session.ts";
 import * as MenuTree from "./menu-tree.ts";
 import * as Model from "./model.ts";
@@ -31,6 +32,7 @@ export type TelegramRoutedMessage = Updates.TelegramUpdateMessage &
 
 export type TelegramRoutedCallbackQuery = Updates.TelegramCallbackQuery &
   Menu.MenuCallbackQuery &
+  MenuDump.TelegramDumpMenuCallbackQuery &
   MenuSession.TelegramSessionMenuCallbackQuery &
   MenuTree.TelegramTreeMenuCallbackQuery;
 
@@ -91,6 +93,10 @@ export interface TelegramInboundRouteRuntimeDeps<
     query: TCallbackQuery,
     ctx: TContext,
   ) => Promise<boolean>;
+  dumpMenuCallbackHandler?: (
+    query: TCallbackQuery,
+    ctx: TContext,
+  ) => Promise<boolean>;
   treeMenuMessageHandler?: (
     message: TMessage,
     ctx: TContext,
@@ -111,6 +117,7 @@ export interface TelegramInboundRouteRuntimeDeps<
     replyToMessageId: number,
     ctx: TContext,
   ) => Promise<void>;
+  openDumpMenu?: MenuDump.TelegramDumpMenuRuntime<TContext>["openDumpMenu"];
   buttonActionStore?: OutboundHandlers.TelegramButtonActionStore;
   inboundHandlerRuntime: TelegramInboundHandlerRuntime<TContext>;
   updateStatus: (ctx: TContext, error?: string) => void;
@@ -191,6 +198,7 @@ const TELEGRAM_OWNED_CALLBACK_PREFIXES = [
   "queue:",
   "resume:",
   "delete:",
+  "dump:",
   "section:",
   "session:",
   "settings:",
@@ -327,6 +335,8 @@ export function createTelegramInboundRouteRuntime<
     if (handledBySession) return;
     const handledByTree = await deps.treeMenuCallbackHandler?.(query, ctx);
     if (handledByTree) return;
+    const handledByDump = await deps.dumpMenuCallbackHandler?.(query, ctx);
+    if (handledByDump) return;
     const callbackData = query.data;
     if (
       deps.sendUserMessage &&
@@ -450,6 +460,7 @@ export function createTelegramInboundRouteRuntime<
     openResumeMenu: deps.openResumeMenu,
     openSessionMenu: deps.openSessionMenu,
     openTreeMenu: deps.openTreeMenu,
+    openDumpMenu: deps.openDumpMenu,
     getAllowedUserId: deps.configStore.getAllowedUserId,
     setAllowedUserId: deps.configStore.setAllowedUserId,
     setMyCommands: deps.setMyCommands,

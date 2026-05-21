@@ -95,6 +95,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.name, "🏷️");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.session, "🧭");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.tree, "🌳");
+  assert.deepEqual(TELEGRAM_COMMAND_EMOJI.dump, "🧾");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.reload, "🔄");
   assert.equal(formatTelegramCommandEmojiPrefix("model"), "🤖 ");
   const expectedBuiltins = [
@@ -112,6 +113,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
     { command: "resume", description: "📂 Resume/manage sessions" },
     { command: "session", description: "🧭 Show current session" },
     { command: "tree", description: "🌳 Rewind current session tree" },
+    { command: "dump", description: "🧾 Export visible transcript" },
     { command: "name", description: "🏷️ Set current session name" },
     { command: "llm", description: "🧬 List available LLM models" },
     {
@@ -687,6 +689,11 @@ test("Command helpers build command actions", () => {
     kind: "session",
     executionMode: "immediate",
   });
+  assert.deepEqual(buildTelegramCommandAction("dump", "20"), {
+    kind: "dump",
+    args: "20",
+    executionMode: "immediate",
+  });
   assert.deepEqual(buildTelegramCommandAction("resume", "apple cat"), {
     kind: "resume",
     args: "apple cat",
@@ -719,6 +726,7 @@ test("Command execution mode contract keeps Telegram controls immediate", () => 
     ["model", "immediate"],
     ["name", "immediate"],
     ["session", "immediate"],
+    ["dump", "immediate"],
     ["unknown", "ignored"],
     [undefined, "ignored"],
   ];
@@ -1268,6 +1276,13 @@ test("Command runtime routes commands through runtime ports", async () => {
     openTreeMenu: async (nextMessage: typeof message) => {
       events.push(`tree:${nextMessage.chat.id}`);
     },
+    openDumpMenu: async (
+      nextMessage: typeof message,
+      _ctx: { idle: boolean },
+      turnLimit?: number,
+    ) => {
+      events.push(`dump:${nextMessage.chat.id}:${turnLimit ?? "all"}`);
+    },
     getAllowedUserId: () => allowedUserId,
     setAllowedUserId: (userId: number) => {
       allowedUserId = userId;
@@ -1472,6 +1487,9 @@ test("Command helpers execute command actions through provided handlers", async 
     handleTree: async () => {
       events.push("tree");
     },
+    handleDump: async (_message: unknown, args: string) => {
+      events.push(`dump:${args}`);
+    },
     handleName: async (_message: unknown, args: string) => {
       events.push(`name:${args}`);
     },
@@ -1530,12 +1548,22 @@ test("Command helpers execute command actions through provided handlers", async 
     ),
     true,
   );
+  assert.equal(
+    await executeTelegramCommandAction(
+      { kind: "dump", args: "20", executionMode: "immediate" },
+      {},
+      {},
+      deps,
+    ),
+    true,
+  );
   assert.deepEqual(events, [
     "stop",
     "help:start",
     "reload",
     "name:label",
     "resume:apple cat",
+    "dump:20",
   ]);
 });
 

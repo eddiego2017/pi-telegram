@@ -198,9 +198,10 @@ The token is an implementation detail. Section authors **never** write `section:
 7. Resume manage-mode deletion callbacks (`delete:*`)
 8. Session-center callbacks (`session:*`)
 9. Session-tree callbacks (`tree:*`)
-10. Section callbacks (`section:*`) — dispatched inside the built-in menu handler before normal `menu:*` actions
-11. Built-in menu callbacks (`menu:*`, `model:*`, `thinking:*`, `status:*`)
-12. Unknown callbacks fall back to `[callback]` prompt text
+10. Transcript dump callbacks (`dump:*`)
+11. Section callbacks (`section:*`) — dispatched inside the built-in menu handler before normal `menu:*` actions
+12. Built-in menu callbacks (`menu:*`, `model:*`, `thinking:*`, `status:*`)
+13. Unknown callbacks fall back to `[callback]` prompt text
 
 ### Handler return values
 
@@ -358,7 +359,7 @@ section:0:settings:open          → open settings root
 section:0:<action>:<payload>     → forwarded to handleCallback
 ```
 
-`section:` is listed in `TELEGRAM_OWNED_CALLBACK_PREFIXES` alongside `menu:`, `model:`, `settings:`, `status:`, `tgbtn:`, `thinking:`, `queue:`, `resume:`, `delete:`, `session:`, and `tree:`. Layered extensions must not use this prefix.
+`section:` is listed in `TELEGRAM_OWNED_CALLBACK_PREFIXES` alongside `menu:`, `model:`, `settings:`, `status:`, `tgbtn:`, `thinking:`, `queue:`, `resume:`, `delete:`, `session:`, `tree:`, and `dump:`. Layered extensions must not use this prefix.
 
 ### Inline keyboard layout
 

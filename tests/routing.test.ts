@@ -222,6 +222,7 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
     "thinking:set:high",
     "status:model",
     "queue:list",
+    "dump:txt",
   ];
   for (const [index, data] of ownedCallbackData.entries()) {
     await routeRuntime.handleUpdate(

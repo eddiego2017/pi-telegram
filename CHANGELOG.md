@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `[Dump Menu]` Added Telegram-side `/dump [N]`, a transcript export menu for the current active branch. `/dump` exports all visible User/Agent text, `/dump 20` exports the latest 20 user turns, and the transcript excludes tools, thinking, system metadata, compact summaries, and Telegram reply/attachment/output blocks. Outputs are available as Telegram TXT documents or privacy-confirmed secret GitHub Gists with delete support.
+- `[Commands]` The bot command menu now lists 🧾 `/dump`, `dump` is Telegram-reserved, and `dump:` is a pi-telegram-owned callback prefix alongside `session:`/`tree:`/menu prefixes.
+- `[Tests]` Added `tests/dump-export.test.ts` and `tests/menu-dump.test.ts` for transcript extraction, turn limiting, TXT file generation, menu rendering, and TXT/Gist callback flows; updated command and routing tests for `/dump` ownership.
 - `[Tree Menu]` Added branch labels and soft deletion to `/tree` Branches: branch keyboard buttons now show the saved branch label or short leaf id, branch detail supports reply-to-menu renaming through π entry labels, and deleting an inactive branch hides it from Telegram via session metadata without rewriting the append-only session file.
 - `[Tests]` Extended `/tree` regressions for branch labels, branch button fallback, soft-delete metadata, and reply-based branch rename handling.
 - `[Session Menu]` Fixed current-session delete completion feedback: the internal delete-current command now uses π's post-replacement `withSession` context before deleting the previous session file and sending the Telegram outcome.
