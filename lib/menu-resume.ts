@@ -156,7 +156,7 @@ export function parseTelegramResumeFilterTokens(args: string): string[] {
 
 function buildTelegramResumeEntrySearchText(entry: TelegramResumeMenuEntry): string {
   return normalizeTelegramResumeFilterText(
-    [entry.name, entry.firstMessage].filter(Boolean).join("\n"),
+    entry.name || entry.firstMessage || "",
   );
 }
 

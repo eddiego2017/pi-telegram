@@ -83,23 +83,29 @@ test("parseTelegramResumeFilterTokens splits whitespace filters", () => {
   ]);
 });
 
-test("filterTelegramResumeMenuEntries searches name and first user message", () => {
-  const entries = makeEntries(4);
+test("filterTelegramResumeMenuEntries searches display title only", () => {
+  const entries = makeEntries(5);
   entries[0].name = "Apple Cat";
   entries[0].firstMessage = "unrelated";
   entries[1].name = "Apple";
-  entries[1].firstMessage = "mouse";
+  entries[1].firstMessage = "cat only in hidden first message";
   entries[2].firstMessage = "cat apple";
   entries[3].firstMessage = "apple dog";
+  entries[4].name = "resume + filter";
+  entries[4].firstMessage = "quoted darren text";
   const result = filterTelegramResumeMenuEntries(entries, ["apple", "cat"]);
   assert.deepEqual(
     result.entries.map((entry) => entry.index),
     [0, 2],
   );
   assert.deepEqual(result.trace, [
-    { filter: "apple", before: 4, after: 4 },
+    { filter: "apple", before: 5, after: 4 },
     { filter: "cat", before: 4, after: 2 },
   ]);
+  assert.deepEqual(
+    filterTelegramResumeMenuEntries(entries, ["darren"]).entries.map((entry) => entry.index),
+    [],
+  );
 });
 
 test("buildTelegramResumeMenuText renders filter summary and no-match trace", () => {
