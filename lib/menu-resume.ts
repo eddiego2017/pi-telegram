@@ -67,6 +67,7 @@ export interface TelegramResumeMenuEntry {
   sessionId: string;
   name?: string;
   firstMessage: string;
+  allMessagesText?: string;
   messageCount: number;
   /** Count of inactive leaf branches in the session tree. Hidden when zero/undefined. */
   inactiveBranchCount?: number;
@@ -82,8 +83,10 @@ export interface TelegramResumeFilterTraceItem {
 export interface TelegramResumeMenuState {
   chatId: number;
   messageId: number;
-  /** Full session list cached at menu open; pagination slices this in-memory. */
+  /** Filtered session list cached at menu open; pagination slices this in-memory. */
   sessions: TelegramResumeMenuEntry[];
+  /** Unfiltered session list cached for toggling search scope. */
+  allSessions?: TelegramResumeMenuEntry[];
   /** Zero-based current page index. */
   page: number;
   /** Path of the session that was active when the menu opened, filtered out. */
@@ -98,6 +101,8 @@ export interface TelegramResumeMenuState {
   selectedDeletePaths?: string[];
   /** Ordered filters applied when this menu opened. */
   filters?: string[];
+  /** Whether filters search full session text instead of the displayed headline. */
+  fullTextSearch?: boolean;
   /** Per-filter before/after counts for rendering the filtered menu header. */
   filterTrace?: TelegramResumeFilterTraceItem[];
   updatedAt: number;
@@ -154,15 +159,25 @@ export function parseTelegramResumeFilterTokens(args: string): string[] {
     .filter((token) => normalizeTelegramResumeFilterText(token).length > 0);
 }
 
-function buildTelegramResumeEntrySearchText(entry: TelegramResumeMenuEntry): string {
+function buildTelegramResumeEntryHeadline(entry: TelegramResumeMenuEntry): string {
+  return entry.name || entry.firstMessage || "";
+}
+
+function buildTelegramResumeEntrySearchText(
+  entry: TelegramResumeMenuEntry,
+  fullTextSearch = false,
+): string {
+  const headline = buildTelegramResumeEntryHeadline(entry);
+  if (!fullTextSearch) return normalizeTelegramResumeFilterText(headline);
   return normalizeTelegramResumeFilterText(
-    entry.name || entry.firstMessage || "",
+    [headline, entry.allMessagesText].filter(Boolean).join("\n"),
   );
 }
 
 export function filterTelegramResumeMenuEntries(
   entries: TelegramResumeMenuEntry[],
   filters: readonly string[],
+  fullTextSearch = false,
 ): { entries: TelegramResumeMenuEntry[]; trace: TelegramResumeFilterTraceItem[] } {
   let filtered = entries;
   const trace: TelegramResumeFilterTraceItem[] = [];
@@ -171,7 +186,7 @@ export function filterTelegramResumeMenuEntries(
     if (!normalizedFilter) continue;
     const before = filtered.length;
     filtered = filtered.filter((entry) =>
-      buildTelegramResumeEntrySearchText(entry).includes(normalizedFilter)
+      buildTelegramResumeEntrySearchText(entry, fullTextSearch).includes(normalizedFilter)
     );
     trace.push({ filter: cleanText(rawFilter), before, after: filtered.length });
   }
@@ -312,6 +327,50 @@ function formatTelegramResumeHighlightedSummary(
   return parts.join("");
 }
 
+function telegramResumeTextContainsFilter(text: string, filter: string): boolean {
+  const normalizedFilter = cleanText(filter).toLowerCase();
+  if (!normalizedFilter) return true;
+  return text.toLowerCase().includes(normalizedFilter);
+}
+
+function findTelegramResumeSnippetFilter(
+  summary: string,
+  filterTrace: readonly TelegramResumeFilterTraceItem[],
+): string | undefined {
+  return filterTrace.find((item) => !telegramResumeTextContainsFilter(summary, item.filter))?.filter;
+}
+
+function buildTelegramResumeMatchSnippet(
+  source: string,
+  filter: string,
+): string | undefined {
+  const cleanSource = cleanText(source);
+  const normalizedFilter = cleanText(filter).toLowerCase();
+  if (!cleanSource || !normalizedFilter) return undefined;
+  const index = cleanSource.toLowerCase().indexOf(normalizedFilter);
+  if (index < 0) return undefined;
+  const start = Math.max(0, index - 14);
+  const end = Math.min(cleanSource.length, index + normalizedFilter.length + 22);
+  return `${start > 0 ? "…" : ""}${cleanSource.slice(start, end)}${end < cleanSource.length ? "…" : ""}`;
+}
+
+function formatTelegramResumeMatchSnippet(
+  entry: TelegramResumeMenuEntry,
+  summary: string,
+  filterTrace: readonly TelegramResumeFilterTraceItem[],
+  fullTextSearch: boolean,
+): string | undefined {
+  if (filterTrace.length === 0) return undefined;
+  const missingFilter = findTelegramResumeSnippetFilter(summary, filterTrace);
+  if (!missingFilter) return undefined;
+  const source = fullTextSearch
+    ? [entry.allMessagesText, buildTelegramResumeEntryHeadline(entry)].filter(Boolean).join(" ")
+    : buildTelegramResumeEntryHeadline(entry);
+  const snippet = buildTelegramResumeMatchSnippet(source, missingFilter);
+  if (!snippet || snippet === summary) return undefined;
+  return `↳ ${formatTelegramResumeHighlightedSummary(snippet, filterTrace)}`;
+}
+
 function formatTelegramResumeLine(
   entry: TelegramResumeMenuEntry,
   pageIndex: number,
@@ -320,18 +379,20 @@ function formatTelegramResumeLine(
   selected: boolean,
   deleteStyle: TelegramResumeMenuDeleteStyle,
   filterTrace: readonly TelegramResumeFilterTraceItem[] = [],
+  fullTextSearch = false,
 ): string {
   const marker = formatTelegramResumePageMarker(pageIndex);
   const selectedPrefix = mode === "delete" && deleteStyle === "multi" ? `${selected ? "☑" : "☐"} ` : "";
   const meta = formatTelegramResumeMeta(entry, nowMs);
-  const summary = truncateDisplay(
-    entry.name || entry.firstMessage || "(no preview)",
-    TELEGRAM_RESUME_MENU_LINE_WIDTH,
-  );
+  const headline = buildTelegramResumeEntryHeadline(entry) || "(no preview)";
+  const summary = truncateDisplay(headline, TELEGRAM_RESUME_MENU_LINE_WIDTH);
   const renderedSummary = mode === "open"
     ? formatTelegramResumeHighlightedSummary(summary, filterTrace)
     : escapeHtml(summary);
-  return `${escapeHtml(selectedPrefix)}${escapeHtml(marker)} <code>${escapeHtml(meta)}</code>\n${renderedSummary}`;
+  const snippet = mode === "open"
+    ? formatTelegramResumeMatchSnippet(entry, summary, filterTrace, fullTextSearch)
+    : undefined;
+  return `${escapeHtml(selectedPrefix)}${escapeHtml(marker)} <code>${escapeHtml(meta)}</code>\n${renderedSummary}${snippet ? `\n${snippet}` : ""}`;
 }
 
 function formatTelegramResumeButtonText(
@@ -382,9 +443,11 @@ function formatTelegramResumeFilterChip(filter: string): string {
 
 function formatTelegramResumeFilterSummary(
   trace: readonly TelegramResumeFilterTraceItem[],
+  fullTextSearch = false,
 ): string | undefined {
   if (trace.length === 0) return undefined;
-  return `🔎 ${trace.map((item) => formatTelegramResumeFilterChip(item.filter)).join(" → ")}`;
+  const scope = fullTextSearch ? "full" : "title";
+  return `🔎 ${trace.map((item) => formatTelegramResumeFilterChip(item.filter)).join(" → ")} · ${scope}`;
 }
 
 function formatTelegramResumeFilterTrace(
@@ -408,9 +471,10 @@ export function buildTelegramResumeMenuText(
   selectedDeletePaths: string[] = [],
   deleteStyle: TelegramResumeMenuDeleteStyle = "multi",
   filterTrace: readonly TelegramResumeFilterTraceItem[] = [],
+  fullTextSearch = false,
 ): string {
   const title = getTelegramResumeMenuTitle(mode);
-  const filterSummary = mode === "open" ? formatTelegramResumeFilterSummary(filterTrace) : undefined;
+  const filterSummary = mode === "open" ? formatTelegramResumeFilterSummary(filterTrace, fullTextSearch) : undefined;
   if (entries.length === 0) {
     if (filterTrace.length > 0) {
       return [
@@ -448,6 +512,7 @@ export function buildTelegramResumeMenuText(
       selectedPaths.has(entry.path),
       deleteStyle,
       filterTrace,
+      fullTextSearch,
     ),
   );
   return [
@@ -474,6 +539,8 @@ export function buildTelegramResumeMenuReplyMarkup(
   selectedDeletePaths: string[] = [],
   deleteStyle: TelegramResumeMenuDeleteStyle = "multi",
   source?: TelegramResumeMenuSource,
+  filters: readonly string[] = [],
+  fullTextSearch = false,
 ): TelegramResumeMenuReplyMarkup {
   const effectiveSource = source ?? (mode === "delete" ? "delete" : "resume");
   const isDeleteMenu = mode === "delete" && effectiveSource === "delete";
@@ -521,6 +588,14 @@ export function buildTelegramResumeMenuReplyMarkup(
   if (entries.length === 0) {
     rows.push([{ text: "(no sessions)", callback_data: `${callbackPrefix}:noop` }]);
   }
+  if (!isDeleteMenu && filters.length > 0) {
+    rows.push([
+      {
+        text: `Full text: ${fullTextSearch ? "ON" : "off"}`,
+        callback_data: "resume:fulltext:toggle",
+      },
+    ]);
+  }
   if (isDeleteMenu) {
     rows.push([{ text: "Cancel", callback_data: "delete:cancel-menu" }]);
   }
@@ -566,6 +641,7 @@ function buildResumeMenuEntries(
     sessionId: s.id,
     name: s.name,
     firstMessage: s.firstMessage,
+    allMessagesText: s.allMessagesText,
     messageCount: s.messageCount,
     modified: s.modified,
   }));
@@ -820,6 +896,7 @@ export interface TelegramResumeMenuOpenDeps {
   deleteStyle?: TelegramResumeMenuDeleteStyle;
   source?: TelegramResumeMenuSource;
   filters?: readonly string[];
+  fullTextSearch?: boolean;
   now?: () => number;
 }
 
@@ -832,12 +909,15 @@ export async function openTelegramResumeMenu(
   const sessions = await deps.listSessions(cwd);
   const mode = deps.mode ?? "open";
   const filters = mode === "open" ? [...(deps.filters ?? [])] : [];
+  const fullTextSearch = mode === "open" && filters.length > 0
+    ? deps.fullTextSearch ?? false
+    : false;
   const unfilteredEntries = buildResumeMenuEntries(
     sessions,
     currentSessionFile,
     filters.length > 0 ? null : TELEGRAM_RESUME_MENU_MAX_ITEMS,
   );
-  const filterResult = filterTelegramResumeMenuEntries(unfilteredEntries, filters);
+  const filterResult = filterTelegramResumeMenuEntries(unfilteredEntries, filters, fullTextSearch);
   const limitedEntries = reindexTelegramResumeMenuEntries(
     filterResult.entries.slice(0, TELEGRAM_RESUME_MENU_MAX_ITEMS),
   );
@@ -855,6 +935,7 @@ export async function openTelegramResumeMenu(
     [],
     deleteStyle,
     filterResult.trace,
+    fullTextSearch,
   );
   const replyMarkup = buildTelegramResumeMenuReplyMarkup(
     entries,
@@ -864,6 +945,8 @@ export async function openTelegramResumeMenu(
     [],
     deleteStyle,
     source,
+    filters,
+    fullTextSearch,
   );
   const messageId = await deps.sendResumeMenu(text, replyMarkup);
   if (messageId === undefined) return;
@@ -871,6 +954,7 @@ export async function openTelegramResumeMenu(
     chatId: deps.chatId,
     messageId,
     sessions: entries,
+    allSessions: filters.length > 0 ? unfilteredEntries : undefined,
     page,
     currentSessionFile,
     mode,
@@ -878,6 +962,7 @@ export async function openTelegramResumeMenu(
     source,
     selectedDeletePaths: [],
     filters,
+    fullTextSearch,
     filterTrace: filterResult.trace,
     updatedAt: now(),
   });
@@ -962,6 +1047,8 @@ export async function handleTelegramResumeMenuCallback(
     const deleteStyle = state.deleteStyle ?? "multi";
     const source = state.source ?? "resume";
     const selectedDeletePaths = state.selectedDeletePaths ?? [];
+    const filters = state.filters ?? [];
+    const fullTextSearch = state.fullTextSearch ?? false;
     const nowMs = now();
     const text = buildTelegramResumeMenuText(
       state.sessions,
@@ -972,6 +1059,7 @@ export async function handleTelegramResumeMenuCallback(
       selectedDeletePaths,
       deleteStyle,
       state.filterTrace ?? [],
+      fullTextSearch,
     );
     const replyMarkup = buildTelegramResumeMenuReplyMarkup(
       state.sessions,
@@ -981,6 +1069,8 @@ export async function handleTelegramResumeMenuCallback(
       selectedDeletePaths,
       deleteStyle,
       source,
+      filters,
+      fullTextSearch,
     );
     await deps.editResumeMessage(chatId, messageId, text, replyMarkup);
     deps.setState({
@@ -990,9 +1080,74 @@ export async function handleTelegramResumeMenuCallback(
       deleteStyle,
       source,
       selectedDeletePaths,
+      filters,
+      fullTextSearch,
       updatedAt: nowMs,
     });
     await deps.answerCallbackQuery(query.id);
+    return true;
+  }
+  if (data === "resume:fulltext:toggle") {
+    const filters = state.filters ?? [];
+    if (filters.length === 0) {
+      await deps.answerCallbackQuery(query.id, "No active filters.");
+      return true;
+    }
+    const allSessions = state.allSessions;
+    if (!allSessions) {
+      await deps.answerCallbackQuery(query.id, "Reopen /resume to toggle search.");
+      return true;
+    }
+    const fullTextSearch = !(state.fullTextSearch ?? false);
+    const filterResult = filterTelegramResumeMenuEntries(allSessions, filters, fullTextSearch);
+    const limitedEntries = reindexTelegramResumeMenuEntries(
+      filterResult.entries.slice(0, TELEGRAM_RESUME_MENU_MAX_ITEMS),
+    );
+    const entries = await addResumeMenuFileStats(limitedEntries);
+    const cwd = deps.getCwd();
+    const page = 0;
+    const mode: TelegramResumeMenuMode = "open";
+    const deleteStyle = state.deleteStyle ?? "multi";
+    const source = state.source ?? "resume";
+    const nowMs = now();
+    const text = buildTelegramResumeMenuText(
+      entries,
+      cwd,
+      page,
+      mode,
+      nowMs,
+      [],
+      deleteStyle,
+      filterResult.trace,
+      fullTextSearch,
+    );
+    const replyMarkup = buildTelegramResumeMenuReplyMarkup(
+      entries,
+      nowMs,
+      page,
+      mode,
+      [],
+      deleteStyle,
+      source,
+      filters,
+      fullTextSearch,
+    );
+    await deps.editResumeMessage(chatId, messageId, text, replyMarkup);
+    deps.setState({
+      ...state,
+      sessions: entries,
+      allSessions,
+      page,
+      mode,
+      deleteStyle,
+      source,
+      selectedDeletePaths: [],
+      filters,
+      fullTextSearch,
+      filterTrace: filterResult.trace,
+      updatedAt: nowMs,
+    });
+    await deps.answerCallbackQuery(query.id, `Full text search ${fullTextSearch ? "on" : "off"}.`);
     return true;
   }
   if (data === `${prefix}cancel-menu`) {

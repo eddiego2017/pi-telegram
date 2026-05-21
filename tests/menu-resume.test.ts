@@ -93,6 +93,7 @@ test("filterTelegramResumeMenuEntries searches display title only", () => {
   entries[3].firstMessage = "apple dog";
   entries[4].name = "resume + filter";
   entries[4].firstMessage = "quoted darren text";
+  entries[4].allMessagesText = "quoted darren text";
   const result = filterTelegramResumeMenuEntries(entries, ["apple", "cat"]);
   assert.deepEqual(
     result.entries.map((entry) => entry.index),
@@ -106,6 +107,10 @@ test("filterTelegramResumeMenuEntries searches display title only", () => {
     filterTelegramResumeMenuEntries(entries, ["darren"]).entries.map((entry) => entry.index),
     [],
   );
+  assert.deepEqual(
+    filterTelegramResumeMenuEntries(entries, ["darren"], true).entries.map((entry) => entry.index),
+    [4],
+  );
 });
 
 test("buildTelegramResumeMenuText renders filter summary, highlights matches, and no-match trace", () => {
@@ -114,8 +119,13 @@ test("buildTelegramResumeMenuText renders filter summary, highlights matches, an
   entries[1].firstMessage = "apple cat";
   const trace = [{ filter: "darren", before: 2, after: 1 }];
   const text = buildTelegramResumeMenuText(entries, "/cwd", 0, "open", 0, [], "multi", trace);
-  assert.match(text, /🔎 darren/);
+  assert.match(text, /🔎 darren · title/);
   assert.match(text, /<b>Darren<\/b> &lt;call&gt;/);
+  entries[0].name = "resume + filter";
+  entries[0].allMessagesText = "quoted Darren call in hidden session text";
+  const fullText = buildTelegramResumeMenuText(entries, "/cwd", 0, "open", 0, [], "multi", trace, true);
+  assert.match(fullText, /🔎 darren · full/);
+  assert.match(fullText, /↳ quoted <b>Darren<\/b> call/);
   const empty = buildTelegramResumeMenuText([], "/cwd", 0, "open", 0, [], "multi", [
     { filter: "apple", before: 2, after: 1 },
     { filter: "cat", before: 1, after: 0 },
@@ -154,6 +164,7 @@ test("openTelegramResumeMenu filters before applying menu item cap", async () =>
     now: () => 0,
   });
   assert.equal(stored?.sessions.length, 1);
+  assert.equal(stored?.allSessions?.length, 201);
   assert.equal(stored?.sessions[0]?.path, "/sessions/s200.jsonl");
   assert.deepEqual(stored?.filterTrace, [{ filter: "needle", before: 201, after: 1 }]);
   assert.match(sentText, /🔎 needle/);
@@ -378,6 +389,18 @@ test("buildTelegramResumeMenuReplyMarkup omits nav row when single page", () => 
   assert.ok(!flat.some((b) => b.callback_data.startsWith("resume:page:")));
 });
 
+test("buildTelegramResumeMenuReplyMarkup adds full-text toggle for filtered resume menus", () => {
+  const entries = makeEntries(1);
+  const off = buildTelegramResumeMenuReplyMarkup(entries, 0, 0, "open", [], "multi", "resume", ["darren"], false);
+  assert.deepEqual(off.inline_keyboard.at(-1), [
+    { text: "Full text: off", callback_data: "resume:fulltext:toggle" },
+  ]);
+  const on = buildTelegramResumeMenuReplyMarkup(entries, 0, 0, "open", [], "multi", "resume", ["darren"], true);
+  assert.deepEqual(on.inline_keyboard.at(-1), [
+    { text: "Full text: ON", callback_data: "resume:fulltext:toggle" },
+  ]);
+});
+
 function makeState(
   total: number,
   page = 0,
@@ -479,6 +502,42 @@ test("handleTelegramResumeMenuCallback no-ops when page is unchanged", async () 
     deps,
   );
   assert.deepEqual(events, ["answer:cb3:"]);
+});
+
+test("handleTelegramResumeMenuCallback toggles full-text search from cached sessions", async () => {
+  const allSessions = makeEntries(2);
+  allSessions[0].name = "visible needle";
+  allSessions[1].name = "hidden title";
+  allSessions[1].allMessagesText = "needle only appears later";
+  const state: TelegramResumeMenuState = {
+    chatId: 1,
+    messageId: 100,
+    sessions: [allSessions[0]],
+    allSessions,
+    page: 0,
+    currentSessionFile: undefined,
+    filters: ["needle"],
+    fullTextSearch: false,
+    filterTrace: [{ filter: "needle", before: 2, after: 1 }],
+    updatedAt: 0,
+  };
+  const { store, events, deps } = makeCallbackDeps(state);
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "full",
+      data: "resume:fulltext:toggle",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  const updated = store.get(100);
+  assert.equal(updated?.fullTextSearch, true);
+  assert.deepEqual(updated?.sessions.map((entry) => entry.path), [
+    "/sessions/s0.json",
+    "/sessions/s1.json",
+  ]);
+  assert.deepEqual(updated?.filterTrace, [{ filter: "needle", before: 2, after: 2 }]);
+  assert.deepEqual(events, ["edit:1:100:plain", "answer:full:Full text search on."]);
 });
 
 test("handleTelegramResumeMenuCallback opens entry using global index", async () => {
