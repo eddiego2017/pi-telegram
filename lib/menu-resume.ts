@@ -320,7 +320,7 @@ function formatTelegramResumeHighlightedSummary(
   let index = 0;
   for (const range of ranges) {
     if (range.start > index) parts.push(escapeHtml(summary.slice(index, range.start)));
-    parts.push(`<b>${escapeHtml(summary.slice(range.start, range.end))}</b>`);
+    parts.push(`<b><u>${escapeHtml(summary.slice(range.start, range.end))}</u></b>`);
     index = range.end;
   }
   if (index < summary.length) parts.push(escapeHtml(summary.slice(index)));
