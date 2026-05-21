@@ -8,10 +8,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import type {
-  TelegramTreeContentBlock,
-  TelegramTreeSessionEntry,
-  TelegramTreeSnapshot,
+import {
+  collectTelegramTreeDeletedBranchLeafIds,
+  type TelegramTreeContentBlock,
+  type TelegramTreeSessionEntry,
+  type TelegramTreeSnapshot,
 } from "./menu-tree.ts";
 import { buildTelegramMultipartReplyParameters } from "./replies.ts";
 
@@ -220,22 +221,67 @@ function findVisibleAncestorId(
   return undefined;
 }
 
+function collectSoftDeletedExportEntryIds(snapshot: TelegramTreeSnapshot): Set<string> {
+  const deletedLeafIds = collectTelegramTreeDeletedBranchLeafIds(snapshot.entries);
+  if (deletedLeafIds.size === 0) return new Set();
+  const byId = new Map(snapshot.entries.map((entry) => [entry.id, entry] as const));
+  const childIds = new Set(
+    snapshot.entries
+      .map((entry) => entry.parentId)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
+  const activeIds = new Set(snapshot.branch.map((entry) => entry.id));
+  const pathIds = (entryId: string): string[] => {
+    const result: string[] = [];
+    const seen = new Set<string>();
+    let current = byId.get(entryId);
+    while (current && !seen.has(current.id)) {
+      seen.add(current.id);
+      result.push(current.id);
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+    return result;
+  };
+  const retainedAncestorIds = new Set<string>();
+  for (const entry of snapshot.entries) {
+    const isLeaf = !childIds.has(entry.id);
+    const retainedLeaf = isLeaf && !deletedLeafIds.has(entry.id);
+    if (!retainedLeaf && entry.id !== snapshot.leafId) continue;
+    for (const id of pathIds(entry.id)) retainedAncestorIds.add(id);
+  }
+  const hidden = new Set<string>();
+  for (const leafId of deletedLeafIds) {
+    for (const id of pathIds(leafId)) {
+      if (!activeIds.has(id) && !retainedAncestorIds.has(id)) hidden.add(id);
+    }
+  }
+  return hidden;
+}
+
+function getExportEntries(snapshot: TelegramTreeSnapshot): TelegramTreeSessionEntry[] {
+  const hiddenIds = collectSoftDeletedExportEntryIds(snapshot);
+  if (hiddenIds.size === 0) return snapshot.entries;
+  return snapshot.entries.filter((entry) => !hiddenIds.has(entry.id));
+}
+
 function findCurrentVisibleLeafId(snapshot: TelegramTreeSnapshot): string | undefined {
   if (!snapshot.leafId) return undefined;
-  const byId = new Map(snapshot.entries.map((entry) => [entry.id, entry] as const));
-  const visibleIds = new Set(snapshot.entries.filter(isVisiblePromptEntry).map((entry) => entry.id));
+  const entries = getExportEntries(snapshot);
+  const byId = new Map(entries.map((entry) => [entry.id, entry] as const));
+  const visibleIds = new Set(entries.filter(isVisiblePromptEntry).map((entry) => entry.id));
   return findVisibleAncestorId(snapshot.leafId, byId, visibleIds);
 }
 
 function buildExportNodes(snapshot: TelegramTreeSnapshot): ExportNode[] {
-  const byId = new Map(snapshot.entries.map((entry) => [entry.id, entry] as const));
-  const visibleEntries = snapshot.entries.filter(isVisiblePromptEntry);
+  const exportEntries = getExportEntries(snapshot);
+  const byId = new Map(exportEntries.map((entry) => [entry.id, entry] as const));
+  const visibleEntries = exportEntries.filter(isVisiblePromptEntry);
   const visibleIds = new Set(visibleEntries.map((entry) => entry.id));
   const activeIds = new Set(snapshot.branch.map((entry) => entry.id));
   const activeOrderById = new Map(snapshot.branch.map((entry, index) => [entry.id, index] as const));
   const sorted = [...visibleEntries].sort((a, b) => {
-    const ai = snapshot.entries.indexOf(a);
-    const bi = snapshot.entries.indexOf(b);
+    const ai = exportEntries.indexOf(a);
+    const bi = exportEntries.indexOf(b);
     const at = entryTimestampOrder(a, ai);
     const bt = entryTimestampOrder(b, bi);
     return at === bt ? ai - bi : at - bt;

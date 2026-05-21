@@ -52,6 +52,11 @@ export interface PiExtensionApiRuntimePorts {
   setModel: ExtensionAPI["setModel"];
 }
 
+export interface PiTelegramTreeBranchMutators<TContext> {
+  setBranchName(entryId: string, name: string | undefined, ctx: TContext): void;
+  deleteBranch(entryId: string, ctx: TContext): void;
+}
+
 export function createExtensionApiRuntimePorts(
   api: Pick<
     ExtensionAPI,
@@ -70,6 +75,20 @@ export function createExtensionApiRuntimePorts(
     getThinkingLevel: () => api.getThinkingLevel(),
     setThinkingLevel: (level) => api.setThinkingLevel(level),
     setModel: (model) => api.setModel(model),
+  };
+}
+
+export function createTelegramTreeBranchMutators<TContext>(
+  api: Pick<ExtensionAPI, "setLabel" | "appendEntry">,
+  customType: string,
+): PiTelegramTreeBranchMutators<TContext> {
+  return {
+    setBranchName(entryId, name) {
+      api.setLabel(entryId, name);
+    },
+    deleteBranch(entryId) {
+      api.appendEntry(customType, { leafId: entryId, deleted: true });
+    },
   };
 }
 

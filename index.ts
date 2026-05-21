@@ -397,6 +397,10 @@ export default function (pi: Pi.ExtensionAPI) {
     hasQueuedTelegramItems: telegramQueueStore.hasQueuedItems,
     isCompactionInProgress: lifecycle.isCompactionInProgress,
   });
+  const treeBranchMutators = Pi.createTelegramTreeBranchMutators<Pi.ExtensionContext>(
+    pi,
+    MenuTree.TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE,
+  );
   const treeMenuRuntime = MenuTree.buildTelegramTreeMenuRuntime<
     Pi.ExtensionContext
   >({
@@ -410,6 +414,9 @@ export default function (pi: Pi.ExtensionAPI) {
     sendTreeExportFiles,
     publishTreeGist: TreeExport.publishTelegramTreeSvgGist,
     deleteTreeGist: TreeExport.deleteTelegramTreeGist,
+    sendTextReply,
+    setBranchName: treeBranchMutators.setBranchName,
+    deleteBranch: treeBranchMutators.deleteBranch,
   });
   const notifyResumeOutcome = MenuResume.createTelegramResumeOutcomeNotifier({
     getAllowedUserId: configStore.getAllowedUserId,
@@ -456,6 +463,7 @@ export default function (pi: Pi.ExtensionAPI) {
     sessionMenuCallbackHandler: sessionMenuRuntime.handleCallbackQuery,
     openTreeMenu: treeMenuRuntime.openTreeMenu,
     treeMenuCallbackHandler: treeMenuRuntime.handleCallbackQuery,
+    treeMenuMessageHandler: treeMenuRuntime.handleTextMessage,
     sectionRegistry,
     buttonActionStore,
     inboundHandlerRuntime,

@@ -9,6 +9,9 @@ const TELEGRAM_TREE_PAGE_SIZE = 8;
 const TELEGRAM_TREE_SUMMARY_LEN = 42;
 const TELEGRAM_TREE_DETAIL_TEXT_LEN = 2600;
 const TELEGRAM_TREE_BRANCH_PATH_MAX_ITEMS = 5;
+const TELEGRAM_TREE_BRANCH_NAME_LEN = 24;
+const TELEGRAM_TREE_BRANCH_BUTTON_LEN = 18;
+export const TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE = "pi-telegram:tree-branch";
 
 const TELEGRAM_TREE_OPEN_BALLS = [
   "",
@@ -95,6 +98,8 @@ export interface TelegramTreeSessionEntry {
   display?: boolean;
   summary?: string;
   label?: string;
+  targetId?: string;
+  data?: unknown;
 }
 
 export interface TelegramTreeSnapshot {
@@ -124,6 +129,7 @@ export interface TelegramTreeMenuEntry {
   branchPromptOrdinals?: number[];
   forkEntryId?: string;
   leafShortId?: string;
+  branchName?: string;
 }
 
 export interface TelegramTreeMenuState {
@@ -134,6 +140,10 @@ export interface TelegramTreeMenuState {
   view: TelegramTreeView;
   filter: TelegramTreeFilter;
   detailIndex?: number;
+  pendingRename?: {
+    entryIndex: number;
+    entryId: string;
+  };
   publishedGist?: TelegramTreeGistPublishResult;
   updatedAt: number;
 }
@@ -203,6 +213,44 @@ function truncate(s: string, n: number): string {
   const clean = cleanText(s);
   if (clean.length <= n) return clean;
   return clean.slice(0, Math.max(0, n - 1)) + "…";
+}
+
+function normalizeBranchName(name: string | undefined): string | undefined {
+  const clean = cleanText(name ?? "");
+  return clean ? truncate(clean, TELEGRAM_TREE_BRANCH_NAME_LEN) : undefined;
+}
+
+function collectEntryLabels(entries: readonly TelegramTreeSessionEntry[]): Map<string, string> {
+  const labels = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.type !== "label" || typeof entry.targetId !== "string") continue;
+    const label = normalizeBranchName(entry.label);
+    if (label) labels.set(entry.targetId, label);
+    else labels.delete(entry.targetId);
+  }
+  return labels;
+}
+
+function isDeletedBranchMetadata(data: unknown): data is { leafId: string; deleted: boolean } {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    typeof (data as { leafId?: unknown }).leafId === "string" &&
+    typeof (data as { deleted?: unknown }).deleted === "boolean"
+  );
+}
+
+export function collectTelegramTreeDeletedBranchLeafIds(
+  entries: readonly TelegramTreeSessionEntry[],
+): Set<string> {
+  const deleted = new Set<string>();
+  for (const entry of entries) {
+    if (entry.type !== "custom" || entry.customType !== TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE) continue;
+    if (!isDeletedBranchMetadata(entry.data)) continue;
+    if (entry.data.deleted) deleted.add(entry.data.leafId);
+    else deleted.delete(entry.data.leafId);
+  }
+  return deleted;
 }
 
 function formatPromptBall(ordinal: number | undefined, filled: boolean): string {
@@ -335,6 +383,8 @@ function buildActivePromptEntries(snapshot: TelegramTreeSnapshot): TelegramTreeM
 
 function buildBranchEntries(snapshot: TelegramTreeSnapshot): TelegramTreeMenuEntry[] {
   const byId = new Map(snapshot.entries.map((entry) => [entry.id, entry] as const));
+  const labelsById = collectEntryLabels(snapshot.entries);
+  const deletedLeafIds = collectTelegramTreeDeletedBranchLeafIds(snapshot.entries);
   const childIds = new Set(
     snapshot.entries
       .map((entry) => entry.parentId)
@@ -382,7 +432,11 @@ function buildBranchEntries(snapshot: TelegramTreeSnapshot): TelegramTreeMenuEnt
     return path.reverse();
   };
   const leaves = snapshot.entries
-    .filter((entry) => !childIds.has(entry.id) && entry.id !== snapshot.leafId)
+    .filter((entry) =>
+      !childIds.has(entry.id) &&
+      entry.id !== snapshot.leafId &&
+      !deletedLeafIds.has(entry.id)
+    )
     .sort((a, b) => entrySortTime(a) - entrySortTime(b));
   const result: TelegramTreeMenuEntry[] = [];
   for (const leaf of leaves) {
@@ -427,6 +481,7 @@ function buildBranchEntries(snapshot: TelegramTreeSnapshot): TelegramTreeMenuEnt
         .map((entry) => visiblePromptOrdinalById.get(entry.id))
         .filter((ordinal): ordinal is number => typeof ordinal === "number"),
       leafShortId: leaf.id.slice(0, 8),
+      branchName: labelsById.get(leaf.id),
     });
   }
   result.sort((a, b) => {
@@ -504,7 +559,8 @@ function formatTreeLine(entry: TelegramTreeMenuEntry): string {
 }
 
 function formatTreeButton(entry: TelegramTreeMenuEntry): string {
-  return formatTreeIndex(entry);
+  if (entry.kind !== "branch") return formatTreeIndex(entry);
+  return truncate(entry.branchName || entry.leafShortId || entry.entryId.slice(0, 8), TELEGRAM_TREE_BRANCH_BUTTON_LEN);
 }
 
 export const TELEGRAM_TREE_MENU_TITLE = "<b>🌳 Session tree</b>";
@@ -612,7 +668,7 @@ export function buildTelegramTreeDetailText(entry: TelegramTreeMenuEntry): strin
     const count = entry.branchPromptCount ?? 1;
     return [
       "<b>🌿 Branch</b>",
-      `#${entry.index + 1} · leaf <code>${escapeHtml(leaf)}</code>`,
+      `#${entry.index + 1} · ${entry.branchName ? escapeHtml(entry.branchName) + " · " : ""}leaf <code>${escapeHtml(leaf)}</code>`,
       "Inactive branch leaf. Switch jumps to this branch.",
       "",
       "<b>Fork point</b>",
@@ -657,6 +713,12 @@ export function buildTelegramTreeDetailReplyMarkup(
               callback_data: `tree:rewind:${entry.index}:none`,
             },
       ],
+      ...(entry.kind === "branch"
+        ? [
+            [{ text: "✏️ Rename branch", callback_data: `tree:rename:${entry.index}` }],
+            [{ text: "🗑 Delete branch", callback_data: `tree:delete:${entry.index}` }],
+          ]
+        : []),
     ],
   };
 }
@@ -708,6 +770,103 @@ export interface TelegramTreeMenuCallbackQuery {
   message?: { chat?: { id?: number }; message_id?: number };
 }
 
+export interface TelegramTreeMenuTextMessage {
+  chat?: { id?: number };
+  message_id?: number;
+  text?: string;
+  caption?: string;
+  reply_to_message?: { message_id?: number };
+}
+
+export interface TelegramTreeMenuTextDeps {
+  getState: (messageId: number | undefined) => TelegramTreeMenuState | undefined;
+  setState: (state: TelegramTreeMenuState) => void;
+  getSnapshot: () => TelegramTreeSnapshot;
+  editTreeMessage: (
+    chatId: number,
+    messageId: number,
+    text: string,
+    replyMarkup: TelegramTreeReplyMarkup,
+  ) => Promise<void>;
+  sendTextReply: (
+    chatId: number,
+    replyToMessageId: number,
+    text: string,
+  ) => Promise<unknown>;
+  setBranchName: (entryId: string, name: string | undefined) => Promise<void> | void;
+  now?: () => number;
+}
+
+export async function handleTelegramTreeMenuTextMessage(
+  message: TelegramTreeMenuTextMessage,
+  deps: TelegramTreeMenuTextDeps,
+): Promise<boolean> {
+  const chatId = message.chat?.id;
+  const messageId = message.message_id;
+  const replyToMessageId = message.reply_to_message?.message_id;
+  const rawText = (message.text ?? message.caption ?? "").trim();
+  if (
+    typeof chatId !== "number" ||
+    typeof messageId !== "number" ||
+    typeof replyToMessageId !== "number" ||
+    !rawText
+  ) {
+    return false;
+  }
+  const state = deps.getState(replyToMessageId);
+  if (!state?.pendingRename || state.chatId !== chatId) return false;
+  const entry = state.entries[state.pendingRename.entryIndex];
+  if (!entry || entry.entryId !== state.pendingRename.entryId || entry.kind !== "branch") {
+    await deps.sendTextReply(chatId, messageId, "Branch rename expired. Send /tree again.");
+    return true;
+  }
+  const name = rawText === "-"
+    ? undefined
+    : truncate(rawText, TELEGRAM_TREE_BRANCH_NAME_LEN);
+  await deps.setBranchName(entry.entryId, name);
+  const snapshot = deps.getSnapshot();
+  const entries = buildTelegramTreeMenuEntries(snapshot, "branches");
+  const nextIndex = entries.findIndex((candidate) => candidate.entryId === entry.entryId);
+  const page = clampPage(
+    nextIndex >= 0 ? Math.floor(nextIndex / TELEGRAM_TREE_PAGE_SIZE) : state.page,
+    entries.length,
+  );
+  const now = deps.now ?? Date.now;
+  const nextState: TelegramTreeMenuState = {
+    ...state,
+    entries,
+    page,
+    filter: "branches",
+    pendingRename: undefined,
+    updatedAt: now(),
+  };
+  deps.setState(nextState);
+  if (nextIndex >= 0) {
+    const nextEntry = entries[nextIndex]!;
+    await deps.editTreeMessage(
+      chatId,
+      replyToMessageId,
+      buildTelegramTreeDetailText(nextEntry),
+      buildTelegramTreeDetailReplyMarkup(nextEntry),
+    );
+    deps.setState({ ...nextState, view: "detail", detailIndex: nextIndex, updatedAt: now() });
+  } else {
+    await deps.editTreeMessage(
+      chatId,
+      replyToMessageId,
+      buildTelegramTreeListText(snapshot, entries, page, "branches"),
+      buildTelegramTreeListReplyMarkup(entries, page, "branches"),
+    );
+    deps.setState({ ...nextState, view: "list", detailIndex: undefined, updatedAt: now() });
+  }
+  await deps.sendTextReply(
+    chatId,
+    messageId,
+    name ? `✅ Branch renamed: ${name}` : "✅ Branch name cleared.",
+  );
+  return true;
+}
+
 export interface TelegramTreeMenuCallbackDeps {
   getState: (messageId: number | undefined) => TelegramTreeMenuState | undefined;
   setState: (state: TelegramTreeMenuState) => void;
@@ -732,6 +891,8 @@ export interface TelegramTreeMenuCallbackDeps {
   ) => Promise<void>;
   publishTreeGist?: (snapshot: TelegramTreeSnapshot) => Promise<TelegramTreeGistPublishResult>;
   deleteTreeGist?: (gistId: string) => Promise<void>;
+  setBranchName?: (entryId: string, name: string | undefined) => Promise<void> | void;
+  deleteBranch?: (entryId: string) => Promise<void> | void;
   now?: () => number;
 }
 
@@ -926,7 +1087,7 @@ async function handleTelegramTreeMenuCallbackUnsafe(
       buildTelegramTreeListText(snapshot, entries, page, filter),
       buildTelegramTreeListReplyMarkup(entries, page, filter),
     );
-    updateState({ entries, page, filter, view: "list", detailIndex: undefined });
+    updateState({ entries, page, filter, view: "list", detailIndex: undefined, pendingRename: undefined });
     await deps.answerCallbackQuery(query.id);
     return true;
   }
@@ -943,7 +1104,7 @@ async function handleTelegramTreeMenuCallbackUnsafe(
       buildTelegramTreeListText(snapshot, state.entries, page, state.filter),
       buildTelegramTreeListReplyMarkup(state.entries, page, state.filter),
     );
-    updateState({ page, view: "list", detailIndex: undefined });
+    updateState({ page, view: "list", detailIndex: undefined, pendingRename: undefined });
     await deps.answerCallbackQuery(query.id);
     return true;
   }
@@ -964,9 +1125,116 @@ async function handleTelegramTreeMenuCallbackUnsafe(
     updateState({
       view: "detail",
       detailIndex: index,
+      pendingRename: undefined,
       page: clampPage(Math.floor(index / TELEGRAM_TREE_PAGE_SIZE), state.entries.length),
     });
     await deps.answerCallbackQuery(query.id);
+    return true;
+  }
+
+  if (data.startsWith("tree:rename:")) {
+    const index = parseIndex(data, "tree:rename:", state.entries.length);
+    if (index === undefined) {
+      await deps.answerCallbackQuery(query.id, "Branch no longer exists.");
+      return true;
+    }
+    const entry = state.entries[index];
+    if (entry.kind !== "branch") {
+      await deps.answerCallbackQuery(query.id, "Only branch leaves can be renamed.");
+      return true;
+    }
+    if (!deps.setBranchName) {
+      await deps.answerCallbackQuery(query.id, "Branch rename is not available.");
+      return true;
+    }
+    await deps.editTreeMessage(
+      chatId,
+      messageId,
+      [
+        TELEGRAM_TREE_MENU_TITLE,
+        "",
+        `Rename branch leaf <code>${escapeHtml(entry.leafShortId || entry.entryId.slice(0, 8))}</code>.`,
+        "",
+        "Reply to this menu message with the new branch name.",
+        "Send <code>-</code> to clear the name.",
+      ].join("\n"),
+      {
+        inline_keyboard: [
+          [{ text: "Cancel", callback_data: `tree:entry:${index}` }],
+        ],
+      },
+    );
+    updateState({
+      view: "detail",
+      detailIndex: index,
+      pendingRename: { entryIndex: index, entryId: entry.entryId },
+    });
+    await deps.answerCallbackQuery(query.id, "Reply with the new branch name.");
+    return true;
+  }
+
+  if (data.startsWith("tree:delete:")) {
+    const index = parseIndex(data, "tree:delete:", state.entries.length);
+    if (index === undefined) {
+      await deps.answerCallbackQuery(query.id, "Branch no longer exists.");
+      return true;
+    }
+    const entry = state.entries[index];
+    if (entry.kind !== "branch") {
+      await deps.answerCallbackQuery(query.id, "Only inactive branches can be deleted.");
+      return true;
+    }
+    await deps.editTreeMessage(
+      chatId,
+      messageId,
+      [
+        TELEGRAM_TREE_MENU_TITLE,
+        "",
+        `Delete branch ${entry.branchName ? `<b>${escapeHtml(entry.branchName)}</b> ` : ""}<code>${escapeHtml(entry.leafShortId || entry.entryId.slice(0, 8))}</code>?`,
+        "",
+        "This hides the inactive branch from Telegram's branch list. The append-only session file is not rewritten.",
+      ].join("\n"),
+      {
+        inline_keyboard: [
+          [{ text: "✅ Delete branch", callback_data: `tree:delete-confirm:${index}` }],
+          [{ text: "Cancel", callback_data: `tree:entry:${index}` }],
+        ],
+      },
+    );
+    updateState({ view: "detail", detailIndex: index, pendingRename: undefined });
+    await deps.answerCallbackQuery(query.id);
+    return true;
+  }
+
+  if (data.startsWith("tree:delete-confirm:")) {
+    const index = parseIndex(data, "tree:delete-confirm:", state.entries.length);
+    if (index === undefined) {
+      await deps.answerCallbackQuery(query.id, "Branch no longer exists.");
+      return true;
+    }
+    if (!deps.deleteBranch) {
+      await deps.answerCallbackQuery(query.id, "Branch deletion is not available.");
+      return true;
+    }
+    const entry = state.entries[index];
+    try {
+      await deps.deleteBranch(entry.entryId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await deps.answerCallbackQuery(query.id, `Delete failed: ${message}`);
+      return true;
+    }
+    const snapshot = deps.getSnapshot();
+    const entries = buildTelegramTreeMenuEntries(snapshot, "branches");
+    const page = clampPage(state.page, entries.length);
+    await deps.editTreeMessage(
+      chatId,
+      messageId,
+      buildTelegramTreeListText(snapshot, entries, page, "branches"),
+      buildTelegramTreeListReplyMarkup(entries, page, "branches"),
+    );
+    updateState({ entries, page, filter: "branches", view: "list", detailIndex: undefined, pendingRename: undefined });
+    await deps.answerCallbackQuery(query.id, "Branch deleted.");
     return true;
   }
 
@@ -997,7 +1265,7 @@ async function handleTelegramTreeMenuCallbackUnsafe(
       `${TELEGRAM_TREE_MENU_TITLE}\n\nSwitching to branch leaf <code>${escapeHtml(entry.entryId)}</code>…`,
       { inline_keyboard: [] },
     );
-    updateState({ view: "detail", detailIndex: index });
+    updateState({ view: "detail", detailIndex: index, pendingRename: undefined });
     await deps.answerCallbackQuery(query.id, "Switching…");
     return true;
   }
@@ -1030,7 +1298,7 @@ async function handleTelegramTreeMenuCallbackUnsafe(
       `${TELEGRAM_TREE_MENU_TITLE}\n\nRewinding to <code>${escapeHtml(entry.entryId)}</code>${summarize ? " with summary" : ""}…`,
       { inline_keyboard: [] },
     );
-    updateState({ view: "detail", detailIndex: index });
+    updateState({ view: "detail", detailIndex: index, pendingRename: undefined });
     await deps.answerCallbackQuery(query.id, "Rewinding…");
     return true;
   }
@@ -1076,6 +1344,10 @@ export interface TelegramTreeMenuRuntime<TContext> {
     query: TelegramTreeMenuCallbackQuery,
     ctx: TContext,
   ) => Promise<boolean>;
+  handleTextMessage: (
+    message: TelegramTreeMenuTextMessage,
+    ctx: TContext,
+  ) => Promise<boolean>;
 }
 
 export interface TelegramTreeMenuRuntimeDeps<TContext> {
@@ -1107,6 +1379,13 @@ export interface TelegramTreeMenuRuntimeDeps<TContext> {
   ) => Promise<void>;
   publishTreeGist?: (snapshot: TelegramTreeSnapshot) => Promise<TelegramTreeGistPublishResult>;
   deleteTreeGist?: (gistId: string) => Promise<void>;
+  sendTextReply?: (
+    chatId: number,
+    replyToMessageId: number,
+    text: string,
+  ) => Promise<unknown>;
+  setBranchName?: (entryId: string, name: string | undefined, ctx: TContext) => Promise<void> | void;
+  deleteBranch?: (entryId: string, ctx: TContext) => Promise<void> | void;
   store?: TelegramTreeMenuStore;
 }
 
@@ -1157,6 +1436,38 @@ export function createTelegramTreeMenuRuntime<TContext>(
         sendTreeExportFiles: deps.sendTreeExportFiles,
         publishTreeGist: deps.publishTreeGist,
         deleteTreeGist: deps.deleteTreeGist,
+        setBranchName: deps.setBranchName
+          ? (entryId, name) => deps.setBranchName?.(entryId, name, ctx)
+          : undefined,
+        deleteBranch: deps.deleteBranch
+          ? (entryId) => deps.deleteBranch?.(entryId, ctx)
+          : undefined,
+      });
+    },
+    handleTextMessage: function handleTreeTextMessageForContext(message, ctx) {
+      if (!deps.setBranchName || !deps.sendTextReply) return Promise.resolve(false);
+      return handleTelegramTreeMenuTextMessage(message, {
+        getState: store.get,
+        setState: store.set,
+        getSnapshot: function getSnapshotForTextMessage() {
+          return deps.getSnapshot(ctx);
+        },
+        editTreeMessage: function editTreeMessageHtml(
+          chatId,
+          messageId,
+          text,
+          replyMarkup,
+        ) {
+          return deps.editInteractiveMessage(
+            chatId,
+            messageId,
+            text,
+            "html",
+            replyMarkup,
+          );
+        },
+        sendTextReply: deps.sendTextReply,
+        setBranchName: (entryId, name) => deps.setBranchName?.(entryId, name, ctx),
       });
     },
   };
@@ -1197,6 +1508,9 @@ export interface TelegramTreeMenuRuntimePiContextDeps<TContext> {
   sendTreeExportFiles?: TelegramTreeMenuRuntimeDeps<TContext>["sendTreeExportFiles"];
   publishTreeGist?: TelegramTreeMenuRuntimeDeps<TContext>["publishTreeGist"];
   deleteTreeGist?: TelegramTreeMenuRuntimeDeps<TContext>["deleteTreeGist"];
+  sendTextReply?: TelegramTreeMenuRuntimeDeps<TContext>["sendTextReply"];
+  setBranchName?: TelegramTreeMenuRuntimeDeps<TContext>["setBranchName"];
+  deleteBranch?: TelegramTreeMenuRuntimeDeps<TContext>["deleteBranch"];
 }
 
 export function buildTelegramTreeMenuRuntime<TContext>(
@@ -1213,6 +1527,9 @@ export function buildTelegramTreeMenuRuntime<TContext>(
     sendTreeExportFiles: deps.sendTreeExportFiles,
     publishTreeGist: deps.publishTreeGist,
     deleteTreeGist: deps.deleteTreeGist,
+    sendTextReply: deps.sendTextReply,
+    setBranchName: deps.setBranchName,
+    deleteBranch: deps.deleteBranch,
   });
 }
 

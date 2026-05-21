@@ -91,6 +91,10 @@ export interface TelegramInboundRouteRuntimeDeps<
     query: TCallbackQuery,
     ctx: TContext,
   ) => Promise<boolean>;
+  treeMenuMessageHandler?: (
+    message: TMessage,
+    ctx: TContext,
+  ) => Promise<boolean>;
   openResumeMenu?: (
     chatId: number,
     replyToMessageId: number,
@@ -620,7 +624,11 @@ export function createTelegramInboundRouteRuntime<
     answerGuestQuery: deps.answerGuestQuery,
     handleAuthorizedTelegramCallbackQuery: callbackHandler,
     sendTextReply: deps.sendTextReply,
-    handleAuthorizedTelegramMessage: textDispatch.handleMessage,
+    handleAuthorizedTelegramMessage: async (message, ctx) => {
+      const handledByTree = await deps.treeMenuMessageHandler?.(message, ctx);
+      if (handledByTree) return;
+      await textDispatch.handleMessage(message, ctx);
+    },
     handleAuthorizedTelegramEditedMessage: editRuntime.updateFromEditedMessage,
     handleAuthorizedTelegramGuestMessage,
   });

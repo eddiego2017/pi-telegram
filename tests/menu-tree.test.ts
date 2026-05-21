@@ -16,6 +16,8 @@ import {
   createTelegramTreeNavigationGate,
   createTelegramTreeOutcomeNotifier,
   handleTelegramTreeMenuCallback,
+  handleTelegramTreeMenuTextMessage,
+  TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE,
   type TelegramTreeSnapshot,
 } from "../lib/menu-tree.ts";
 import { buildTelegramTreeSvg } from "../lib/tree-export.ts";
@@ -115,6 +117,18 @@ test("Tree menu branch list shows inactive branch leaves", () => {
   assert.equal(entries[0]?.branchNextSummary, "old branch prompt");
   assert.equal(entries[0]?.branchPromptCount, 1);
   assert.equal(entries[0]?.leafShortId, "a-old");
+  assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "branches").inline_keyboard[2]?.[0]?.text, "a-old");
+  snapshot.entries.push({
+    type: "label",
+    id: "label-old",
+    parentId: "u2",
+    targetId: "a-old",
+    label: "legacy branch",
+    timestamp: "2026-01-01T00:00:06.000Z",
+  });
+  const namedEntries = buildTelegramTreeMenuEntries(snapshot, "branches");
+  assert.equal(namedEntries[0]?.branchName, "legacy branch");
+  assert.equal(buildTelegramTreeListReplyMarkup(namedEntries, 0, "branches").inline_keyboard[2]?.[0]?.text, "legacy branch");
   const listText = buildTelegramTreeListText(snapshot, entries, 0, "branches");
   assert.match(listText, /Branches grouped by fork point/);
   assert.match(listText, /① first prompt/);
@@ -124,6 +138,100 @@ test("Tree menu branch list shows inactive branch leaves", () => {
   assert.match(buildTelegramTreeDetailText(entries[0]!), /First difference/);
   assert.match(buildTelegramTreeDetailText(entries[0]!), /Leaf id: <code>a-old<\/code>/);
   assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "branches").inline_keyboard[0]?.[0]?.text, "🟢 Active path");
+});
+
+test("Tree menu branch delete metadata hides inactive leaves", () => {
+  const oldUser = {
+    type: "message",
+    id: "u-old",
+    parentId: "a1",
+    timestamp: "2026-01-01T00:00:04.000Z",
+    message: { role: "user", content: [{ type: "text", text: "old branch prompt" }] },
+  };
+  const oldAssistant = {
+    type: "message",
+    id: "a-old",
+    parentId: "u-old",
+    timestamp: "2026-01-01T00:00:05.000Z",
+    message: { role: "assistant", content: [{ type: "text", text: "old answer" }] },
+  };
+  const snapshot = createSnapshot();
+  snapshot.entries.push(oldUser, oldAssistant, {
+    type: "custom",
+    id: "delete-old",
+    parentId: "u2",
+    customType: TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE,
+    data: { leafId: "a-old", deleted: true },
+    timestamp: "2026-01-01T00:00:06.000Z",
+  });
+  assert.deepEqual(buildTelegramTreeMenuEntries(snapshot, "branches"), []);
+  const svg = buildTelegramTreeSvg(snapshot);
+  assert.doesNotMatch(svg, /old branch prompt/);
+});
+
+test("Tree branch rename reply labels the branch and refreshes detail", async () => {
+  const oldUser = {
+    type: "message",
+    id: "u-old",
+    parentId: "a1",
+    timestamp: "2026-01-01T00:00:04.000Z",
+    message: { role: "user", content: [{ type: "text", text: "old branch prompt" }] },
+  };
+  const oldAssistant = {
+    type: "message",
+    id: "a-old",
+    parentId: "u-old",
+    timestamp: "2026-01-01T00:00:05.000Z",
+    message: { role: "assistant", content: [{ type: "text", text: "old answer" }] },
+  };
+  const snapshot = createSnapshot();
+  snapshot.entries.push(oldUser, oldAssistant);
+  const entries = buildTelegramTreeMenuEntries(snapshot, "branches");
+  const store = createTelegramTreeMenuStore();
+  store.set({
+    chatId: 7,
+    messageId: 99,
+    entries,
+    page: 0,
+    view: "detail",
+    filter: "branches",
+    detailIndex: 0,
+    pendingRename: { entryIndex: 0, entryId: "a-old" },
+    updatedAt: Date.now(),
+  });
+  const events: string[] = [];
+  const handled = await handleTelegramTreeMenuTextMessage(
+    {
+      chat: { id: 7 },
+      message_id: 123,
+      text: "prod fix",
+      reply_to_message: { message_id: 99 },
+    },
+    {
+      getState: store.get,
+      setState: store.set,
+      getSnapshot: () => snapshot,
+      editTreeMessage: async (_chatId, _messageId, text) => {
+        events.push(`edit:${text.includes("prod fix")}`);
+      },
+      sendTextReply: async (_chatId, _replyTo, text) => {
+        events.push(`reply:${text}`);
+      },
+      setBranchName: (_entryId, name) => {
+        snapshot.entries.push({
+          type: "label",
+          id: "label-old",
+          parentId: "u2",
+          targetId: "a-old",
+          label: name,
+          timestamp: "2026-01-01T00:00:06.000Z",
+        });
+      },
+    },
+  );
+  assert.equal(handled, true);
+  assert.deepEqual(events, ["edit:true", "reply:✅ Branch renamed: prod fix"]);
+  assert.equal(store.get(99)?.pendingRename, undefined);
 });
 
 test("Tree branch text groups sibling leaves by fork point", () => {

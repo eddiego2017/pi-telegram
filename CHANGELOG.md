@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `[Tree Menu]` Added branch labels and soft deletion to `/tree` Branches: branch keyboard buttons now show the saved branch label or short leaf id, branch detail supports reply-to-menu renaming through π entry labels, and deleting an inactive branch hides it from Telegram via session metadata without rewriting the append-only session file.
+- `[Tests]` Extended `/tree` regressions for branch labels, branch button fallback, soft-delete metadata, and reply-based branch rename handling.
 - `[Session Menu]` Fixed current-session delete completion feedback: the internal delete-current command now uses π's post-replacement `withSession` context before deleting the previous session file and sending the Telegram outcome.
 - `[Resume Menu]` Fixed `/resume` completion feedback: the internal session switch now uses π's post-replacement `withSession` context, shows a TUI success notification, and sends the Telegram resume outcome only after the replacement session is live.
 - `[Commands]` Removed the standalone Telegram `/delete` command from bot registration, reserved-command routing, and the `/start` help menu. Session deletion now lives under `/resume`.
