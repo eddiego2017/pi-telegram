@@ -116,13 +116,47 @@ test("Tree menu branch list shows inactive branch leaves", () => {
   assert.equal(entries[0]?.branchPromptCount, 1);
   assert.equal(entries[0]?.leafShortId, "a-old");
   const listText = buildTelegramTreeListText(snapshot, entries, 0, "branches");
-  assert.match(listText, /fork first prompt/);
+  assert.match(listText, /Branches grouped by fork point/);
+  assert.match(listText, /① first prompt/);
+  assert.match(listText, /│ now second prompt/);
+  assert.match(listText, /│ <code>01<\/code> ❸ \+1 old branch prompt/);
   assert.doesNotMatch(listText, /fork #01/);
-  assert.match(listText, /🟢 now second prompt/);
-  assert.match(listText, /🌿 this old branch prompt/);
   assert.match(buildTelegramTreeDetailText(entries[0]!), /First difference/);
   assert.match(buildTelegramTreeDetailText(entries[0]!), /Leaf id: <code>a-old<\/code>/);
   assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "branches").inline_keyboard[0]?.[0]?.text, "🟢 Active path");
+});
+
+test("Tree branch text groups sibling leaves by fork point", () => {
+  const snapshot = createSnapshot();
+  const oldUserA = {
+    type: "message",
+    id: "u-old-a",
+    parentId: "a1",
+    timestamp: "2026-01-01T00:00:04.000Z",
+    message: { role: "user", content: [{ type: "text", text: "old branch A" }] },
+  };
+  const oldUserB = {
+    type: "message",
+    id: "u-old-b",
+    parentId: "a1",
+    timestamp: "2026-01-01T00:00:05.000Z",
+    message: { role: "user", content: [{ type: "text", text: "old branch B" }] },
+  };
+  const rootAlt = {
+    type: "message",
+    id: "u-root-alt",
+    parentId: null,
+    timestamp: "2026-01-01T00:00:06.000Z",
+    message: { role: "user", content: [{ type: "text", text: "alternate root" }] },
+  };
+  snapshot.entries.push(oldUserA, oldUserB, rootAlt);
+  const entries = buildTelegramTreeMenuEntries(snapshot, "branches");
+  assert.deepEqual(entries.map((entry) => entry.entryId), ["u-root-alt", "u-old-a", "u-old-b"]);
+  const listText = buildTelegramTreeListText(snapshot, entries, 0, "branches");
+  assert.match(listText, /root root/);
+  assert.equal((listText.match(/① first prompt/g) ?? []).length, 1);
+  assert.match(listText, /│ <code>02<\/code> ❸ \+1 old branch A/);
+  assert.match(listText, /│ <code>03<\/code> ❹ \+1 old branch B/);
 });
 
 test("Tree navigation gate rejects any busy queue or pi state", () => {

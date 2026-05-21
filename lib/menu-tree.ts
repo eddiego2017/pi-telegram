@@ -8,6 +8,55 @@ const TELEGRAM_TREE_STATE_TTL_MS = 10 * 60 * 1000;
 const TELEGRAM_TREE_PAGE_SIZE = 8;
 const TELEGRAM_TREE_SUMMARY_LEN = 42;
 const TELEGRAM_TREE_DETAIL_TEXT_LEN = 2600;
+const TELEGRAM_TREE_BRANCH_PATH_MAX_ITEMS = 5;
+
+const TELEGRAM_TREE_OPEN_BALLS = [
+  "",
+  "①",
+  "②",
+  "③",
+  "④",
+  "⑤",
+  "⑥",
+  "⑦",
+  "⑧",
+  "⑨",
+  "⑩",
+  "⑪",
+  "⑫",
+  "⑬",
+  "⑭",
+  "⑮",
+  "⑯",
+  "⑰",
+  "⑱",
+  "⑲",
+  "⑳",
+] as const;
+
+const TELEGRAM_TREE_FILLED_BALLS = [
+  "",
+  "❶",
+  "❷",
+  "❸",
+  "❹",
+  "❺",
+  "❻",
+  "❼",
+  "❽",
+  "❾",
+  "❿",
+  "⓫",
+  "⓬",
+  "⓭",
+  "⓮",
+  "⓯",
+  "⓰",
+  "⓱",
+  "⓲",
+  "⓳",
+  "⓴",
+] as const;
 
 export type TelegramTreeReplyMarkup = {
   inline_keyboard: Array<Array<
@@ -72,6 +121,8 @@ export interface TelegramTreeMenuEntry {
   activeNextSummary?: string;
   branchNextSummary?: string;
   branchPromptCount?: number;
+  branchPromptOrdinals?: number[];
+  forkEntryId?: string;
   leafShortId?: string;
 }
 
@@ -152,6 +203,22 @@ function truncate(s: string, n: number): string {
   const clean = cleanText(s);
   if (clean.length <= n) return clean;
   return clean.slice(0, Math.max(0, n - 1)) + "…";
+}
+
+function formatPromptBall(ordinal: number | undefined, filled: boolean): string {
+  if (typeof ordinal !== "number" || !Number.isFinite(ordinal) || ordinal <= 0) return "root";
+  const index = Math.trunc(ordinal);
+  const balls = filled ? TELEGRAM_TREE_FILLED_BALLS : TELEGRAM_TREE_OPEN_BALLS;
+  return balls[index] ?? `${filled ? "●" : "○"}${index}`;
+}
+
+function formatBranchPath(ordinals: readonly number[] | undefined): string {
+  if (!ordinals || ordinals.length === 0) return "leaf";
+  const head = ordinals
+    .slice(0, TELEGRAM_TREE_BRANCH_PATH_MAX_ITEMS)
+    .map((ordinal) => formatPromptBall(ordinal, true));
+  if (ordinals.length > TELEGRAM_TREE_BRANCH_PATH_MAX_ITEMS) head.push("…");
+  return head.join("→");
 }
 
 function contentText(content: string | TelegramTreeContentBlock[] | undefined): string {
@@ -275,6 +342,13 @@ function buildBranchEntries(snapshot: TelegramTreeSnapshot): TelegramTreeMenuEnt
   );
   const activeIds = new Set(snapshot.branch.map((entry) => entry.id));
   const activeIndexById = new Map(snapshot.branch.map((entry, index) => [entry.id, index] as const));
+  const visiblePromptOrdinalById = new Map<string, number>();
+  let visiblePromptOrdinal = 0;
+  for (const entry of sortedByTimestamp(snapshot.entries)) {
+    if (!includeEntry(entry, "branches")) continue;
+    visiblePromptOrdinal += 1;
+    visiblePromptOrdinalById.set(entry.id, visiblePromptOrdinal);
+  }
   const activePromptOrdinalById = new Map<string, number>();
   let activePromptOrdinal = 0;
   for (const entry of snapshot.branch) {
@@ -341,6 +415,7 @@ function buildBranchEntries(snapshot: TelegramTreeSnapshot): TelegramTreeMenuEnt
       detail,
       active: false,
       kind: "branch",
+      forkEntryId: forkPrompt?.id,
       forkIndex: forkPrompt ? activePromptOrdinalById.get(forkPrompt.id) : undefined,
       forkSummary: forkPrompt ? truncate(forkDetail, TELEGRAM_TREE_SUMMARY_LEN) : undefined,
       activeNextSummary: activeNextPrompt
@@ -348,9 +423,20 @@ function buildBranchEntries(snapshot: TelegramTreeSnapshot): TelegramTreeMenuEnt
         : undefined,
       branchNextSummary: truncate(detail, TELEGRAM_TREE_SUMMARY_LEN),
       branchPromptCount: branchPrompts.length,
+      branchPromptOrdinals: branchPrompts
+        .map((entry) => visiblePromptOrdinalById.get(entry.id))
+        .filter((ordinal): ordinal is number => typeof ordinal === "number"),
       leafShortId: leaf.id.slice(0, 8),
     });
   }
+  result.sort((a, b) => {
+    const forkA = a.forkIndex ?? 0;
+    const forkB = b.forkIndex ?? 0;
+    if (forkA !== forkB) return forkA - forkB;
+    const branchA = a.branchPromptOrdinals?.[0] ?? Number.MAX_SAFE_INTEGER;
+    const branchB = b.branchPromptOrdinals?.[0] ?? Number.MAX_SAFE_INTEGER;
+    return branchA - branchB;
+  });
   return result.map((entry, index) => ({ ...entry, index }));
 }
 
@@ -388,17 +474,28 @@ function formatPromptTreeLine(entry: TelegramTreeMenuEntry): string {
   return `${marker} <code>${escapeHtml(formatTreeIndex(entry))}</code> ${escapeHtml(role)}  ${escapeHtml(text)}`;
 }
 
-function formatBranchTreeLine(entry: TelegramTreeMenuEntry): string {
-  const count = entry.branchPromptCount ?? 1;
+function branchForkKey(entry: TelegramTreeMenuEntry): string {
+  return entry.forkEntryId ?? "root";
+}
+
+function formatBranchGroupHeader(entry: TelegramTreeMenuEntry): string {
+  const fork = formatPromptBall(entry.forkIndex, false);
   const forkSummary = entry.forkSummary || "root";
   const activeNext = entry.activeNextSummary || "(current leaf)";
+  return [
+    `${escapeHtml(fork)} ${escapeHtml(forkSummary)}`,
+    `│ now ${escapeHtml(activeNext)}`,
+  ].join("\n");
+}
+
+function formatBranchTreeLine(entry: TelegramTreeMenuEntry): string {
+  const count = entry.branchPromptCount ?? 1;
   const branchNext = entry.branchNextSummary || entry.summary || "(empty)";
   const leaf = entry.leafShortId || entry.entryId.slice(0, 8);
+  const path = formatBranchPath(entry.branchPromptOrdinals);
   return [
-    `<code>${escapeHtml(formatTreeIndex(entry))}</code> +${count} prompt${count === 1 ? "" : "s"} · leaf <code>${escapeHtml(leaf)}</code>`,
-    `↳ fork ${escapeHtml(forkSummary)}`,
-    `🟢 now ${escapeHtml(activeNext)}`,
-    `🌿 this ${escapeHtml(branchNext)}`,
+    `│ <code>${escapeHtml(formatTreeIndex(entry))}</code> ${escapeHtml(path)} +${count} ${escapeHtml(branchNext)}`,
+    `│    leaf <code>${escapeHtml(leaf)}</code>`,
   ].join("\n");
 }
 
@@ -428,14 +525,25 @@ export function buildTelegramTreeListText(
   const suffix = count > 1 ? ` · Page ${safePage + 1}/${count}` : "";
   const leaf = snapshot.leafId ? snapshot.leafId.slice(0, 8) : "root";
   const body = filter === "branches"
-    ? ["Other branches · compared with active path", "Pick a branch to inspect/switch:"]
+    ? ["Branches grouped by fork point", "Pick a branch to inspect/switch:"]
     : ["Active path · user prompts only", "Pick a prompt to replace:"];
   const pageEntries = pageSlice(entries, safePage);
-  const visibleEntries = filter === "branches"
-    ? pageEntries.flatMap((entry, index) => (
-      index + 1 < pageEntries.length ? [formatTreeLine(entry), ""] : [formatTreeLine(entry)]
-    ))
-    : pageEntries.map(formatTreeLine);
+  const visibleEntries: string[] = [];
+  if (filter === "branches") {
+    for (let index = 0; index < pageEntries.length; index += 1) {
+      const entry = pageEntries[index];
+      if (!entry) continue;
+      const absoluteIndex = start + index;
+      const previous = entries[absoluteIndex - 1];
+      if (!previous || branchForkKey(previous) !== branchForkKey(entry)) {
+        if (visibleEntries.length > 0) visibleEntries.push("");
+        visibleEntries.push(formatBranchGroupHeader(entry));
+      }
+      visibleEntries.push(formatTreeLine(entry));
+    }
+  } else {
+    visibleEntries.push(...pageEntries.map(formatTreeLine));
+  }
   return [
     `${TELEGRAM_TREE_MENU_TITLE}${suffix}`,
     "",
@@ -508,12 +616,13 @@ export function buildTelegramTreeDetailText(entry: TelegramTreeMenuEntry): strin
       "Inactive branch leaf. Switch jumps to this branch.",
       "",
       "<b>Fork point</b>",
-      escapeHtml(forkSummary),
+      `${escapeHtml(formatPromptBall(entry.forkIndex, false))} ${escapeHtml(forkSummary)}`,
       "",
       "<b>First difference</b>",
       `🟢 Active: ${escapeHtml(entry.activeNextSummary || "(current leaf)")}`,
       `🌿 This: ${escapeHtml(entry.branchNextSummary || entry.summary || "(empty)")}`,
       "",
+      `Path: ${escapeHtml(formatBranchPath(entry.branchPromptOrdinals))}`,
       `Distance: +${count} prompt${count === 1 ? "" : "s"}`,
       `Leaf id: <code>${escapeHtml(entry.entryId)}</code>`,
       "",
