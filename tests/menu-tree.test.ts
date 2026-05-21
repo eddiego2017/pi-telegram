@@ -328,6 +328,38 @@ test("Tree SVG export renders prompt nodes and labels", () => {
   assert.match(svg, /<circle/);
 });
 
+test("Tree SVG export projects current leaf and branch tails onto visible prompt nodes", () => {
+  const snapshot = createSnapshot();
+  const activeAssistantLeaf = {
+    type: "message",
+    id: "a2",
+    parentId: "u2",
+    timestamp: "2026-01-01T00:00:04.000Z",
+    message: { role: "assistant", content: [{ type: "text", text: "second answer" }] },
+  };
+  const branchUser = {
+    type: "message",
+    id: "u-old",
+    parentId: "a1",
+    timestamp: "2026-01-01T00:00:05.000Z",
+    message: { role: "user", content: [{ type: "text", text: "old branch prompt" }] },
+  };
+  const branchAssistantLeaf = {
+    type: "message",
+    id: "a-old",
+    parentId: "u-old",
+    timestamp: "2026-01-01T00:00:06.000Z",
+    message: { role: "assistant", content: [{ type: "text", text: "old branch answer" }] },
+  };
+  snapshot.entries.push(activeAssistantLeaf, branchUser, branchAssistantLeaf);
+  snapshot.branch.push(activeAssistantLeaf);
+  snapshot.leafId = "a2";
+  const svg = buildTelegramTreeSvg(snapshot);
+  assert.match(svg, /r="22" fill="none" stroke="#2563eb"/);
+  assert.match(svg, /r="21" fill="none" stroke="#f97316" stroke-width="2" stroke-dasharray="4 3"/);
+  assert.match(svg, /branch tail/);
+});
+
 test("Tree callback injects selected prompt without summary", async () => {
   const snapshot = createSnapshot();
   const entries = buildTelegramTreeMenuEntries(snapshot);

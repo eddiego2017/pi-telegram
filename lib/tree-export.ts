@@ -202,14 +202,29 @@ function findVisibleParentId(
   byId: Map<string, TelegramTreeSessionEntry>,
   visibleIds: Set<string>,
 ): string | undefined {
+  return findVisibleAncestorId(entry.parentId ?? undefined, byId, visibleIds);
+}
+
+function findVisibleAncestorId(
+  entryId: string | undefined,
+  byId: Map<string, TelegramTreeSessionEntry>,
+  visibleIds: Set<string>,
+): string | undefined {
   const seen = new Set<string>();
-  let parentId = entry.parentId ?? undefined;
-  while (parentId && !seen.has(parentId)) {
-    seen.add(parentId);
-    if (visibleIds.has(parentId)) return parentId;
-    parentId = byId.get(parentId)?.parentId ?? undefined;
+  let currentId = entryId;
+  while (currentId && !seen.has(currentId)) {
+    seen.add(currentId);
+    if (visibleIds.has(currentId)) return currentId;
+    currentId = byId.get(currentId)?.parentId ?? undefined;
   }
   return undefined;
+}
+
+function findCurrentVisibleLeafId(snapshot: TelegramTreeSnapshot): string | undefined {
+  if (!snapshot.leafId) return undefined;
+  const byId = new Map(snapshot.entries.map((entry) => [entry.id, entry] as const));
+  const visibleIds = new Set(snapshot.entries.filter(isVisiblePromptEntry).map((entry) => entry.id));
+  return findVisibleAncestorId(snapshot.leafId, byId, visibleIds);
 }
 
 function buildExportNodes(snapshot: TelegramTreeSnapshot): ExportNode[] {
@@ -218,11 +233,6 @@ function buildExportNodes(snapshot: TelegramTreeSnapshot): ExportNode[] {
   const visibleIds = new Set(visibleEntries.map((entry) => entry.id));
   const activeIds = new Set(snapshot.branch.map((entry) => entry.id));
   const activeOrderById = new Map(snapshot.branch.map((entry, index) => [entry.id, index] as const));
-  const childIds = new Set(
-    snapshot.entries
-      .map((entry) => entry.parentId)
-      .filter((id): id is string => typeof id === "string" && id.length > 0),
-  );
   const sorted = [...visibleEntries].sort((a, b) => {
     const ai = snapshot.entries.indexOf(a);
     const bi = snapshot.entries.indexOf(b);
@@ -239,7 +249,7 @@ function buildExportNodes(snapshot: TelegramTreeSnapshot): ExportNode[] {
     timestampOrder: entryTimestampOrder(entry, index),
     active: activeIds.has(entry.id),
     activeOrder: activeOrderById.get(entry.id),
-    leaf: !childIds.has(entry.id),
+    leaf: false,
     ordinal: ordinalById.get(entry.id) ?? index + 1,
     summary: truncateCells(
       entrySummary(entry),
@@ -258,6 +268,7 @@ function buildExportNodes(snapshot: TelegramTreeSnapshot): ExportNode[] {
         ? a.order - b.order
         : a.timestampOrder - b.timestampOrder;
     });
+    node.leaf = node.children.length === 0;
   }
   return nodes;
 }
@@ -340,6 +351,7 @@ function renderEdge(parent: NodePosition, child: NodePosition, active: boolean):
 function renderNode(node: ExportNode, position: NodePosition, currentLeafId?: string | null): string {
   const active = node.active;
   const current = currentLeafId === node.id;
+  const branchTail = node.leaf && !active;
   const fill = active ? "#22c55e" : "#f59e0b";
   const stroke = current ? "#2563eb" : active ? "#15803d" : "#b45309";
   const textColor = active ? "#052e16" : "#451a03";
@@ -359,8 +371,16 @@ function renderNode(node: ExportNode, position: NodePosition, currentLeafId?: st
   const leaf = node.leaf
     ? `<text x="${labelX}" y="${position.y + 32}" font-size="12" fill="#64748b">leaf ${escapeXml(node.id.slice(0, 8))}</text>`
     : "";
+  const currentHalo = current
+    ? `<circle cx="${position.x}" cy="${position.y}" r="${TREE_EXPORT_NODE_RADIUS + 7}" fill="none" stroke="#2563eb" stroke-width="3"/>`
+    : "";
+  const branchTailHalo = branchTail
+    ? `<circle cx="${position.x}" cy="${position.y}" r="${TREE_EXPORT_NODE_RADIUS + 6}" fill="none" stroke="#f97316" stroke-width="2" stroke-dasharray="4 3"/>`
+    : "";
   return [
-    `<circle cx="${position.x}" cy="${position.y}" r="${TREE_EXPORT_NODE_RADIUS}" fill="${fill}" stroke="${stroke}" stroke-width="${current ? 5 : 2}"/>`,
+    branchTailHalo,
+    currentHalo,
+    `<circle cx="${position.x}" cy="${position.y}" r="${TREE_EXPORT_NODE_RADIUS}" fill="${fill}" stroke="${stroke}" stroke-width="${current ? 4 : 2}"/>`,
     `<text x="${position.x}" y="${position.y + 5}" text-anchor="middle" font-size="12" font-weight="700" fill="${textColor}">${node.ordinal}</text>`,
     label,
     leaf,
@@ -380,10 +400,11 @@ export function buildTelegramTreeSvg(snapshot: TelegramTreeSnapshot): string {
     if (!parent || !parentPosition || !nodePosition) continue;
     edges.push(renderEdge(parentPosition, nodePosition, parent.active && node.active));
   }
+  const currentVisibleLeafId = findCurrentVisibleLeafId(snapshot);
   const renderedNodes = nodes
     .filter((node) => positions.has(node.id))
     .sort((a, b) => a.timestampOrder === b.timestampOrder ? a.order - b.order : a.timestampOrder - b.timestampOrder)
-    .map((node) => renderNode(node, positions.get(node.id)!, snapshot.leafId));
+    .map((node) => renderNode(node, positions.get(node.id)!, currentVisibleLeafId));
   const cwd = truncate(snapshot.cwd, 70);
   const leaf = snapshot.leafId ? snapshot.leafId.slice(0, 8) : "root";
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -398,7 +419,8 @@ export function buildTelegramTreeSvg(snapshot: TelegramTreeSnapshot): string {
   <g font-family="Noto Sans CJK TC, Noto Sans CJK, Noto Sans, Arial, sans-serif" font-size="13" fill="#475569">
     <circle cx="${TREE_EXPORT_MARGIN}" cy="${height - 20}" r="7" fill="#22c55e"/><text x="${TREE_EXPORT_MARGIN + 14}" y="${height - 16}">active path</text>
     <circle cx="${TREE_EXPORT_MARGIN + 120}" cy="${height - 20}" r="7" fill="#f59e0b"/><text x="${TREE_EXPORT_MARGIN + 134}" y="${height - 16}">inactive branch</text>
-    <circle cx="${TREE_EXPORT_MARGIN + 275}" cy="${height - 20}" r="7" fill="#22c55e" stroke="#2563eb" stroke-width="3"/><text x="${TREE_EXPORT_MARGIN + 289}" y="${height - 16}">current leaf</text>
+    <circle cx="${TREE_EXPORT_MARGIN + 275}" cy="${height - 20}" r="9" fill="#22c55e" stroke="#2563eb" stroke-width="3"/><text x="${TREE_EXPORT_MARGIN + 289}" y="${height - 16}">current leaf</text>
+    <circle cx="${TREE_EXPORT_MARGIN + 410}" cy="${height - 20}" r="9" fill="#f59e0b" stroke="#f97316" stroke-width="2" stroke-dasharray="4 3"/><text x="${TREE_EXPORT_MARGIN + 424}" y="${height - 16}">branch tail</text>
   </g>
 </svg>`;
 }
