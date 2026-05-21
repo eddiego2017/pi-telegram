@@ -18,12 +18,13 @@ import type {
 import { buildTelegramMultipartReplyParameters } from "./replies.ts";
 
 const TREE_EXPORT_MARGIN = 44;
-const TREE_EXPORT_ROW_HEIGHT = 76;
-const TREE_EXPORT_LANE_WIDTH = 310;
+const TREE_EXPORT_ROW_HEIGHT = 92;
+const TREE_EXPORT_LANE_WIDTH = 380;
 const TREE_EXPORT_NODE_RADIUS = 15;
 const TREE_EXPORT_HEADER_HEIGHT = 70;
 const TREE_EXPORT_FOOTER_HEIGHT = 40;
-const TREE_EXPORT_LABEL_LEN = 42;
+const TREE_EXPORT_LABEL_LINE_CELLS = 34;
+const TREE_EXPORT_LABEL_MAX_LINES = 2;
 const TREE_EXPORT_MIN_WIDTH = 900;
 
 export interface TelegramTreeExportFileSet {
@@ -88,10 +89,69 @@ function cleanText(s: string): string {
     .trim();
 }
 
-function truncate(s: string, n: number): string {
+function charDisplayCells(char: string): number {
+  if (/\p{Mark}/u.test(char)) return 0;
+  const codePoint = char.codePointAt(0) ?? 0;
+  if (
+    (codePoint >= 0x1100 && codePoint <= 0x115f) ||
+    (codePoint >= 0x2e80 && codePoint <= 0xa4cf) ||
+    (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+    (codePoint >= 0xfe10 && codePoint <= 0xfe6f) ||
+    (codePoint >= 0xff00 && codePoint <= 0xff60) ||
+    (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
+    (codePoint >= 0x1f300 && codePoint <= 0x1faff)
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function stringDisplayCells(s: string): number {
+  return [...s].reduce((total, char) => total + charDisplayCells(char), 0);
+}
+
+function truncateCells(s: string, maxCells: number): string {
   const clean = cleanText(s);
-  if (clean.length <= n) return clean;
-  return clean.slice(0, Math.max(0, n - 1)) + "…";
+  let result = "";
+  let cells = 0;
+  for (const char of clean) {
+    const nextCells = cells + charDisplayCells(char);
+    if (nextCells > maxCells) return `${result.trimEnd()}…`;
+    result += char;
+    cells = nextCells;
+  }
+  return result;
+}
+
+function truncate(s: string, n: number): string {
+  return truncateCells(s, n);
+}
+
+function wrapCells(s: string, maxCells: number, maxLines: number): string[] {
+  const clean = cleanText(s);
+  if (!clean) return ["(empty)"];
+  const lines: string[] = [];
+  let current = "";
+  let currentCells = 0;
+  for (const char of clean) {
+    const charCells = charDisplayCells(char);
+    if (current && currentCells + charCells > maxCells) {
+      lines.push(current.trimEnd());
+      current = "";
+      currentCells = 0;
+      if (lines.length >= maxLines) break;
+    }
+    current += char;
+    currentCells += charCells;
+  }
+  if (lines.length < maxLines && current) lines.push(current.trimEnd());
+  if (lines.length === 0) lines.push("(empty)");
+  if (stringDisplayCells(clean) > lines.reduce((sum, line) => sum + stringDisplayCells(line), 0)) {
+    const last = lines.length - 1;
+    lines[last] = truncateCells(`${lines[last] ?? ""}…`, maxCells);
+  }
+  return lines;
 }
 
 function contentText(content: string | TelegramTreeContentBlock[] | undefined): string {
@@ -169,7 +229,10 @@ function buildExportNodes(snapshot: TelegramTreeSnapshot): ExportNode[] {
     activeOrder: activeOrderById.get(entry.id),
     leaf: !childIds.has(entry.id),
     ordinal: ordinalById.get(entry.id) ?? index + 1,
-    summary: truncate(entrySummary(entry), TREE_EXPORT_LABEL_LEN),
+    summary: truncateCells(
+      entrySummary(entry),
+      TREE_EXPORT_LABEL_LINE_CELLS * TREE_EXPORT_LABEL_MAX_LINES,
+    ),
   }));
   const nodeById = new Map(nodes.map((node) => [node.id, node] as const));
   for (const node of nodes) {
@@ -268,12 +331,28 @@ function renderNode(node: ExportNode, position: NodePosition, currentLeafId?: st
   const fill = active ? "#22c55e" : "#f59e0b";
   const stroke = current ? "#2563eb" : active ? "#15803d" : "#b45309";
   const textColor = active ? "#052e16" : "#451a03";
-  const leafText = node.leaf ? ` · leaf ${node.id.slice(0, 8)}` : "";
+  const labelX = position.x + TREE_EXPORT_NODE_RADIUS + 8;
+  const lines = wrapCells(
+    node.summary || "(empty)",
+    TREE_EXPORT_LABEL_LINE_CELLS,
+    TREE_EXPORT_LABEL_MAX_LINES,
+  );
+  const label = [
+    `<text x="${labelX}" y="${position.y - 6}" font-size="15" fill="#0f172a">`,
+    ...lines.map((line, index) => (
+      `<tspan x="${labelX}" dy="${index === 0 ? 0 : 18}">${escapeXml(line)}</tspan>`
+    )),
+    `</text>`,
+  ].join("\n");
+  const leaf = node.leaf
+    ? `<text x="${labelX}" y="${position.y + 32}" font-size="12" fill="#64748b">leaf ${escapeXml(node.id.slice(0, 8))}</text>`
+    : "";
   return [
     `<circle cx="${position.x}" cy="${position.y}" r="${TREE_EXPORT_NODE_RADIUS}" fill="${fill}" stroke="${stroke}" stroke-width="${current ? 5 : 2}"/>`,
     `<text x="${position.x}" y="${position.y + 5}" text-anchor="middle" font-size="12" font-weight="700" fill="${textColor}">${node.ordinal}</text>`,
-    `<text x="${position.x + TREE_EXPORT_NODE_RADIUS + 8}" y="${position.y + 5}" font-size="15" fill="#0f172a">${escapeXml(node.summary || "(empty)")}${escapeXml(leafText)}</text>`,
-  ].join("\n");
+    label,
+    leaf,
+  ].filter(Boolean).join("\n");
 }
 
 export function buildTelegramTreeSvg(snapshot: TelegramTreeSnapshot): string {
