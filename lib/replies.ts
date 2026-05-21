@@ -81,7 +81,11 @@ export function isAssistantAgentMessage(message: unknown): boolean {
   return getAgentMessageField(message, "role") === "assistant";
 }
 
+const TELEGRAM_TOOL_CALL_ARGS_HEAD_LINES = 3;
+const TELEGRAM_TOOL_CALL_ARGS_TAIL_LINES = 2;
+const TELEGRAM_TOOL_CALL_ARGS_LINE_LIMIT = 240;
 const TELEGRAM_TOOL_CALL_ARGS_PREVIEW_LIMIT = 400;
+const TELEGRAM_TOOL_CALL_ARGS_OMISSION = "   ......";
 
 function formatAgentToolCallArguments(args: unknown): string {
   if (args === undefined || args === null) return "";
@@ -91,6 +95,56 @@ function formatAgentToolCallArguments(args: unknown): string {
   } catch {
     return String(args);
   }
+}
+
+function expandEscapedNewlinesForTelegramToolPreview(text: string): string {
+  return text.replace(/\\n/g, "\n");
+}
+
+function truncateTelegramToolPreviewLine(line: string): string {
+  if (line.length <= TELEGRAM_TOOL_CALL_ARGS_LINE_LIMIT) return line;
+  return `${line.slice(0, TELEGRAM_TOOL_CALL_ARGS_LINE_LIMIT)}…`;
+}
+
+function isTelegramToolPreviewJsonSuffixLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (/^[}\]],?$/.test(trimmed)) return true;
+  return /^"[^"\\]+"\s*:\s*(?:-?\d+(?:\.\d+)?|true|false|null|"[^"\\]*"|\{.*\}|\[.*\]),?$/.test(
+    trimmed,
+  );
+}
+
+function findTelegramToolPreviewRollingEnd(lines: string[]): number {
+  let end = lines.length;
+  while (
+    end > TELEGRAM_TOOL_CALL_ARGS_HEAD_LINES &&
+    isTelegramToolPreviewJsonSuffixLine(lines[end - 1] ?? "")
+  ) {
+    end -= 1;
+  }
+  return end;
+}
+
+export function formatTelegramToolCallArgumentsPreview(argsText: string): string {
+  const displayText = expandEscapedNewlinesForTelegramToolPreview(argsText);
+  const lines = displayText.split("\n");
+  const rollingEnd = findTelegramToolPreviewRollingEnd(lines);
+  const rollingLines = lines.slice(0, rollingEnd);
+  const suffixLines = lines.slice(rollingEnd);
+  const shouldRoll =
+    rollingLines.length >
+      TELEGRAM_TOOL_CALL_ARGS_HEAD_LINES + TELEGRAM_TOOL_CALL_ARGS_TAIL_LINES ||
+    displayText.length > TELEGRAM_TOOL_CALL_ARGS_PREVIEW_LIMIT;
+  if (!shouldRoll) return displayText;
+  const head = rollingLines.slice(0, TELEGRAM_TOOL_CALL_ARGS_HEAD_LINES);
+  const tailStart = Math.max(
+    TELEGRAM_TOOL_CALL_ARGS_HEAD_LINES,
+    rollingLines.length - TELEGRAM_TOOL_CALL_ARGS_TAIL_LINES,
+  );
+  const tail = rollingLines.slice(tailStart);
+  return [...head, TELEGRAM_TOOL_CALL_ARGS_OMISSION, ...tail, ...suffixLines]
+    .map(truncateTelegramToolPreviewLine)
+    .join("\n");
 }
 
 export function formatAgentToolCallBlock(block: {
@@ -103,11 +157,8 @@ export function formatAgentToolCallBlock(block: {
       : "tool";
   const argsText = formatAgentToolCallArguments(block.arguments);
   if (argsText.length === 0) return `\u{1F527} \`${name}\``;
-  const truncated =
-    argsText.length > TELEGRAM_TOOL_CALL_ARGS_PREVIEW_LIMIT
-      ? `${argsText.slice(0, TELEGRAM_TOOL_CALL_ARGS_PREVIEW_LIMIT)}\u2026`
-      : argsText;
-  return `\u{1F527} \`${name}\`\n\`\`\`json\n${truncated}\n\`\`\``;
+  const preview = formatTelegramToolCallArgumentsPreview(argsText);
+  return `\u{1F527} \`${name}\`\n\`\`\`json\n${preview}\n\`\`\``;
 }
 
 function extractAgentTextContent(content: unknown): string {

@@ -20,6 +20,7 @@ import {
   editTelegramRenderedMessage,
   extractLatestAssistantMessageText,
   formatAgentToolCallBlock,
+  formatTelegramToolCallArgumentsPreview,
   getAgentMessageText,
   isAssistantAgentMessage,
   resetTransportReplyDedup,
@@ -54,6 +55,38 @@ test("Reply helpers render tool call blocks alongside assistant text", () => {
   assert.match(rendered, /telegram_attach/);
   assert.match(rendered, /local_path/);
   assert.match(rendered, /After tool/);
+});
+
+test("Reply helpers roll long tool call argument previews", () => {
+  const preview = formatTelegramToolCallArgumentsPreview(
+    ["line 1", "line 2", "line 3", "line 4", "line 5", "line 6", "line 7"].join("\n"),
+  );
+  assert.equal(
+    preview,
+    ["line 1", "line 2", "line 3", "   ......", "line 6", "line 7"].join("\n"),
+  );
+});
+
+test("Reply helpers show latest escaped tool call lines while streaming", () => {
+  const toolCallBlock = formatAgentToolCallBlock({
+    name: "bash",
+    arguments: {
+      command: [
+        "python3 - <<'PY'",
+        "from pathlib import Path",
+        "print('old line')",
+        "print('latest streaming line 1')",
+        "print('latest streaming line 2')",
+      ].join("\n"),
+      timeout: 10,
+    },
+  });
+  assert.match(toolCallBlock, /python3 - <<'PY'/);
+  assert.match(toolCallBlock, /from pathlib import Path/);
+  assert.match(toolCallBlock, /\.\.\.\.\.\./);
+  assert.doesNotMatch(toolCallBlock, /old line/);
+  assert.match(toolCallBlock, /latest streaming line 1/);
+  assert.match(toolCallBlock, /latest streaming line 2/);
 });
 
 test("Reply helpers extract assistant message text and metadata", () => {
