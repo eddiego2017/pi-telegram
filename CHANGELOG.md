@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Session Menu]` Fixed current-session delete completion feedback: the internal delete-current command now uses π's post-replacement `withSession` context before deleting the previous session file and sending the Telegram outcome.
 - `[Resume Menu]` Fixed `/resume` completion feedback: the internal session switch now uses π's post-replacement `withSession` context, shows a TUI success notification, and sends the Telegram resume outcome only after the replacement session is live.
 - `[Commands]` Removed the standalone Telegram `/delete` command from bot registration, reserved-command routing, and the `/start` help menu. Session deletion now lives under `/resume`.
 - `[Resume Menu]` Added `Manage 🗑` mode to `/resume`: it reuses the session list for multi-select deletion, shows the selected count, supports page selection and clear selection, refuses the current active session with a callback toast, and returns to resume mode with `Done`.

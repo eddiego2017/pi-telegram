@@ -195,6 +195,120 @@ test("Command helpers register pi setup, status, and reload commands", async () 
   assert.deepEqual(notifications, ["bot: @demo\npolling: stopped"]);
 });
 
+test("Command helpers register resume exec command and confirms after replacement", async () => {
+  const harness = createCommandRegistrationApiHarness();
+  const outcomes: unknown[] = [];
+  registerTelegramBridgeCommands(harness.api, {
+    promptForConfig: async () => undefined,
+    getStatusLines: () => [],
+    reloadConfig: async () => undefined,
+    hasBotToken: () => true,
+    startPolling: async () => undefined,
+    stopPolling: async () => undefined,
+    updateStatus: () => undefined,
+    notifyResumeOutcome: async (outcome) => {
+      outcomes.push(outcome);
+    },
+  });
+  const events: string[] = [];
+  const freshCtx = {
+    ui: {
+      notify: (message: string, level: string) => {
+        events.push(`fresh-notify:${level}:${message}`);
+      },
+    },
+  };
+  const ctx = {
+    ui: {
+      notify: (message: string, level?: string) => {
+        events.push(`old-notify:${level ?? "info"}:${message}`);
+      },
+    },
+    switchSession: async (
+      sessionPath: string,
+      options: { withSession?: (ctx: typeof freshCtx) => Promise<void> },
+    ) => {
+      events.push(`switch:${sessionPath}`);
+      await options.withSession?.(freshCtx);
+      return { cancelled: false };
+    },
+  } as unknown as ExtensionCommandContext;
+
+  await getRequiredCommand(harness.commands, "telegram-resume-exec").handler(
+    "/sessions/demo.jsonl",
+    ctx,
+  );
+
+  assert.deepEqual(events, [
+    "switch:/sessions/demo.jsonl",
+    "fresh-notify:info:Resumed session",
+  ]);
+  assert.deepEqual(outcomes, [
+    { ok: true, sessionPath: "/sessions/demo.jsonl" },
+  ]);
+});
+
+test("Command helpers register delete-current-session exec and confirms after replacement", async () => {
+  const harness = createCommandRegistrationApiHarness();
+  const outcomes: unknown[] = [];
+  const events: string[] = [];
+  registerTelegramBridgeCommands(harness.api, {
+    promptForConfig: async () => undefined,
+    getStatusLines: () => [],
+    reloadConfig: async () => undefined,
+    hasBotToken: () => true,
+    startPolling: async () => undefined,
+    stopPolling: async () => undefined,
+    updateStatus: () => undefined,
+    notifySessionDeleteOutcome: async (outcome) => {
+      outcomes.push(outcome);
+    },
+    deleteSessionFile: async (sessionPath) => {
+      events.push(`delete:${sessionPath}`);
+    },
+  });
+  const freshCtx = {
+    ui: {
+      notify: (message: string, level: string) => {
+        events.push(`fresh-notify:${level}:${message}`);
+      },
+    },
+  };
+  const ctx = {
+    waitForIdle: async () => {
+      events.push("wait");
+    },
+    sessionManager: {
+      getSessionFile: () => "/sessions/current.jsonl",
+    },
+    newSession: async (
+      options: {
+        parentSession?: string;
+        withSession?: (ctx: typeof freshCtx) => Promise<void>;
+      },
+    ) => {
+      events.push(`new:${options.parentSession}`);
+      await options.withSession?.(freshCtx);
+      return { cancelled: false };
+    },
+  } as unknown as ExtensionCommandContext;
+
+  await getRequiredCommand(
+    harness.commands,
+    "telegram-delete-current-session-exec",
+  ).handler("/sessions/current.jsonl", ctx);
+
+  assert.deepEqual(events, [
+    "wait",
+    "new:/sessions/current.jsonl",
+    "delete:/sessions/current.jsonl",
+    "fresh-notify:info:Deleted previous session",
+  ]);
+  assert.deepEqual(outcomes, [
+    { ok: true, sessionPath: "/sessions/current.jsonl" },
+  ]);
+});
+
 test("Command helpers register tree exec command and prefill selected prompt", async () => {
   const harness = createCommandRegistrationApiHarness();
   const outcomes: unknown[] = [];

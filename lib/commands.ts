@@ -400,13 +400,18 @@ export function registerTelegramBridgeCommands(
           await fail("current session changed before deletion", sessionPath);
           return;
         }
-        const result = await ctx.newSession({ parentSession: sessionPath });
+        const result = await ctx.newSession({
+          parentSession: sessionPath,
+          withSession: async (freshCtx) => {
+            await (deps.deleteSessionFile ?? unlink)(sessionPath);
+            freshCtx.ui.notify("Deleted previous session", "info");
+            await deps.notifySessionDeleteOutcome?.({ ok: true, sessionPath });
+          },
+        });
         if (result.cancelled) {
           await fail("newSession cancelled", sessionPath);
           return;
         }
-        await (deps.deleteSessionFile ?? unlink)(sessionPath);
-        await deps.notifySessionDeleteOutcome?.({ ok: true, sessionPath });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await fail(message, sessionPath);
