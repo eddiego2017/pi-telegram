@@ -96,7 +96,6 @@ test("Command helpers expose Telegram bot command definitions", () => {
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.session, "🧭");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.tree, "🌳");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.reload, "🔄");
-  assert.deepEqual(TELEGRAM_COMMAND_EMOJI.delete, "🗑");
   assert.equal(formatTelegramCommandEmojiPrefix("model"), "🤖 ");
   const expectedBuiltins = [
     {
@@ -110,8 +109,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
       command: "clone",
       description: "📑 Clone current session at current position",
     },
-    { command: "resume", description: "📂 Resume a previous session" },
-    { command: "delete", description: "🗑 Delete a previous session" },
+    { command: "resume", description: "📂 Resume/manage sessions" },
     { command: "session", description: "🧭 Show current session" },
     { command: "tree", description: "🌳 Rewind current session tree" },
     { command: "name", description: "🏷️ Set current session name" },
@@ -1035,7 +1033,6 @@ test("Command handler target runtime binds command targets into command handling
     openThinkingMenu: async () => {},
     openQueueMenu: async () => {},
     openResumeMenu: async () => {},
-    openDeleteMenu: async () => {},
     openSessionMenu: async () => {},
     getAllowedUserId: () => undefined,
     setAllowedUserId: () => {},
@@ -1151,9 +1148,6 @@ test("Command runtime routes commands through runtime ports", async () => {
     openResumeMenu: async (nextMessage: typeof message) => {
       events.push(`resume:${nextMessage.chat.id}`);
     },
-    openDeleteMenu: async (nextMessage: typeof message) => {
-      events.push(`delete:${nextMessage.chat.id}`);
-    },
     openSessionMenu: async (nextMessage: typeof message) => {
       events.push(`session:${nextMessage.chat.id}`);
     },
@@ -1223,7 +1217,7 @@ test("Command runtime routes commands through runtime ports", async () => {
   );
   assert.equal(
     await handleCommand("delete", "", message, { idle: true }),
-    true,
+    false,
   );
   assert.equal(
     await handleCommand("name", "mobile task", message, { idle: true }),
@@ -1264,7 +1258,6 @@ test("Command runtime routes commands through runtime ports", async () => {
     "reply:99:Reload queued.",
     "reload:queue",
     "tree:42",
-    "delete:42",
     "session-name:mobile task",
     "status",
     "reply:99:Session name set:\nmobile task",
@@ -1358,9 +1351,6 @@ test("Command helpers execute command actions through provided handlers", async 
     },
     handleResume: async (_message: unknown, args: string) => {
       events.push(`resume:${args}`);
-    },
-    handleDelete: async () => {
-      events.push("delete");
     },
     handleSession: async () => {
       events.push("session");

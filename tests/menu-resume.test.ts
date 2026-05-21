@@ -326,6 +326,8 @@ test("buildTelegramResumeMenuText shows delete selections in body rows", () => {
     now,
     ["/sessions/s1.json"],
   );
+  assert.match(text, /Current session cannot be deleted\./);
+  assert.match(text, /Selected: 1/);
   assert.match(text, /☐ ①\uFE0E <code>1h · 0msg<\/code>/);
   assert.match(text, /☑ ②\uFE0E <code>59m · 1msg<\/code>/);
 });
@@ -344,6 +346,7 @@ test("buildTelegramResumeMenuReplyMarkup keeps page-1 open index stable and adds
   assert.equal(navRow[1].callback_data, "resume:noop");
   assert.equal(navRow[1].text, "2/3");
   assert.equal(navRow[2].callback_data, "resume:page:2");
+  assert.ok(rows.flat().some((button) => button.callback_data === "resume:manage"));
   const firstEntryRow = rows[0];
   assert.equal(firstEntryRow.length, 4);
   assert.equal(firstEntryRow[0].text, "1");
@@ -382,12 +385,13 @@ test("buildTelegramResumeMenuReplyMarkup uses standalone multi-select delete con
     "delete",
     [],
     "multi",
-    "delete",
+    "resume",
   );
   const rows = markup.inline_keyboard;
   assert.equal(rows[0][0].callback_data, "delete:select-page");
   assert.ok(!rows.flat().some((button) => button.callback_data.startsWith("resume:")));
   assert.equal(rows[2][0].callback_data, "delete:cancel-menu");
+  assert.equal(rows[2][0].text, "Done");
 });
 
 test("buildTelegramResumeMenuReplyMarkup uses single-select delete buttons", () => {
@@ -507,6 +511,45 @@ function makeCallbackDeps(
     },
   };
 }
+
+test("handleTelegramResumeMenuCallback opens manage mode from /resume", async () => {
+  const state = makeState(3, 0);
+  const { store, events, deps } = makeCallbackDeps(state);
+  const handled = await handleTelegramResumeMenuCallback(
+    {
+      id: "manage",
+      data: "resume:manage",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.equal(handled, true);
+  assert.deepEqual(events, ["edit:1:100:delete-list", "answer:manage:"]);
+  const updated = store.get(100);
+  assert.equal(updated?.mode, "delete");
+  assert.equal(updated?.source, "resume");
+  assert.deepEqual(updated?.selectedDeletePaths, []);
+});
+
+test("handleTelegramResumeMenuCallback returns from resume manage mode", async () => {
+  const state = makeState(3, 0);
+  state.mode = "delete";
+  state.source = "resume";
+  const { store, events, deps } = makeCallbackDeps(state);
+  const handled = await handleTelegramResumeMenuCallback(
+    {
+      id: "done",
+      data: "delete:cancel-menu",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.equal(handled, true);
+  assert.deepEqual(events, ["edit:1:100:plain", "answer:done:Done."]);
+  const updated = store.get(100);
+  assert.equal(updated?.mode, "open");
+  assert.equal(updated?.source, "resume");
+});
 
 test("handleTelegramResumeMenuCallback paginates and updates state", async () => {
   const state = makeState(TELEGRAM_RESUME_MENU_PAGE_SIZE * 2 + 1, 0);

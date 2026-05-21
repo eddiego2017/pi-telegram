@@ -195,7 +195,7 @@ The token is an implementation detail. Section authors **never** write `section:
 4. Queue menu callbacks (`queue:*`)
 5. Settings menu callbacks (`settings:*`)
 6. Resume menu callbacks (`resume:*`)
-7. Delete menu callbacks (`delete:*`)
+7. Resume manage-mode deletion callbacks (`delete:*`)
 8. Session-center callbacks (`session:*`)
 9. Session-tree callbacks (`tree:*`)
 10. Section callbacks (`section:*`) — dispatched inside the built-in menu handler before normal `menu:*` actions

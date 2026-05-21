@@ -97,11 +97,6 @@ export interface TelegramInboundRouteRuntimeDeps<
     ctx: TContext,
     filters?: readonly string[],
   ) => Promise<void>;
-  openDeleteMenu?: (
-    chatId: number,
-    replyToMessageId: number,
-    ctx: TContext,
-  ) => Promise<void>;
   openSessionMenu?: (
     chatId: number,
     replyToMessageId: number,
@@ -449,7 +444,6 @@ export function createTelegramInboundRouteRuntime<
     },
     openSettingsMenu: deps.openSettingsMenu,
     openResumeMenu: deps.openResumeMenu,
-    openDeleteMenu: deps.openDeleteMenu,
     openSessionMenu: deps.openSessionMenu,
     openTreeMenu: deps.openTreeMenu,
     getAllowedUserId: deps.configStore.getAllowedUserId,

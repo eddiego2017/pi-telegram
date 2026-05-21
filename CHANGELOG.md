@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- `[Commands]` Added Telegram-side `/delete`, a dedicated delete picker that opens the session list directly in multi-select delete mode, supports current-page selection, shows explicit `🗑 Delete` / Back / Cancel confirmation, and prefers the `trash` CLI before falling back to unlinking the session file.
-- `[Resume Menu]` Removed Telegram-side delete affordances from `/resume`; `/resume` now only resumes sessions, while `/delete` owns delete UI and delete-prefixed callbacks.
-- `[Tests]` Extended command and `/resume` menu regressions for `/delete` bot-command registration, routing, delete-list rendering, current-page selection, confirmation, and success actions.
+- `[Resume Menu]` Fixed `/resume` completion feedback: the internal session switch now uses π's post-replacement `withSession` context, shows a TUI success notification, and sends the Telegram resume outcome only after the replacement session is live.
+- `[Commands]` Removed the standalone Telegram `/delete` command from bot registration, reserved-command routing, and the `/start` help menu. Session deletion now lives under `/resume`.
+- `[Resume Menu]` Added `Manage 🗑` mode to `/resume`: it reuses the session list for multi-select deletion, shows the selected count, supports page selection and clear selection, refuses the current active session with a callback toast, and returns to resume mode with `Done`.
+- `[Tests]` Updated command and `/resume` menu regressions for the unified resume/manage flow, removed `/delete` command routing expectations, and added manage-mode entry/exit coverage.
 - `[Resume Menu]` Increased `/resume` pagination from 8 to 20 sessions per page and extended the body row markers through `⑳`, so more previous sessions are visible at once without changing callback semantics.
 - `[Tree Menu]` Fixed tmux-injected internal navigation commands (`/telegram-tree-exec`) so they clear any stale π editor draft before sending the slash command. This prevents a previous `/tree` prefilled prompt from swallowing a later branch switch as normal user text.
 - `[Tests]` Added a dynamic tmux injector regression covering stale-editor clearing before `/telegram-tree-exec` injection.
