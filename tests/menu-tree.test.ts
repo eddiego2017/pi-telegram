@@ -18,6 +18,7 @@ import {
   handleTelegramTreeMenuCallback,
   type TelegramTreeSnapshot,
 } from "../lib/menu-tree.ts";
+import { buildTelegramTreeSvg } from "../lib/tree-export.ts";
 
 function createSnapshot(): TelegramTreeSnapshot {
   const user = {
@@ -124,6 +125,71 @@ test("Tree navigation gate rejects any busy queue or pi state", () => {
   assert.equal(gate({ idle: true, pending: false }), true);
   assert.equal(gate({ idle: false, pending: false }), false);
   assert.equal(gate({ idle: true, pending: true }), false);
+});
+
+test("Tree PNG export callback renders and sends files", async () => {
+  const snapshot = createSnapshot();
+  const entries = buildTelegramTreeMenuEntries(snapshot);
+  const store = createTelegramTreeMenuStore();
+  store.set({
+    chatId: 7,
+    messageId: 99,
+    entries,
+    page: 0,
+    view: "list",
+    filter: "active",
+    updatedAt: Date.now(),
+  });
+  const events: string[] = [];
+  const handled = await handleTelegramTreeMenuCallback(
+    {
+      id: "cb",
+      data: "tree:export:png",
+      message: { chat: { id: 7 }, message_id: 99 },
+    },
+    {
+      getState: store.get,
+      setState: store.set,
+      getSnapshot: () => snapshot,
+      editTreeMessage: async () => {
+        events.push("edit");
+      },
+      answerCallbackQuery: async (_id, text) => {
+        events.push(`answer:${text ?? ""}`);
+      },
+      injectTreeExec: async () => {},
+      canNavigate: () => true,
+      renderTreeExport: async (exportSnapshot) => {
+        events.push(`render:${exportSnapshot.sessionId}`);
+        return {
+          svgPath: "/tmp/tree.svg",
+          pngPath: "/tmp/tree.png",
+          fileBaseName: "tree",
+          nodeCount: 2,
+          width: 900,
+          height: 220,
+        };
+      },
+      sendTreeExportFiles: async (chatId, replyToMessageId, files) => {
+        events.push(`send:${chatId}:${replyToMessageId}:${files.fileBaseName}`);
+      },
+    },
+  );
+  assert.equal(handled, true);
+  assert.deepEqual(events, [
+    "answer:Rendering full tree PNG…",
+    "render:session",
+    "send:7:99:tree",
+  ]);
+});
+
+test("Tree SVG export renders prompt nodes and labels", () => {
+  const svg = buildTelegramTreeSvg(createSnapshot());
+  assert.match(svg, /Session tree/);
+  assert.match(svg, /first prompt/);
+  assert.match(svg, /second prompt/);
+  assert.match(svg, /active path/);
+  assert.match(svg, /<circle/);
 });
 
 test("Tree callback injects selected prompt without summary", async () => {

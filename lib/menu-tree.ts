@@ -83,6 +83,15 @@ export interface TelegramTreeMenuState {
   updatedAt: number;
 }
 
+export interface TelegramTreeExportFileSet {
+  svgPath: string;
+  pngPath: string;
+  fileBaseName: string;
+  nodeCount: number;
+  width: number;
+  height: number;
+}
+
 export interface TelegramTreeMenuStore {
   get(messageId: number | undefined): TelegramTreeMenuState | undefined;
   set(state: TelegramTreeMenuState): void;
@@ -439,6 +448,7 @@ export function buildTelegramTreeListReplyMarkup(
     filter === "branches"
       ? { text: "🟢 Active path", callback_data: "tree:filter:active" }
       : { text: "🌿 Branches", callback_data: "tree:filter:branches" },
+    { text: "🖼 Full PNG", callback_data: "tree:export:png" },
   ]);
   const buttonRow: TelegramTreeReplyMarkup["inline_keyboard"][number] = [];
   for (const entry of pageSlice(entries, safePage)) {
@@ -592,6 +602,12 @@ export interface TelegramTreeMenuCallbackDeps {
   ) => Promise<void>;
   injectTreeExec: (entryId: string, summarize: boolean) => Promise<void>;
   canNavigate: () => boolean;
+  renderTreeExport?: (snapshot: TelegramTreeSnapshot) => Promise<TelegramTreeExportFileSet>;
+  sendTreeExportFiles?: (
+    chatId: number,
+    replyToMessageId: number,
+    files: TelegramTreeExportFileSet,
+  ) => Promise<void>;
   now?: () => number;
 }
 
@@ -620,6 +636,29 @@ async function handleTelegramTreeMenuCallbackUnsafe(
   const updateState = (next: Partial<TelegramTreeMenuState>) => {
     deps.setState({ ...state, ...next, updatedAt: now() });
   };
+
+  if (data === "tree:export:png") {
+    if (!deps.renderTreeExport || !deps.sendTreeExportFiles) {
+      await deps.answerCallbackQuery(query.id, "Tree PNG export is not available.");
+      return true;
+    }
+    await deps.answerCallbackQuery(query.id, "Rendering full tree PNG…");
+    try {
+      const snapshot = deps.getSnapshot();
+      const files = await deps.renderTreeExport(snapshot);
+      await deps.sendTreeExportFiles(chatId, messageId, files);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await deps.editTreeMessage(
+        chatId,
+        messageId,
+        `${TELEGRAM_TREE_MENU_TITLE}\n\nPNG export failed: ${escapeHtml(message)}`,
+        buildTelegramTreeListReplyMarkup(state.entries, state.page, state.filter),
+      );
+      updateState({ view: "list" });
+    }
+    return true;
+  }
 
   if (data.startsWith("tree:filter:")) {
     const filter: TelegramTreeFilter = data.endsWith(":branches") ? "branches" : "active";
@@ -805,6 +844,12 @@ export interface TelegramTreeMenuRuntimeDeps<TContext> {
   ) => Promise<void>;
   injectTreeExec: (entryId: string, summarize: boolean) => Promise<void>;
   canNavigate: (ctx: TContext) => boolean;
+  renderTreeExport?: (snapshot: TelegramTreeSnapshot) => Promise<TelegramTreeExportFileSet>;
+  sendTreeExportFiles?: (
+    chatId: number,
+    replyToMessageId: number,
+    files: TelegramTreeExportFileSet,
+  ) => Promise<void>;
   store?: TelegramTreeMenuStore;
 }
 
@@ -851,6 +896,8 @@ export function createTelegramTreeMenuRuntime<TContext>(
         canNavigate: function canNavigateWithContext() {
           return deps.canNavigate(ctx);
         },
+        renderTreeExport: deps.renderTreeExport,
+        sendTreeExportFiles: deps.sendTreeExportFiles,
       });
     },
   };
@@ -887,6 +934,8 @@ export interface TelegramTreeMenuRuntimePiContextDeps<TContext> {
   answerCallbackQuery: TelegramTreeMenuRuntimeDeps<TContext>["answerCallbackQuery"];
   injectTreeExec: TelegramTreeMenuRuntimeDeps<TContext>["injectTreeExec"];
   canNavigate: TelegramTreeMenuRuntimeDeps<TContext>["canNavigate"];
+  renderTreeExport?: TelegramTreeMenuRuntimeDeps<TContext>["renderTreeExport"];
+  sendTreeExportFiles?: TelegramTreeMenuRuntimeDeps<TContext>["sendTreeExportFiles"];
 }
 
 export function buildTelegramTreeMenuRuntime<TContext>(
@@ -899,6 +948,8 @@ export function buildTelegramTreeMenuRuntime<TContext>(
     answerCallbackQuery: deps.answerCallbackQuery,
     injectTreeExec: deps.injectTreeExec,
     canNavigate: deps.canNavigate,
+    renderTreeExport: deps.renderTreeExport,
+    sendTreeExportFiles: deps.sendTreeExportFiles,
   });
 }
 

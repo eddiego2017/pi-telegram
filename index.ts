@@ -41,6 +41,7 @@ import * as Setup from "./lib/setup.ts";
 import * as Status from "./lib/status.ts";
 import * as TextGroups from "./lib/text-groups.ts";
 import * as ThreadContext from "./lib/thread-context.ts";
+import * as TreeExport from "./lib/tree-export.ts";
 
 type ActivePiModel = NonNullable<Pi.ExtensionContext["model"]>;
 type RuntimeTelegramQueueItem = Queue.TelegramQueueItem<Pi.ExtensionContext>;
@@ -206,6 +207,10 @@ export default function (pi: Pi.ExtensionAPI) {
   });
 
   // --- Message Delivery & Preview ---
+
+  const sendTreeExportFiles = TreeExport.createTelegramTreeExportFileSender({
+    sendMultipart: callMultipart,
+  });
 
   const sendGuestReply = Replies.createGuestMarkdownReplySender({
     renderTelegramMessage: Replies.renderTelegramMessage,
@@ -401,6 +406,8 @@ export default function (pi: Pi.ExtensionAPI) {
     answerCallbackQuery,
     injectTreeExec,
     canNavigate: canNavigateTree,
+    renderTreeExport: TreeExport.renderTelegramTreeExportFiles,
+    sendTreeExportFiles,
   });
   const notifyResumeOutcome = MenuResume.createTelegramResumeOutcomeNotifier({
     getAllowedUserId: configStore.getAllowedUserId,
