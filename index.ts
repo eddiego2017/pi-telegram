@@ -230,7 +230,7 @@ export default function (pi: Pi.ExtensionAPI) {
   // --- Reply Runtime Wiring ---
 
   const replyRuntime =
-    Replies.createTelegramRenderedMessageDeliveryRuntime<Keyboard.TelegramInlineKeyboardMarkup>(
+    Replies.createTelegramRenderedMessageDeliveryRuntime<unknown>(
       {
         sendMessage,
         editMessage: editTelegramMessageText,
@@ -408,6 +408,7 @@ export default function (pi: Pi.ExtensionAPI) {
     canNavigate: canNavigateTree,
     renderTreeExport: TreeExport.renderTelegramTreeExportFiles,
     sendTreeExportFiles,
+    publishTreeGist: TreeExport.publishTelegramTreeSvgGist,
   });
   const notifyResumeOutcome = MenuResume.createTelegramResumeOutcomeNotifier({
     getAllowedUserId: configStore.getAllowedUserId,

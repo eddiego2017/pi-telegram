@@ -4,14 +4,17 @@
  * Owns the Telegram-native /tree MVP: session-tree listing, entry detail views, and rewind callback dispatch.
  */
 
-import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
-
 const TELEGRAM_TREE_STATE_TTL_MS = 10 * 60 * 1000;
 const TELEGRAM_TREE_PAGE_SIZE = 8;
 const TELEGRAM_TREE_SUMMARY_LEN = 42;
 const TELEGRAM_TREE_DETAIL_TEXT_LEN = 2600;
 
-export type TelegramTreeReplyMarkup = TelegramInlineKeyboardMarkup;
+export type TelegramTreeReplyMarkup = {
+  inline_keyboard: Array<Array<
+    | { text: string; callback_data: string }
+    | { text: string; url: string }
+  >>;
+};
 export type TelegramTreeView = "list" | "detail";
 export type TelegramTreeEntryRole =
   | "user"
@@ -85,11 +88,17 @@ export interface TelegramTreeMenuState {
 
 export interface TelegramTreeExportFileSet {
   svgPath: string;
-  pngPath: string;
   fileBaseName: string;
   nodeCount: number;
   width: number;
   height: number;
+}
+
+export interface TelegramTreeGistPublishResult {
+  gistId: string;
+  htmlUrl: string;
+  rawUrl: string;
+  fileName: string;
 }
 
 export interface TelegramTreeMenuStore {
@@ -448,8 +457,9 @@ export function buildTelegramTreeListReplyMarkup(
     filter === "branches"
       ? { text: "🟢 Active path", callback_data: "tree:filter:active" }
       : { text: "🌿 Branches", callback_data: "tree:filter:branches" },
-    { text: "🖼 Full PNG", callback_data: "tree:export:png" },
+    { text: "📄 Full SVG", callback_data: "tree:export:svg" },
   ]);
+  rows.push([{ text: "🌐 Publish Gist", callback_data: "tree:gist:ask" }]);
   const buttonRow: TelegramTreeReplyMarkup["inline_keyboard"][number] = [];
   for (const entry of pageSlice(entries, safePage)) {
     buttonRow.push({ text: formatTreeButton(entry), callback_data: `tree:entry:${entry.index}` });
@@ -608,6 +618,7 @@ export interface TelegramTreeMenuCallbackDeps {
     replyToMessageId: number,
     files: TelegramTreeExportFileSet,
   ) => Promise<void>;
+  publishTreeGist?: (snapshot: TelegramTreeSnapshot) => Promise<TelegramTreeGistPublishResult>;
   now?: () => number;
 }
 
@@ -637,12 +648,12 @@ async function handleTelegramTreeMenuCallbackUnsafe(
     deps.setState({ ...state, ...next, updatedAt: now() });
   };
 
-  if (data === "tree:export:png") {
+  if (data === "tree:export:svg" || data === "tree:export:png") {
     if (!deps.renderTreeExport || !deps.sendTreeExportFiles) {
-      await deps.answerCallbackQuery(query.id, "Tree PNG export is not available.");
+      await deps.answerCallbackQuery(query.id, "Tree SVG export is not available.");
       return true;
     }
-    await deps.answerCallbackQuery(query.id, "Rendering full tree PNG…");
+    await deps.answerCallbackQuery(query.id, "Rendering full tree SVG…");
     try {
       const snapshot = deps.getSnapshot();
       const files = await deps.renderTreeExport(snapshot);
@@ -652,7 +663,87 @@ async function handleTelegramTreeMenuCallbackUnsafe(
       await deps.editTreeMessage(
         chatId,
         messageId,
-        `${TELEGRAM_TREE_MENU_TITLE}\n\nPNG export failed: ${escapeHtml(message)}`,
+        `${TELEGRAM_TREE_MENU_TITLE}\n\nSVG export failed: ${escapeHtml(message)}`,
+        buildTelegramTreeListReplyMarkup(state.entries, state.page, state.filter),
+      );
+      updateState({ view: "list" });
+    }
+    return true;
+  }
+
+  if (data === "tree:gist:ask") {
+    await deps.editTreeMessage(
+      chatId,
+      messageId,
+      [
+        TELEGRAM_TREE_MENU_TITLE,
+        "",
+        "Publish this session tree SVG to a secret GitHub Gist?",
+        "",
+        "<b>Privacy note</b>",
+        "Secret Gists are unlisted, not private. Anyone with the URL can read the prompt summaries in this tree.",
+      ].join("\n"),
+      {
+        inline_keyboard: [
+          [{ text: "✅ Publish secret Gist", callback_data: "tree:gist:publish" }],
+          [{ text: "Cancel", callback_data: "tree:gist:cancel" }],
+        ],
+      },
+    );
+    updateState({ view: "list" });
+    await deps.answerCallbackQuery(query.id);
+    return true;
+  }
+
+  if (data === "tree:gist:cancel") {
+    const snapshot = deps.getSnapshot();
+    await deps.editTreeMessage(
+      chatId,
+      messageId,
+      buildTelegramTreeListText(snapshot, state.entries, state.page, state.filter),
+      buildTelegramTreeListReplyMarkup(state.entries, state.page, state.filter),
+    );
+    updateState({ view: "list" });
+    await deps.answerCallbackQuery(query.id);
+    return true;
+  }
+
+  if (data === "tree:gist:publish") {
+    if (!deps.publishTreeGist) {
+      await deps.answerCallbackQuery(query.id, "Gist publishing is not available.");
+      return true;
+    }
+    await deps.answerCallbackQuery(query.id, "Publishing secret Gist…");
+    try {
+      const snapshot = deps.getSnapshot();
+      const result = await deps.publishTreeGist(snapshot);
+      await deps.editTreeMessage(
+        chatId,
+        messageId,
+        [
+          TELEGRAM_TREE_MENU_TITLE,
+          "",
+          "Published secret Gist.",
+          "",
+          `File: <code>${escapeHtml(result.fileName)}</code>`,
+          `Gist: <code>${escapeHtml(result.gistId)}</code>`,
+          "",
+          "Use Open SVG for direct browser rendering.",
+        ].join("\n"),
+        {
+          inline_keyboard: [
+            [{ text: "🌐 Open SVG", url: result.rawUrl }],
+            [{ text: "📄 Gist page", url: result.htmlUrl }],
+            [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
+          ],
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await deps.editTreeMessage(
+        chatId,
+        messageId,
+        `${TELEGRAM_TREE_MENU_TITLE}\n\nGist publish failed: ${escapeHtml(message)}`,
         buildTelegramTreeListReplyMarkup(state.entries, state.page, state.filter),
       );
       updateState({ view: "list" });
@@ -850,6 +941,7 @@ export interface TelegramTreeMenuRuntimeDeps<TContext> {
     replyToMessageId: number,
     files: TelegramTreeExportFileSet,
   ) => Promise<void>;
+  publishTreeGist?: (snapshot: TelegramTreeSnapshot) => Promise<TelegramTreeGistPublishResult>;
   store?: TelegramTreeMenuStore;
 }
 
@@ -898,6 +990,7 @@ export function createTelegramTreeMenuRuntime<TContext>(
         },
         renderTreeExport: deps.renderTreeExport,
         sendTreeExportFiles: deps.sendTreeExportFiles,
+        publishTreeGist: deps.publishTreeGist,
       });
     },
   };
@@ -936,6 +1029,7 @@ export interface TelegramTreeMenuRuntimePiContextDeps<TContext> {
   canNavigate: TelegramTreeMenuRuntimeDeps<TContext>["canNavigate"];
   renderTreeExport?: TelegramTreeMenuRuntimeDeps<TContext>["renderTreeExport"];
   sendTreeExportFiles?: TelegramTreeMenuRuntimeDeps<TContext>["sendTreeExportFiles"];
+  publishTreeGist?: TelegramTreeMenuRuntimeDeps<TContext>["publishTreeGist"];
 }
 
 export function buildTelegramTreeMenuRuntime<TContext>(
@@ -950,6 +1044,7 @@ export function buildTelegramTreeMenuRuntime<TContext>(
     canNavigate: deps.canNavigate,
     renderTreeExport: deps.renderTreeExport,
     sendTreeExportFiles: deps.sendTreeExportFiles,
+    publishTreeGist: deps.publishTreeGist,
   });
 }
 

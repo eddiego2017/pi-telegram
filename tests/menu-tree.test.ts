@@ -69,7 +69,7 @@ test("Tree menu entries show active-branch user prompts only", () => {
     ],
   );
   assert.equal(entries[0]?.summary, "first prompt");
-  assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "active").inline_keyboard.length, 2);
+  assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "active").inline_keyboard.length, 3);
   assert.match(buildTelegramTreeDetailText(entries[0]!), /first prompt/);
   assert.equal(getTelegramTreeEntryEditorText(snapshot.entries[0]), "[telegram] first prompt");
   assert.equal(getTelegramTreeEntryEditorText(snapshot.entries[1]), undefined);
@@ -127,7 +127,7 @@ test("Tree navigation gate rejects any busy queue or pi state", () => {
   assert.equal(gate({ idle: true, pending: true }), false);
 });
 
-test("Tree PNG export callback renders and sends files", async () => {
+test("Tree SVG export callback renders and sends file", async () => {
   const snapshot = createSnapshot();
   const entries = buildTelegramTreeMenuEntries(snapshot);
   const store = createTelegramTreeMenuStore();
@@ -144,7 +144,7 @@ test("Tree PNG export callback renders and sends files", async () => {
   const handled = await handleTelegramTreeMenuCallback(
     {
       id: "cb",
-      data: "tree:export:png",
+      data: "tree:export:svg",
       message: { chat: { id: 7 }, message_id: 99 },
     },
     {
@@ -163,7 +163,6 @@ test("Tree PNG export callback renders and sends files", async () => {
         events.push(`render:${exportSnapshot.sessionId}`);
         return {
           svgPath: "/tmp/tree.svg",
-          pngPath: "/tmp/tree.png",
           fileBaseName: "tree",
           nodeCount: 2,
           width: 900,
@@ -177,10 +176,82 @@ test("Tree PNG export callback renders and sends files", async () => {
   );
   assert.equal(handled, true);
   assert.deepEqual(events, [
-    "answer:Rendering full tree PNG…",
+    "answer:Rendering full tree SVG…",
     "render:session",
     "send:7:99:tree",
   ]);
+});
+
+test("Tree Gist publish callback confirms privacy and returns raw SVG URL", async () => {
+  const snapshot = createSnapshot();
+  const entries = buildTelegramTreeMenuEntries(snapshot);
+  const store = createTelegramTreeMenuStore();
+  store.set({
+    chatId: 7,
+    messageId: 99,
+    entries,
+    page: 0,
+    view: "list",
+    filter: "active",
+    updatedAt: Date.now(),
+  });
+  const events: string[] = [];
+  const markups: unknown[] = [];
+  const baseDeps = {
+    getState: store.get,
+    setState: store.set,
+    getSnapshot: () => snapshot,
+    editTreeMessage: async (_chatId: number, _messageId: number, text: string, markup: unknown) => {
+      events.push(`edit:${text.includes("Secret Gists")}:${text.includes("Published secret Gist")}`);
+      markups.push(markup);
+    },
+    answerCallbackQuery: async (_id: string, text?: string) => {
+      events.push(`answer:${text ?? ""}`);
+    },
+    injectTreeExec: async () => {},
+    canNavigate: () => true,
+  };
+  assert.equal(await handleTelegramTreeMenuCallback(
+    {
+      id: "cb1",
+      data: "tree:gist:ask",
+      message: { chat: { id: 7 }, message_id: 99 },
+    },
+    baseDeps,
+  ), true);
+  assert.equal(await handleTelegramTreeMenuCallback(
+    {
+      id: "cb2",
+      data: "tree:gist:publish",
+      message: { chat: { id: 7 }, message_id: 99 },
+    },
+    {
+      ...baseDeps,
+      publishTreeGist: async (publishSnapshot) => {
+        events.push(`publish:${publishSnapshot.sessionId}`);
+        return {
+          gistId: "gist123",
+          htmlUrl: "https://gist.github.com/eddie/gist123",
+          rawUrl: "https://gist.githubusercontent.com/eddie/gist123/raw/tree.svg",
+          fileName: "tree.svg",
+        };
+      },
+    },
+  ), true);
+  assert.deepEqual(events, [
+    "edit:true:false",
+    "answer:",
+    "answer:Publishing secret Gist…",
+    "publish:session",
+    "edit:false:true",
+  ]);
+  assert.deepEqual(markups.at(-1), {
+    inline_keyboard: [
+      [{ text: "🌐 Open SVG", url: "https://gist.githubusercontent.com/eddie/gist123/raw/tree.svg" }],
+      [{ text: "📄 Gist page", url: "https://gist.github.com/eddie/gist123" }],
+      [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
+    ],
+  });
 });
 
 test("Tree SVG export renders prompt nodes and labels", () => {

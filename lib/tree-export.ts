@@ -4,11 +4,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-
-import { Resvg } from "@resvg/resvg-js";
 
 import type {
   TelegramTreeContentBlock,
@@ -29,11 +27,17 @@ const TREE_EXPORT_MIN_WIDTH = 900;
 
 export interface TelegramTreeExportFileSet {
   svgPath: string;
-  pngPath: string;
   fileBaseName: string;
   nodeCount: number;
   width: number;
   height: number;
+}
+
+export interface TelegramTreeGistPublishResult {
+  gistId: string;
+  htmlUrl: string;
+  rawUrl: string;
+  fileName: string;
 }
 
 export interface TelegramTreeExportFileSenderDeps {
@@ -64,11 +68,19 @@ interface NodePosition {
   y: number;
 }
 
-function getTelegramTreeExportTempDir(): string {
-  const agentDir = process.env.PI_CODING_AGENT_DIR
+function getTelegramAgentDir(): string {
+  return process.env.PI_CODING_AGENT_DIR
     ? resolve(process.env.PI_CODING_AGENT_DIR)
     : join(homedir(), ".pi", "agent");
-  return join(agentDir, "tmp", "telegram-tree");
+}
+
+function getTelegramTreeExportTempDir(): string {
+  return join(getTelegramAgentDir(), "tmp", "telegram-tree");
+}
+
+function getTelegramTreeGistTokenPath(): string {
+  return process.env.PI_TELEGRAM_GIST_PAT_PATH?.trim()
+    || join(homedir(), ".pi", "credentials", "github-gist-pat");
 }
 
 function escapeXml(s: string): string {
@@ -400,7 +412,7 @@ export function createTelegramTreeExportFileSender(
 ) => Promise<void> {
   return async function sendTelegramTreeExportFiles(chatId, replyToMessageId, files) {
     const replyParameters = buildTelegramMultipartReplyParameters(replyToMessageId);
-    const caption = `Session tree (${files.nodeCount} prompts, ${files.width}×${files.height})`;
+    const caption = `Session tree SVG (${files.nodeCount} prompts, ${files.width}×${files.height})`;
     await deps.sendMultipart(
       "sendDocument",
       {
@@ -408,13 +420,6 @@ export function createTelegramTreeExportFileSender(
         caption,
         ...(replyParameters ? { reply_parameters: replyParameters } : {}),
       },
-      "document",
-      files.pngPath,
-      `${files.fileBaseName}.png`,
-    );
-    await deps.sendMultipart(
-      "sendDocument",
-      { chat_id: String(chatId), caption: "Session tree SVG source" },
       "document",
       files.svgPath,
       `${files.fileBaseName}.svg`,
@@ -435,19 +440,64 @@ export async function renderTelegramTreeExportFiles(
   const safeSession = snapshot.sessionId.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 48) || "session";
   const fileBaseName = `session-tree-${safeSession}-${randomUUID().slice(0, 8)}`;
   const svgPath = join(outputDir, `${fileBaseName}.svg`);
-  const pngPath = join(outputDir, `${fileBaseName}.png`);
   await writeFile(svgPath, svg, "utf8");
-  const png = new Resvg(svg, {
-    fitTo: { mode: "original" },
-    font: { loadSystemFonts: true },
-  }).render().asPng();
-  await writeFile(pngPath, png);
   return {
     svgPath,
-    pngPath,
     fileBaseName,
     nodeCount: buildExportNodes(snapshot).length,
     width,
     height,
   };
+}
+
+function sanitizeGistFileName(sessionId: string): string {
+  const safeSession = sessionId.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 48) || "session";
+  return `session-tree-${safeSession}.svg`;
+}
+
+interface GitHubGistApiResponse {
+  id?: string;
+  html_url?: string;
+  files?: Record<string, { raw_url?: string }>;
+  message?: string;
+}
+
+export async function publishTelegramTreeSvgGist(
+  snapshot: TelegramTreeSnapshot,
+  options?: { tokenPath?: string; public?: boolean },
+): Promise<TelegramTreeGistPublishResult> {
+  const tokenPath = options?.tokenPath ?? getTelegramTreeGistTokenPath();
+  const token = (await readFile(tokenPath, "utf8")).trim();
+  if (!token) throw new Error("GitHub Gist token file is empty.");
+  const fileName = sanitizeGistFileName(snapshot.sessionId);
+  const svg = buildTelegramTreeSvg(snapshot);
+  const response = await fetch("https://api.github.com/gists", {
+    method: "POST",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "User-Agent": "pi-telegram-tree-export",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify({
+      description: `pi session tree: ${snapshot.sessionId}`,
+      public: options?.public ?? false,
+      files: {
+        [fileName]: { content: svg },
+      },
+    }),
+  });
+  const body = await response.json().catch(() => ({})) as GitHubGistApiResponse;
+  if (!response.ok) {
+    throw new Error(body.message || `GitHub Gist API failed (${response.status}).`);
+  }
+  const gistId = body.id;
+  const htmlUrl = body.html_url;
+  const rawUrl = body.files?.[fileName]?.raw_url
+    ?? Object.values(body.files ?? {}).find((file) => file.raw_url)?.raw_url;
+  if (!gistId || !htmlUrl || !rawUrl) {
+    throw new Error("GitHub Gist API response did not include expected URLs.");
+  }
+  return { gistId, htmlUrl, rawUrl, fileName };
 }
