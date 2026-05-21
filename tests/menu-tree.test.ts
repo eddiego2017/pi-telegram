@@ -69,7 +69,19 @@ test("Tree menu entries show active-branch user prompts only", () => {
     ],
   );
   assert.equal(entries[0]?.summary, "first prompt");
-  assert.equal(buildTelegramTreeListReplyMarkup(entries, 0, "active").inline_keyboard.length, 3);
+  const activeMarkup = buildTelegramTreeListReplyMarkup(entries, 0, "active");
+  assert.equal(activeMarkup.inline_keyboard.length, 2);
+  assert.deepEqual(activeMarkup.inline_keyboard[0], [
+    { text: "🌿 Branches", callback_data: "tree:filter:branches" },
+  ]);
+  const branchMarkup = buildTelegramTreeListReplyMarkup(entries, 0, "branches");
+  assert.deepEqual(branchMarkup.inline_keyboard[0], [
+    { text: "🟢 Active path", callback_data: "tree:filter:active" },
+    { text: "📄 Full SVG", callback_data: "tree:export:svg" },
+  ]);
+  assert.deepEqual(branchMarkup.inline_keyboard[1], [
+    { text: "🌐 Publish Gist", callback_data: "tree:gist:ask" },
+  ]);
   assert.match(buildTelegramTreeDetailText(entries[0]!), /first prompt/);
   assert.equal(getTelegramTreeEntryEditorText(snapshot.entries[0]), "[telegram] first prompt");
   assert.equal(getTelegramTreeEntryEditorText(snapshot.entries[1]), undefined);

@@ -454,13 +454,15 @@ export function buildTelegramTreeListReplyMarkup(
 ): TelegramTreeReplyMarkup {
   const safePage = clampPage(page, entries.length);
   const rows: TelegramTreeReplyMarkup["inline_keyboard"] = [];
-  rows.push([
-    filter === "branches"
-      ? { text: "🟢 Active path", callback_data: "tree:filter:active" }
-      : { text: "🌿 Branches", callback_data: "tree:filter:branches" },
-    { text: "📄 Full SVG", callback_data: "tree:export:svg" },
-  ]);
-  rows.push([{ text: "🌐 Publish Gist", callback_data: "tree:gist:ask" }]);
+  if (filter === "branches") {
+    rows.push([
+      { text: "🟢 Active path", callback_data: "tree:filter:active" },
+      { text: "📄 Full SVG", callback_data: "tree:export:svg" },
+    ]);
+    rows.push([{ text: "🌐 Publish Gist", callback_data: "tree:gist:ask" }]);
+  } else {
+    rows.push([{ text: "🌿 Branches", callback_data: "tree:filter:branches" }]);
+  }
   const buttonRow: TelegramTreeReplyMarkup["inline_keyboard"][number] = [];
   for (const entry of pageSlice(entries, safePage)) {
     buttonRow.push({ text: formatTreeButton(entry), callback_data: `tree:entry:${entry.index}` });
