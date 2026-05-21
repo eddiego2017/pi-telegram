@@ -135,6 +135,56 @@ test("buildTelegramResumeMenuText renders filter summary, highlights matches, an
   assert.match(empty, /cat 1→0/);
 });
 
+test("openTelegramResumeMenu includes current session as a read-only row", async () => {
+  const sessions = [
+    {
+      path: "/sessions/current.jsonl",
+      id: "current-id",
+      cwd: "/cwd",
+      created: new Date(0),
+      modified: new Date(0),
+      messageCount: 1,
+      firstMessage: "current session headline",
+      allMessagesText: "current session body",
+    },
+    {
+      path: "/sessions/other.jsonl",
+      id: "other-id",
+      cwd: "/cwd",
+      created: new Date(0),
+      modified: new Date(1),
+      messageCount: 2,
+      firstMessage: "other session headline",
+      allMessagesText: "other session body",
+    },
+  ];
+  let sentText = "";
+  let sentMarkup: ReturnType<typeof buildTelegramResumeMenuReplyMarkup> | undefined;
+  let stored: TelegramResumeMenuState | undefined;
+  await openTelegramResumeMenu({
+    chatId: 1,
+    getCwd: () => "/cwd",
+    getCurrentSessionFile: () => "/sessions/current.jsonl",
+    listSessions: async () => sessions,
+    sendResumeMenu: async (text, replyMarkup) => {
+      sentText = text;
+      sentMarkup = replyMarkup;
+      return 55;
+    },
+    storeState: (state) => {
+      stored = state;
+    },
+    now: () => 0,
+  });
+  assert.deepEqual(stored?.sessions.map((entry) => [entry.path, entry.isCurrent]), [
+    ["/sessions/current.jsonl", true],
+    ["/sessions/other.jsonl", false],
+  ]);
+  assert.match(sentText, /🟢 current session headline/);
+  assert.equal(sentMarkup?.inline_keyboard[0]?.[0]?.text, "1");
+  assert.equal(sentMarkup?.inline_keyboard[0]?.[0]?.callback_data, "resume:open:0");
+});
+
 test("openTelegramResumeMenu filters before applying menu item cap", async () => {
   const sessions = Array.from({ length: TELEGRAM_RESUME_MENU_PAGE_SIZE * 10 + 1 }, (_unused, i) => ({
     path: `/sessions/s${i}.jsonl`,
@@ -557,6 +607,21 @@ test("handleTelegramResumeMenuCallback opens entry using global index", async ()
     "edit:1:100:plain",
     "answer:cb4:Session switching…",
   ]);
+});
+
+test("handleTelegramResumeMenuCallback refuses to resume the current session", async () => {
+  const state = makeState(3, 0);
+  state.currentSessionFile = "/sessions/s1.json";
+  const { events, deps } = makeCallbackDeps(state);
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "current-open",
+      data: "resume:open:1",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, ["answer:current-open:This is the current session; can't switch."]);
 });
 
 test("handleTelegramResumeMenuCallback rejects invalid open index", async () => {

@@ -71,6 +71,8 @@ export interface TelegramResumeMenuEntry {
   messageCount: number;
   /** Count of inactive leaf branches in the session tree. Hidden when zero/undefined. */
   inactiveBranchCount?: number;
+  /** True when this row is the session that was active when the menu opened. */
+  isCurrent?: boolean;
   modified: Date;
 }
 
@@ -89,7 +91,7 @@ export interface TelegramResumeMenuState {
   allSessions?: TelegramResumeMenuEntry[];
   /** Zero-based current page index. */
   page: number;
-  /** Path of the session that was active when the menu opened, filtered out. */
+  /** Path of the session that was active when the menu opened. */
   currentSessionFile: string | undefined;
   /** Current list mode; old cached states without this field default to open. */
   mode?: TelegramResumeMenuMode;
@@ -392,7 +394,8 @@ function formatTelegramResumeLine(
   const snippet = mode === "open"
     ? formatTelegramResumeMatchSnippet(entry, summary, filterTrace, fullTextSearch)
     : undefined;
-  return `${escapeHtml(selectedPrefix)}${escapeHtml(marker)} <code>${escapeHtml(meta)}</code>\n${renderedSummary}${snippet ? `\n${snippet}` : ""}`;
+  const currentPrefix = mode === "open" && entry.isCurrent ? "🟢 " : "";
+  return `${escapeHtml(selectedPrefix)}${escapeHtml(marker)} <code>${escapeHtml(meta)}</code>\n${currentPrefix}${renderedSummary}${snippet ? `\n${snippet}` : ""}`;
 }
 
 function formatTelegramResumeButtonText(
@@ -632,8 +635,11 @@ function buildResumeMenuEntries(
   sessions: SessionInfo[],
   currentSessionFile: string | undefined,
   maxItems: number | null = TELEGRAM_RESUME_MENU_MAX_ITEMS,
+  includeCurrentSession = false,
 ): TelegramResumeMenuEntry[] {
-  const filtered = sessions.filter((s) => s.path !== currentSessionFile);
+  const filtered = includeCurrentSession
+    ? sessions
+    : sessions.filter((s) => s.path !== currentSessionFile);
   const limited = maxItems === null ? filtered : filtered.slice(0, maxItems);
   return limited.map((s, index) => ({
     index,
@@ -643,6 +649,7 @@ function buildResumeMenuEntries(
     firstMessage: s.firstMessage,
     allMessagesText: s.allMessagesText,
     messageCount: s.messageCount,
+    isCurrent: s.path === currentSessionFile,
     modified: s.modified,
   }));
 }
@@ -916,6 +923,7 @@ export async function openTelegramResumeMenu(
     sessions,
     currentSessionFile,
     filters.length > 0 ? null : TELEGRAM_RESUME_MENU_MAX_ITEMS,
+    mode === "open",
   );
   const filterResult = filterTelegramResumeMenuEntries(unfilteredEntries, filters, fullTextSearch);
   const limitedEntries = reindexTelegramResumeMenuEntries(
@@ -1513,6 +1521,15 @@ export async function handleTelegramResumeMenuCallback(
     return true;
   }
   const entry = state.sessions[index];
+  const currentSessionFile = deps.getCurrentSessionFile();
+  if (
+    entry.isCurrent ||
+    entry.path === state.currentSessionFile ||
+    entry.path === currentSessionFile
+  ) {
+    await deps.answerCallbackQuery(query.id, "This is the current session; can't switch.");
+    return true;
+  }
   try {
     await deps.injectResumeExec(entry.path);
   } catch (error) {
