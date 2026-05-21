@@ -409,6 +409,7 @@ export default function (pi: Pi.ExtensionAPI) {
     renderTreeExport: TreeExport.renderTelegramTreeExportFiles,
     sendTreeExportFiles,
     publishTreeGist: TreeExport.publishTelegramTreeSvgGist,
+    deleteTreeGist: TreeExport.deleteTelegramTreeGist,
   });
   const notifyResumeOutcome = MenuResume.createTelegramResumeOutcomeNotifier({
     getAllowedUserId: configStore.getAllowedUserId,

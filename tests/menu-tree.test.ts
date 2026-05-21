@@ -249,9 +249,62 @@ test("Tree Gist publish callback confirms privacy and returns raw SVG URL", asyn
     inline_keyboard: [
       [{ text: "🌐 Open SVG", url: "https://gist.githubusercontent.com/eddie/gist123/raw/tree.svg" }],
       [{ text: "📄 Gist page", url: "https://gist.github.com/eddie/gist123" }],
+      [{ text: "🗑 Delete Gist", callback_data: "tree:gist:delete" }],
       [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
     ],
   });
+});
+
+test("Tree Gist delete callback deletes remembered published gist", async () => {
+  const snapshot = createSnapshot();
+  const entries = buildTelegramTreeMenuEntries(snapshot);
+  const store = createTelegramTreeMenuStore();
+  store.set({
+    chatId: 7,
+    messageId: 99,
+    entries,
+    page: 0,
+    view: "list",
+    filter: "active",
+    publishedGist: {
+      gistId: "abc123",
+      htmlUrl: "https://gist.github.com/eddie/abc123",
+      rawUrl: "https://gist.githubusercontent.com/eddie/abc123/raw/tree.svg",
+      fileName: "tree.svg",
+    },
+    updatedAt: Date.now(),
+  });
+  const events: string[] = [];
+  const handled = await handleTelegramTreeMenuCallback(
+    {
+      id: "cb",
+      data: "tree:gist:delete",
+      message: { chat: { id: 7 }, message_id: 99 },
+    },
+    {
+      getState: store.get,
+      setState: store.set,
+      getSnapshot: () => snapshot,
+      editTreeMessage: async (_chatId, _messageId, text) => {
+        events.push(`edit:${text.includes("Deleted Gist")}`);
+      },
+      answerCallbackQuery: async (_id, text) => {
+        events.push(`answer:${text ?? ""}`);
+      },
+      injectTreeExec: async () => {},
+      canNavigate: () => true,
+      deleteTreeGist: async (gistId) => {
+        events.push(`delete:${gistId}`);
+      },
+    },
+  );
+  assert.equal(handled, true);
+  assert.deepEqual(events, [
+    "answer:Deleting Gist…",
+    "delete:abc123",
+    "edit:true",
+  ]);
+  assert.equal(store.get(99)?.publishedGist, undefined);
 });
 
 test("Tree SVG export renders prompt nodes and labels", () => {

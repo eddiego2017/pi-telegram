@@ -83,6 +83,7 @@ export interface TelegramTreeMenuState {
   view: TelegramTreeView;
   filter: TelegramTreeFilter;
   detailIndex?: number;
+  publishedGist?: TelegramTreeGistPublishResult;
   updatedAt: number;
 }
 
@@ -619,6 +620,7 @@ export interface TelegramTreeMenuCallbackDeps {
     files: TelegramTreeExportFileSet,
   ) => Promise<void>;
   publishTreeGist?: (snapshot: TelegramTreeSnapshot) => Promise<TelegramTreeGistPublishResult>;
+  deleteTreeGist?: (gistId: string) => Promise<void>;
   now?: () => number;
 }
 
@@ -734,10 +736,12 @@ async function handleTelegramTreeMenuCallbackUnsafe(
           inline_keyboard: [
             [{ text: "🌐 Open SVG", url: result.rawUrl }],
             [{ text: "📄 Gist page", url: result.htmlUrl }],
+            [{ text: "🗑 Delete Gist", callback_data: "tree:gist:delete" }],
             [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
           ],
         },
       );
+      updateState({ view: "list", publishedGist: result });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await deps.editTreeMessage(
@@ -747,6 +751,55 @@ async function handleTelegramTreeMenuCallbackUnsafe(
         buildTelegramTreeListReplyMarkup(state.entries, state.page, state.filter),
       );
       updateState({ view: "list" });
+    }
+    return true;
+  }
+
+  if (data === "tree:gist:delete") {
+    const gist = state.publishedGist;
+    if (!gist) {
+      await deps.answerCallbackQuery(query.id, "No published Gist remembered for this menu.");
+      return true;
+    }
+    if (!deps.deleteTreeGist) {
+      await deps.answerCallbackQuery(query.id, "Gist deletion is not available.");
+      return true;
+    }
+    await deps.answerCallbackQuery(query.id, "Deleting Gist…");
+    try {
+      await deps.deleteTreeGist(gist.gistId);
+      await deps.editTreeMessage(
+        chatId,
+        messageId,
+        [
+          TELEGRAM_TREE_MENU_TITLE,
+          "",
+          `Deleted Gist <code>${escapeHtml(gist.gistId)}</code>.`,
+          "",
+          "The raw SVG URL should stop working shortly.",
+        ].join("\n"),
+        {
+          inline_keyboard: [
+            [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
+          ],
+        },
+      );
+      updateState({ view: "list", publishedGist: undefined });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await deps.editTreeMessage(
+        chatId,
+        messageId,
+        `${TELEGRAM_TREE_MENU_TITLE}\n\nGist delete failed: ${escapeHtml(message)}`,
+        {
+          inline_keyboard: [
+            [{ text: "🌐 Open SVG", url: gist.rawUrl }],
+            [{ text: "📄 Gist page", url: gist.htmlUrl }],
+            [{ text: "🗑 Retry delete", callback_data: "tree:gist:delete" }],
+            [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
+          ],
+        },
+      );
     }
     return true;
   }
@@ -942,6 +995,7 @@ export interface TelegramTreeMenuRuntimeDeps<TContext> {
     files: TelegramTreeExportFileSet,
   ) => Promise<void>;
   publishTreeGist?: (snapshot: TelegramTreeSnapshot) => Promise<TelegramTreeGistPublishResult>;
+  deleteTreeGist?: (gistId: string) => Promise<void>;
   store?: TelegramTreeMenuStore;
 }
 
@@ -991,6 +1045,7 @@ export function createTelegramTreeMenuRuntime<TContext>(
         renderTreeExport: deps.renderTreeExport,
         sendTreeExportFiles: deps.sendTreeExportFiles,
         publishTreeGist: deps.publishTreeGist,
+        deleteTreeGist: deps.deleteTreeGist,
       });
     },
   };
@@ -1030,6 +1085,7 @@ export interface TelegramTreeMenuRuntimePiContextDeps<TContext> {
   renderTreeExport?: TelegramTreeMenuRuntimeDeps<TContext>["renderTreeExport"];
   sendTreeExportFiles?: TelegramTreeMenuRuntimeDeps<TContext>["sendTreeExportFiles"];
   publishTreeGist?: TelegramTreeMenuRuntimeDeps<TContext>["publishTreeGist"];
+  deleteTreeGist?: TelegramTreeMenuRuntimeDeps<TContext>["deleteTreeGist"];
 }
 
 export function buildTelegramTreeMenuRuntime<TContext>(
@@ -1045,6 +1101,7 @@ export function buildTelegramTreeMenuRuntime<TContext>(
     renderTreeExport: deps.renderTreeExport,
     sendTreeExportFiles: deps.sendTreeExportFiles,
     publishTreeGist: deps.publishTreeGist,
+    deleteTreeGist: deps.deleteTreeGist,
   });
 }
 

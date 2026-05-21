@@ -462,13 +462,18 @@ interface GitHubGistApiResponse {
   message?: string;
 }
 
+async function readTelegramTreeGistToken(tokenPath: string): Promise<string> {
+  const token = (await readFile(tokenPath, "utf8")).trim();
+  if (!token) throw new Error("GitHub Gist token file is empty.");
+  return token;
+}
+
 export async function publishTelegramTreeSvgGist(
   snapshot: TelegramTreeSnapshot,
   options?: { tokenPath?: string; public?: boolean },
 ): Promise<TelegramTreeGistPublishResult> {
   const tokenPath = options?.tokenPath ?? getTelegramTreeGistTokenPath();
-  const token = (await readFile(tokenPath, "utf8")).trim();
-  if (!token) throw new Error("GitHub Gist token file is empty.");
+  const token = await readTelegramTreeGistToken(tokenPath);
   const fileName = sanitizeGistFileName(snapshot.sessionId);
   const svg = buildTelegramTreeSvg(snapshot);
   const response = await fetch("https://api.github.com/gists", {
@@ -500,4 +505,26 @@ export async function publishTelegramTreeSvgGist(
     throw new Error("GitHub Gist API response did not include expected URLs.");
   }
   return { gistId, htmlUrl, rawUrl, fileName };
+}
+
+export async function deleteTelegramTreeGist(
+  gistId: string,
+  options?: { tokenPath?: string },
+): Promise<void> {
+  const safeGistId = gistId.trim();
+  if (!/^[a-f0-9]+$/i.test(safeGistId)) throw new Error("Invalid Gist id.");
+  const tokenPath = options?.tokenPath ?? getTelegramTreeGistTokenPath();
+  const token = await readTelegramTreeGistToken(tokenPath);
+  const response = await fetch(`https://api.github.com/gists/${safeGistId}`, {
+    method: "DELETE",
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "User-Agent": "pi-telegram-tree-export",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (response.status === 204 || response.status === 404) return;
+  const body = await response.json().catch(() => ({})) as { message?: string };
+  throw new Error(body.message || `GitHub Gist delete failed (${response.status}).`);
 }
