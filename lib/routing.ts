@@ -95,6 +95,7 @@ export interface TelegramInboundRouteRuntimeDeps<
     chatId: number,
     replyToMessageId: number,
     ctx: TContext,
+    filters?: readonly string[],
   ) => Promise<void>;
   openDeleteMenu?: (
     chatId: number,

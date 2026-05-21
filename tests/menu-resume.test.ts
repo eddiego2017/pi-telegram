@@ -16,8 +16,11 @@ import {
   countTelegramResumeInactiveBranchLeaves,
   countTelegramResumeVisibleMessages,
   createTelegramResumeMenuStore,
+  filterTelegramResumeMenuEntries,
   getTelegramResumeMenuPageCount,
   handleTelegramResumeMenuCallback,
+  openTelegramResumeMenu,
+  parseTelegramResumeFilterTokens,
   sliceTelegramResumeMenuPage,
 } from "../lib/menu-resume.ts";
 
@@ -70,6 +73,82 @@ test("buildTelegramResumeMenuText appends page suffix only when paginated", () =
   const paginated = buildTelegramResumeMenuText(many, "/cwd", 1);
   assert.ok(paginated.includes("Page 2/2"));
   assert.ok(paginated.includes(`${many.length} sessions`));
+});
+
+test("parseTelegramResumeFilterTokens splits whitespace filters", () => {
+  assert.deepEqual(parseTelegramResumeFilterTokens("  apple   cat mouse  "), [
+    "apple",
+    "cat",
+    "mouse",
+  ]);
+});
+
+test("filterTelegramResumeMenuEntries searches name and first user message", () => {
+  const entries = makeEntries(4);
+  entries[0].name = "Apple Cat";
+  entries[0].firstMessage = "unrelated";
+  entries[1].name = "Apple";
+  entries[1].firstMessage = "mouse";
+  entries[2].firstMessage = "cat apple";
+  entries[3].firstMessage = "apple dog";
+  const result = filterTelegramResumeMenuEntries(entries, ["apple", "cat"]);
+  assert.deepEqual(
+    result.entries.map((entry) => entry.index),
+    [0, 2],
+  );
+  assert.deepEqual(result.trace, [
+    { filter: "apple", before: 4, after: 4 },
+    { filter: "cat", before: 4, after: 2 },
+  ]);
+});
+
+test("buildTelegramResumeMenuText renders filter summary and no-match trace", () => {
+  const entries = makeEntries(2);
+  const trace = [{ filter: "apple", before: 2, after: 1 }];
+  const text = buildTelegramResumeMenuText(entries, "/cwd", 0, "open", 0, [], "multi", trace);
+  assert.match(text, /🔎 apple/);
+  const empty = buildTelegramResumeMenuText([], "/cwd", 0, "open", 0, [], "multi", [
+    { filter: "apple", before: 2, after: 1 },
+    { filter: "cat", before: 1, after: 0 },
+  ]);
+  assert.match(empty, /No match/);
+  assert.match(empty, /apple 2→1/);
+  assert.match(empty, /cat 1→0/);
+});
+
+test("openTelegramResumeMenu filters before applying menu item cap", async () => {
+  const sessions = Array.from({ length: TELEGRAM_RESUME_MENU_PAGE_SIZE * 10 + 1 }, (_unused, i) => ({
+    path: `/sessions/s${i}.jsonl`,
+    id: `id-${i}`,
+    cwd: "/cwd",
+    created: new Date(0),
+    modified: new Date(0),
+    messageCount: 1,
+    firstMessage: i === TELEGRAM_RESUME_MENU_PAGE_SIZE * 10 ? "needle cat" : `boring ${i}`,
+    allMessagesText: "ignored",
+  }));
+  let sentText = "";
+  let stored: TelegramResumeMenuState | undefined;
+  await openTelegramResumeMenu({
+    chatId: 1,
+    getCwd: () => "/cwd",
+    getCurrentSessionFile: () => undefined,
+    listSessions: async () => sessions,
+    filters: ["needle"],
+    sendResumeMenu: async (text) => {
+      sentText = text;
+      return 55;
+    },
+    storeState: (state) => {
+      stored = state;
+    },
+    now: () => 0,
+  });
+  assert.equal(stored?.sessions.length, 1);
+  assert.equal(stored?.sessions[0]?.path, "/sessions/s200.jsonl");
+  assert.deepEqual(stored?.filterTrace, [{ filter: "needle", before: 201, after: 1 }]);
+  assert.match(sentText, /🔎 needle/);
+  assert.match(sentText, /needle cat/);
 });
 
 test("buildTelegramResumeMenuText renders two-line list items", () => {

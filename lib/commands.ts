@@ -7,6 +7,7 @@
 import { unlink } from "node:fs/promises";
 
 import { pairTelegramUserIfNeeded } from "./config.ts";
+import { parseTelegramResumeFilterTokens } from "./menu-resume.ts";
 import type { TelegramSessionDeleteOutcome } from "./menu-session.ts";
 import {
   getTelegramTreeEntryEditorText,
@@ -528,7 +529,7 @@ export type TelegramCommandAction =
   | { kind: "reload"; executionMode: "immediate" }
   | { kind: "new"; executionMode: "immediate" }
   | { kind: "clone"; executionMode: "immediate" }
-  | { kind: "resume"; executionMode: "immediate" }
+  | { kind: "resume"; args: string; executionMode: "immediate" }
   | { kind: "delete"; executionMode: "immediate" }
   | { kind: "session"; executionMode: "immediate" }
   | { kind: "tree"; executionMode: "immediate" }
@@ -556,7 +557,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleReload: (message: TMessage, ctx: TContext) => Promise<void>;
   handleNew: (message: TMessage, ctx: TContext) => Promise<void>;
   handleClone: (message: TMessage, ctx: TContext) => Promise<void>;
-  handleResume: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleResume: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleDelete: (message: TMessage, ctx: TContext) => Promise<void>;
   handleSession: (message: TMessage, ctx: TContext) => Promise<void>;
   handleTree: (message: TMessage, ctx: TContext) => Promise<void>;
@@ -690,6 +691,7 @@ export interface TelegramCommandTargetRuntimeDeps<TContext> {
     chatId: number,
     replyToMessageId: number,
     ctx: TContext,
+    filters?: readonly string[],
   ) => Promise<void>;
   openDeleteMenu?: (
     chatId: number,
@@ -727,7 +729,11 @@ export interface TelegramCommandTargetRuntime<
   showStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   openModelMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openSettingsMenu: (message: TMessage, ctx: TContext) => Promise<void>;
-  openResumeMenu: (message: TMessage, ctx: TContext) => Promise<void>;
+  openResumeMenu: (
+    message: TMessage,
+    ctx: TContext,
+    filters?: readonly string[],
+  ) => Promise<void>;
   openDeleteMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openSessionMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openTreeMenu: (message: TMessage, ctx: TContext) => Promise<void>;
@@ -860,7 +866,7 @@ export function createTelegramCommandTargetRuntime<
       }
       await deps.openSettingsMenu(target.chatId, target.replyToMessageId, ctx);
     },
-    openResumeMenu: async (message, ctx) => {
+    openResumeMenu: async (message, ctx, filters) => {
       const target = getTelegramCommandMessageTarget(message);
       if (!deps.openResumeMenu) {
         await deps.sendTextReply(
@@ -870,7 +876,7 @@ export function createTelegramCommandTargetRuntime<
         );
         return;
       }
-      await deps.openResumeMenu(target.chatId, target.replyToMessageId, ctx);
+      await deps.openResumeMenu(target.chatId, target.replyToMessageId, ctx, filters);
     },
     openDeleteMenu: async (message, ctx) => {
       const target = getTelegramCommandMessageTarget(message);
@@ -982,7 +988,11 @@ export interface TelegramCommandRuntimeDeps<
   openThinkingMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openQueueMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openSettingsMenu?: (message: TMessage, ctx: TContext) => Promise<void>;
-  openResumeMenu: (message: TMessage, ctx: TContext) => Promise<void>;
+  openResumeMenu: (
+    message: TMessage,
+    ctx: TContext,
+    filters?: readonly string[],
+  ) => Promise<void>;
   openDeleteMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openSessionMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openTreeMenu: (message: TMessage, ctx: TContext) => Promise<void>;
@@ -1081,7 +1091,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   reload: { kind: "reload", executionMode: "immediate" },
   new: { kind: "new", executionMode: "immediate" },
   clone: { kind: "clone", executionMode: "immediate" },
-  resume: { kind: "resume", executionMode: "immediate" },
+  resume: { kind: "resume", args: "", executionMode: "immediate" },
   delete: { kind: "delete", executionMode: "immediate" },
   session: { kind: "session", executionMode: "immediate" },
   tree: { kind: "tree", executionMode: "immediate" },
@@ -1102,7 +1112,7 @@ export function buildTelegramCommandAction(
     return { kind: "ignore", executionMode: "ignored" };
   }
   const baseAction = TELEGRAM_COMMAND_ACTIONS[commandName];
-  if (baseAction.kind === "llm" || baseAction.kind === "name") {
+  if (baseAction.kind === "llm" || baseAction.kind === "name" || baseAction.kind === "resume") {
     return { ...baseAction, args: args ?? "" };
   }
   return baseAction;
@@ -1529,7 +1539,7 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
       await deps.handleClone(message, ctx);
       return true;
     case "resume":
-      await deps.handleResume(message, ctx);
+      await deps.handleResume(message, action.args, ctx);
       return true;
     case "delete":
       await deps.handleDelete(message, ctx);
@@ -1816,8 +1826,12 @@ async function handleTelegramCommandRuntime<
           recordRuntimeEvent: deps.recordRuntimeEvent,
         });
       },
-      handleResume: async (nextMessage, commandCtx) => {
-        await deps.openResumeMenu(nextMessage, commandCtx);
+      handleResume: async (nextMessage, args, commandCtx) => {
+        await deps.openResumeMenu(
+          nextMessage,
+          commandCtx,
+          parseTelegramResumeFilterTokens(args),
+        );
       },
       handleDelete: async (nextMessage, commandCtx) => {
         await deps.openDeleteMenu(nextMessage, commandCtx);

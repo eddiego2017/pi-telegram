@@ -575,6 +575,11 @@ test("Command helpers build command actions", () => {
     kind: "session",
     executionMode: "immediate",
   });
+  assert.deepEqual(buildTelegramCommandAction("resume", "apple cat"), {
+    kind: "resume",
+    args: "apple cat",
+    executionMode: "immediate",
+  });
   assert.deepEqual(Object.keys(TELEGRAM_COMMAND_ACTIONS), [
     ...TELEGRAM_RESERVED_COMMAND_NAMES,
   ]);
@@ -1351,8 +1356,8 @@ test("Command helpers execute command actions through provided handlers", async 
     handleClone: async () => {
       events.push("clone");
     },
-    handleResume: async () => {
-      events.push("resume");
+    handleResume: async (_message: unknown, args: string) => {
+      events.push(`resume:${args}`);
     },
     handleDelete: async () => {
       events.push("delete");
@@ -1412,7 +1417,22 @@ test("Command helpers execute command actions through provided handlers", async 
     ),
     true,
   );
-  assert.deepEqual(events, ["stop", "help:start", "reload", "name:label"]);
+  assert.equal(
+    await executeTelegramCommandAction(
+      { kind: "resume", args: "apple cat", executionMode: "immediate" },
+      {},
+      {},
+      deps,
+    ),
+    true,
+  );
+  assert.deepEqual(events, [
+    "stop",
+    "help:start",
+    "reload",
+    "name:label",
+    "resume:apple cat",
+  ]);
 });
 
 test("Command helpers guard and complete /new session flow", async () => {
