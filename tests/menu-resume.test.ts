@@ -108,11 +108,14 @@ test("filterTelegramResumeMenuEntries searches display title only", () => {
   );
 });
 
-test("buildTelegramResumeMenuText renders filter summary and no-match trace", () => {
+test("buildTelegramResumeMenuText renders filter summary, highlights matches, and no-match trace", () => {
   const entries = makeEntries(2);
-  const trace = [{ filter: "apple", before: 2, after: 1 }];
+  entries[0].name = "Darren <call>";
+  entries[1].firstMessage = "apple cat";
+  const trace = [{ filter: "darren", before: 2, after: 1 }];
   const text = buildTelegramResumeMenuText(entries, "/cwd", 0, "open", 0, [], "multi", trace);
-  assert.match(text, /🔎 apple/);
+  assert.match(text, /🔎 darren/);
+  assert.match(text, /<b>Darren<\/b> &lt;call&gt;/);
   const empty = buildTelegramResumeMenuText([], "/cwd", 0, "open", 0, [], "multi", [
     { filter: "apple", before: 2, after: 1 },
     { filter: "cat", before: 1, after: 0 },
@@ -154,7 +157,7 @@ test("openTelegramResumeMenu filters before applying menu item cap", async () =>
   assert.equal(stored?.sessions[0]?.path, "/sessions/s200.jsonl");
   assert.deepEqual(stored?.filterTrace, [{ filter: "needle", before: 201, after: 1 }]);
   assert.match(sentText, /🔎 needle/);
-  assert.match(sentText, /needle cat/);
+  assert.match(sentText, /<b>needle<\/b> cat/);
 });
 
 test("buildTelegramResumeMenuText renders two-line list items", () => {

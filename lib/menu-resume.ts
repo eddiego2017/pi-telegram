@@ -261,6 +261,57 @@ function formatTelegramResumeMeta(
   return parts.join(" · ");
 }
 
+function buildTelegramResumeHighlightRanges(
+  text: string,
+  filters: readonly string[],
+): Array<{ start: number; end: number }> {
+  const lowerText = text.toLowerCase();
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const rawFilter of filters) {
+    const filter = cleanText(rawFilter).toLowerCase();
+    if (!filter) continue;
+    let fromIndex = 0;
+    while (fromIndex < lowerText.length) {
+      const start = lowerText.indexOf(filter, fromIndex);
+      if (start < 0) break;
+      ranges.push({ start, end: start + filter.length });
+      fromIndex = start + Math.max(1, filter.length);
+    }
+  }
+  ranges.sort((a, b) => a.start - b.start || b.end - a.end);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const range of ranges) {
+    const last = merged[merged.length - 1];
+    if (!last || range.start > last.end) {
+      merged.push({ ...range });
+    } else {
+      last.end = Math.max(last.end, range.end);
+    }
+  }
+  return merged;
+}
+
+function formatTelegramResumeHighlightedSummary(
+  summary: string,
+  filterTrace: readonly TelegramResumeFilterTraceItem[],
+): string {
+  if (filterTrace.length === 0) return escapeHtml(summary);
+  const ranges = buildTelegramResumeHighlightRanges(
+    summary,
+    filterTrace.map((item) => item.filter),
+  );
+  if (ranges.length === 0) return escapeHtml(summary);
+  const parts: string[] = [];
+  let index = 0;
+  for (const range of ranges) {
+    if (range.start > index) parts.push(escapeHtml(summary.slice(index, range.start)));
+    parts.push(`<b>${escapeHtml(summary.slice(range.start, range.end))}</b>`);
+    index = range.end;
+  }
+  if (index < summary.length) parts.push(escapeHtml(summary.slice(index)));
+  return parts.join("");
+}
+
 function formatTelegramResumeLine(
   entry: TelegramResumeMenuEntry,
   pageIndex: number,
@@ -268,6 +319,7 @@ function formatTelegramResumeLine(
   mode: TelegramResumeMenuMode,
   selected: boolean,
   deleteStyle: TelegramResumeMenuDeleteStyle,
+  filterTrace: readonly TelegramResumeFilterTraceItem[] = [],
 ): string {
   const marker = formatTelegramResumePageMarker(pageIndex);
   const selectedPrefix = mode === "delete" && deleteStyle === "multi" ? `${selected ? "☑" : "☐"} ` : "";
@@ -276,7 +328,10 @@ function formatTelegramResumeLine(
     entry.name || entry.firstMessage || "(no preview)",
     TELEGRAM_RESUME_MENU_LINE_WIDTH,
   );
-  return `${escapeHtml(selectedPrefix)}${escapeHtml(marker)} <code>${escapeHtml(meta)}</code>\n${escapeHtml(summary)}`;
+  const renderedSummary = mode === "open"
+    ? formatTelegramResumeHighlightedSummary(summary, filterTrace)
+    : escapeHtml(summary);
+  return `${escapeHtml(selectedPrefix)}${escapeHtml(marker)} <code>${escapeHtml(meta)}</code>\n${renderedSummary}`;
 }
 
 function formatTelegramResumeButtonText(
@@ -392,6 +447,7 @@ export function buildTelegramResumeMenuText(
       mode,
       selectedPaths.has(entry.path),
       deleteStyle,
+      filterTrace,
     ),
   );
   return [
