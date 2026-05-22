@@ -16,8 +16,11 @@ import {
   type RpcChildSessionState,
 } from "./rpc-child.ts";
 import {
+  formatAgentToolCallBlock,
   getAgentMessageText,
   isAssistantAgentMessage,
+  type TelegramRenderedChunk,
+  type TelegramRenderMode,
 } from "./replies.ts";
 import {
   createDefaultTelegramTabsState,
@@ -35,6 +38,9 @@ import {
 } from "./tabs.ts";
 import type { TelegramConcurrentTabsConfig } from "./config.ts";
 import { getTelegramAgentDir } from "./config.ts";
+
+const TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS = 1200;
+const TELEGRAM_TAB_STREAM_MARKDOWN_LIMIT = 3600;
 
 export interface TelegramTabPromptContent {
   type: string;
@@ -78,6 +84,17 @@ export interface TelegramTabManagerDeps<TContext> {
     replyToMessageId: number | undefined,
     markdown: string,
   ) => Promise<number | undefined>;
+  sendStreamMarkdownReply?: (
+    chatId: number,
+    replyToMessageId: number | undefined,
+    markdown: string,
+  ) => Promise<number | undefined>;
+  editStreamMarkdownMessage?: (
+    chatId: number,
+    messageId: number,
+    markdown: string,
+  ) => Promise<number | undefined>;
+  streamEditThrottleMs?: number;
   now?: () => number;
   agentDir?: string;
   statePath?: string;
@@ -96,11 +113,48 @@ interface RuntimeTab {
   unreadEvents: number;
   activeBuffer: string;
   thinkingBuffers: Map<number, string>;
+  thinkingStreams: Map<number, TelegramTabStreamState>;
+  toolCallStreams: Map<number, TelegramTabStreamState>;
   sentThinkingTexts: Set<string>;
   sentToolCallMessages: Set<string>;
   activeChatId?: number;
   activeReplyToMessageId?: number;
   unsubscribe?: () => void;
+}
+
+interface TelegramTabStreamState {
+  markdown: string;
+  sentMarkdown: string;
+  lastFlushAt: number;
+  messageId?: number;
+  flushTimer?: ReturnType<typeof setTimeout>;
+  flushPromise?: Promise<void>;
+  flushRequested?: boolean;
+}
+
+export interface TelegramTabMarkdownMessageEditorDeps {
+  renderTelegramMessage: (
+    text: string,
+    options?: { mode?: TelegramRenderMode },
+  ) => TelegramRenderedChunk[];
+  editRenderedMessage: (
+    chatId: number,
+    messageId: number,
+    chunks: TelegramRenderedChunk[],
+    options?: { disableLinkPreview?: boolean },
+  ) => Promise<number | undefined>;
+}
+
+export function createTelegramTabMarkdownMessageEditor(
+  deps: TelegramTabMarkdownMessageEditorDeps,
+): (chatId: number, messageId: number, markdown: string) => Promise<number | undefined> {
+  return (chatId, messageId, markdown) =>
+    deps.editRenderedMessage(
+      chatId,
+      messageId,
+      deps.renderTelegramMessage(markdown, { mode: "markdown" }),
+      { disableLinkPreview: true },
+    );
 }
 
 export interface TelegramTabManager<TContext> {
@@ -275,14 +329,31 @@ function createRuntimeTab(record: TelegramTabRecord): RuntimeTab {
     unreadEvents: 0,
     activeBuffer: "",
     thinkingBuffers: new Map(),
+    thinkingStreams: new Map(),
+    toolCallStreams: new Map(),
     sentThinkingTexts: new Set(),
     sentToolCallMessages: new Set(),
   };
 }
 
+function clearTelegramTabStreamState(stream: TelegramTabStreamState): void {
+  if (stream.flushTimer) {
+    clearTimeout(stream.flushTimer);
+    stream.flushTimer = undefined;
+  }
+}
+
 function resetRuntimeTurnBuffers(runtime: RuntimeTab): void {
   runtime.activeBuffer = "";
   runtime.thinkingBuffers.clear();
+  for (const stream of runtime.thinkingStreams.values()) {
+    clearTelegramTabStreamState(stream);
+  }
+  for (const stream of runtime.toolCallStreams.values()) {
+    clearTelegramTabStreamState(stream);
+  }
+  runtime.thinkingStreams.clear();
+  runtime.toolCallStreams.clear();
   runtime.sentThinkingTexts.clear();
   runtime.sentToolCallMessages.clear();
 }
@@ -324,15 +395,19 @@ function getRpcAssistantThinkingDelta(
     : undefined;
 }
 
-function getRpcAssistantThinkingEndIndex(
+function getRpcAssistantThinkingEnd(
   event: RpcChildBackendEvent,
-): number | undefined {
+): { index: number; content?: string } | undefined {
   if (event.type !== "message_update") return undefined;
   const assistantEvent = getRpcAssistantMessageEvent(event);
   if (!assistantEvent || assistantEvent.type !== "thinking_end") {
     return undefined;
   }
-  return getRpcAssistantEventContentIndex(assistantEvent);
+  const content = assistantEvent.content;
+  return {
+    index: getRpcAssistantEventContentIndex(assistantEvent),
+    ...(typeof content === "string" ? { content } : {}),
+  };
 }
 
 function getAgentMessageContent(message: unknown): unknown[] {
@@ -340,20 +415,68 @@ function getAgentMessageContent(message: unknown): unknown[] {
   return Array.isArray(raw) ? raw : [];
 }
 
-function extractAgentThinkingBlocks(message: unknown): string[] {
+function extractAgentThinkingBlocks(
+  message: unknown,
+): Array<{ index: number; text: string }> {
   return getAgentMessageContent(message)
-    .map((block) => {
+    .map((block, index) => {
       const raw = getRecord(block);
-      if (!raw || raw.type !== "thinking") return "";
-      return typeof raw.thinking === "string" ? raw.thinking.trim() : "";
+      if (!raw || raw.type !== "thinking") return undefined;
+      const text = typeof raw.thinking === "string" ? raw.thinking.trim() : "";
+      return text ? { index, text } : undefined;
     })
-    .filter(Boolean);
+    .filter((block): block is { index: number; text: string } => !!block);
 }
 
 function agentMessageHasToolCall(message: unknown): boolean {
   return getAgentMessageContent(message).some(
     (block) => getRecord(block)?.type === "toolCall",
   );
+}
+
+function getAgentMessageContentBlock(
+  message: unknown,
+  index: number,
+): unknown | undefined {
+  return getAgentMessageContent(message)[index];
+}
+
+function formatTelegramTabToolCallPreview(block: unknown): string {
+  const raw = getRecord(block);
+  if (!raw) return "";
+  const partialJson = raw.partialJson;
+  return formatAgentToolCallBlock({
+    name: raw.name,
+    arguments:
+      typeof partialJson === "string" && partialJson.trim()
+        ? partialJson
+        : raw.arguments,
+  });
+}
+
+function getRpcAssistantToolCallPreview(
+  event: RpcChildBackendEvent,
+): { index: number; markdown: string; final: boolean } | undefined {
+  if (event.type !== "message_update") return undefined;
+  const assistantEvent = getRpcAssistantMessageEvent(event);
+  if (!assistantEvent) return undefined;
+  const eventType = assistantEvent.type;
+  if (
+    eventType !== "toolcall_start" &&
+    eventType !== "toolcall_delta" &&
+    eventType !== "toolcall_end"
+  ) {
+    return undefined;
+  }
+  const index = getRpcAssistantEventContentIndex(assistantEvent);
+  const block =
+    eventType === "toolcall_end"
+      ? assistantEvent.toolCall
+      : getAgentMessageContentBlock(assistantEvent.partial, index);
+  const markdown = formatTelegramTabToolCallPreview(block);
+  return markdown
+    ? { index, markdown, final: eventType === "toolcall_end" }
+    : undefined;
 }
 
 function getLatestAssistantMessage(messages: unknown): unknown | undefined {
@@ -382,6 +505,12 @@ function formatTelegramTabThinkingMarkdown(text: string): string {
   return `💡 Thinking\n${quoted}`;
 }
 
+function truncateTelegramTabStreamMarkdown(markdown: string): string {
+  const trimmed = markdown.trim();
+  if (trimmed.length <= TELEGRAM_TAB_STREAM_MARKDOWN_LIMIT) return trimmed;
+  return trimmed.slice(trimmed.length - TELEGRAM_TAB_STREAM_MARKDOWN_LIMIT);
+}
+
 export function createTelegramTabManager<TContext>(
   deps: TelegramTabManagerDeps<TContext>,
 ): TelegramTabManager<TContext> {
@@ -394,6 +523,8 @@ export function createTelegramTabManager<TContext>(
 
   const now = (): number => deps.now?.() ?? Date.now();
   const isEnabled = (): boolean => deps.getConfig().enabled;
+  const streamEditThrottleMs =
+    deps.streamEditThrottleMs ?? TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS;
   const persist = (): Promise<void> => {
     if (!state) return Promise.resolve();
     const snapshot = {
@@ -451,21 +582,151 @@ export function createTelegramTabManager<TContext>(
       ? deps.sendMarkdownReply(chatId, replyToMessageId, markdown)
       : deps.sendTextReply(chatId, replyToMessageId, markdown);
   };
-  const sendActiveTabThinking = (
+  const sendTabStreamMarkdownReply = (
+    chatId: number | undefined,
+    replyToMessageId: number | undefined,
+    markdown: string,
+  ): Promise<number | undefined> => {
+    if (chatId === undefined) return Promise.resolve(undefined);
+    return deps.sendStreamMarkdownReply
+      ? deps.sendStreamMarkdownReply(chatId, replyToMessageId, markdown)
+      : sendTabMarkdownReply(chatId, replyToMessageId, markdown);
+  };
+  const editTabStreamMarkdownMessage = (
+    chatId: number | undefined,
+    messageId: number | undefined,
+    markdown: string,
+  ): Promise<number | undefined> => {
+    if (
+      chatId === undefined ||
+      messageId === undefined ||
+      !deps.editStreamMarkdownMessage
+    ) {
+      return Promise.resolve(undefined);
+    }
+    return deps.editStreamMarkdownMessage(chatId, messageId, markdown);
+  };
+  const createStreamState = (): TelegramTabStreamState => ({
+    markdown: "",
+    sentMarkdown: "",
+    lastFlushAt: 0,
+  });
+  const getStreamState = (
+    streams: Map<number, TelegramTabStreamState>,
+    index: number,
+  ): TelegramTabStreamState => {
+    let stream = streams.get(index);
+    if (!stream) {
+      stream = createStreamState();
+      streams.set(index, stream);
+    }
+    return stream;
+  };
+  const flushTabStreamMarkdown = async (
+    runtime: RuntimeTab,
+    stream: TelegramTabStreamState,
+  ): Promise<void> => {
+    if (!stream.markdown || stream.markdown === stream.sentMarkdown) return;
+    if (stream.flushPromise) {
+      stream.flushRequested = true;
+      await stream.flushPromise;
+      return;
+    }
+    stream.flushPromise = (async () => {
+      do {
+        stream.flushRequested = false;
+        const markdown = stream.markdown;
+        if (!markdown || markdown === stream.sentMarkdown) return;
+        let delivered = false;
+        if (stream.messageId === undefined) {
+          const messageId = await sendTabStreamMarkdownReply(
+            runtime.activeChatId,
+            runtime.activeReplyToMessageId,
+            markdown,
+          );
+          if (messageId !== undefined) {
+            stream.messageId = messageId;
+            delivered = true;
+          }
+        } else if (deps.editStreamMarkdownMessage) {
+          const messageId = await editTabStreamMarkdownMessage(
+            runtime.activeChatId,
+            stream.messageId,
+            markdown,
+          );
+          delivered = true;
+          if (messageId !== undefined) stream.messageId = messageId;
+        }
+        if (!delivered) return;
+        stream.sentMarkdown = markdown;
+        stream.lastFlushAt = now();
+      } while (stream.flushRequested);
+    })().catch((error) => {
+      deps.recordRuntimeEvent?.("tabs", error, {
+        tab: runtime.record.name,
+        action: "stream_markdown",
+      });
+    });
+    try {
+      await stream.flushPromise;
+    } finally {
+      stream.flushPromise = undefined;
+    }
+  };
+  const scheduleTabStreamMarkdownFlush = (
+    runtime: RuntimeTab,
+    stream: TelegramTabStreamState,
+    force: boolean,
+  ): void => {
+    if (stream.flushTimer) {
+      if (!force) return;
+      clearTimeout(stream.flushTimer);
+      stream.flushTimer = undefined;
+    }
+    const wait = force
+      ? 0
+      : Math.max(0, streamEditThrottleMs - (now() - stream.lastFlushAt));
+    if (wait === 0) {
+      void flushTabStreamMarkdown(runtime, stream);
+      return;
+    }
+    stream.flushTimer = setTimeout(() => {
+      stream.flushTimer = undefined;
+      void flushTabStreamMarkdown(runtime, stream);
+    }, wait);
+  };
+  const streamActiveTabMarkdown = (
     tabState: TelegramTabsState,
     tabName: string,
     runtime: RuntimeTab,
+    stream: TelegramTabStreamState,
+    markdown: string,
+    force = false,
+  ): void => {
+    if (tabState.activeTab !== tabName) return;
+    stream.markdown = truncateTelegramTabStreamMarkdown(markdown);
+    scheduleTabStreamMarkdownFlush(runtime, stream, force);
+  };
+  const streamActiveTabThinking = (
+    tabState: TelegramTabsState,
+    tabName: string,
+    runtime: RuntimeTab,
+    index: number,
     text: string,
+    force = false,
   ): void => {
     const trimmed = text.trim();
     if (!trimmed || runtime.sentThinkingTexts.has(trimmed)) return;
-    if (tabState.activeTab !== tabName) return;
-    runtime.sentThinkingTexts.add(trimmed);
-    void sendTabMarkdownReply(
-      runtime.activeChatId,
-      runtime.activeReplyToMessageId,
+    const stream = getStreamState(runtime.thinkingStreams, index);
+    streamActiveTabMarkdown(
+      tabState,
+      tabName,
+      runtime,
+      stream,
       formatTelegramTabThinkingMarkdown(trimmed),
+      force,
     );
+    if (force) runtime.sentThinkingTexts.add(trimmed);
   };
   const flushActiveTabThinkingBuffer = (
     tabState: TelegramTabsState,
@@ -475,7 +736,20 @@ export function createTelegramTabManager<TContext>(
   ): void => {
     const text = runtime.thinkingBuffers.get(index) ?? "";
     runtime.thinkingBuffers.delete(index);
-    sendActiveTabThinking(tabState, tabName, runtime, text);
+    streamActiveTabThinking(tabState, tabName, runtime, index, text, true);
+  };
+  const streamActiveTabToolCall = (
+    tabState: TelegramTabsState,
+    tabName: string,
+    runtime: RuntimeTab,
+    index: number,
+    markdown: string,
+    final: boolean,
+  ): void => {
+    if (!markdown || runtime.sentToolCallMessages.has(markdown)) return;
+    const stream = getStreamState(runtime.toolCallStreams, index);
+    streamActiveTabMarkdown(tabState, tabName, runtime, stream, markdown, final);
+    if (final) runtime.sentToolCallMessages.add(markdown);
   };
   const sendActiveTabToolCallMessage = (
     tabState: TelegramTabsState,
@@ -484,6 +758,9 @@ export function createTelegramTabManager<TContext>(
     message: unknown,
   ): boolean => {
     if (!agentMessageHasToolCall(message)) return false;
+    if (runtime.toolCallStreams.size > 0) {
+      return true;
+    }
     const markdown = getAgentMessageText(message);
     if (!markdown || runtime.sentToolCallMessages.has(markdown)) return true;
     if (tabState.activeTab !== tabName) return false;
@@ -516,22 +793,51 @@ export function createTelegramTabManager<TContext>(
     if (delta) runtime.activeBuffer += delta;
     const thinkingDelta = getRpcAssistantThinkingDelta(event);
     if (thinkingDelta) {
+      const nextThinkingText = `${runtime.thinkingBuffers.get(thinkingDelta.index) ?? ""}${
+        thinkingDelta.delta
+      }`;
       runtime.thinkingBuffers.set(
         thinkingDelta.index,
-        `${runtime.thinkingBuffers.get(thinkingDelta.index) ?? ""}${
-          thinkingDelta.delta
-        }`,
+        nextThinkingText,
+      );
+      streamActiveTabThinking(
+        tabState,
+        tabName,
+        runtime,
+        thinkingDelta.index,
+        nextThinkingText,
       );
     }
-    const thinkingEndIndex = getRpcAssistantThinkingEndIndex(event);
-    if (thinkingEndIndex !== undefined) {
-      flushActiveTabThinkingBuffer(tabState, tabName, runtime, thinkingEndIndex);
+    const thinkingEnd = getRpcAssistantThinkingEnd(event);
+    if (thinkingEnd) {
+      if (thinkingEnd.content !== undefined) {
+        runtime.thinkingBuffers.set(thinkingEnd.index, thinkingEnd.content);
+      }
+      flushActiveTabThinkingBuffer(tabState, tabName, runtime, thinkingEnd.index);
+    }
+    const toolCallPreview = getRpcAssistantToolCallPreview(event);
+    if (toolCallPreview) {
+      streamActiveTabToolCall(
+        tabState,
+        tabName,
+        runtime,
+        toolCallPreview.index,
+        toolCallPreview.markdown,
+        toolCallPreview.final,
+      );
     }
     const assistantText = extractRpcAssistantText(event);
     if (assistantText) record.lastAssistantText = assistantText;
     if (event.type === "message_end" && isAssistantAgentMessage(event.message)) {
       for (const thinking of extractAgentThinkingBlocks(event.message)) {
-        sendActiveTabThinking(tabState, tabName, runtime, thinking);
+        streamActiveTabThinking(
+          tabState,
+          tabName,
+          runtime,
+          thinking.index,
+          thinking.text,
+          true,
+        );
       }
       sendActiveTabToolCallMessage(tabState, tabName, runtime, event.message);
     }
@@ -542,7 +848,14 @@ export function createTelegramTabManager<TContext>(
       const latestAssistant = getLatestAssistantMessage(event.messages);
       if (latestAssistant) {
         for (const thinking of extractAgentThinkingBlocks(latestAssistant)) {
-          sendActiveTabThinking(tabState, tabName, runtime, thinking);
+          streamActiveTabThinking(
+            tabState,
+            tabName,
+            runtime,
+            thinking.index,
+            thinking.text,
+            true,
+          );
         }
       }
       const finalAlreadySentAsToolCall = latestAssistant

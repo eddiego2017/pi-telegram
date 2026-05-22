@@ -94,6 +94,10 @@ class FakeTabBackend implements TelegramTabBackend {
   }
 }
 
+function waitForTabStreamFlush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 test("Tab manager declines prompt dispatch when disabled", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-disabled-"));
   const replies: string[] = [];
@@ -240,6 +244,8 @@ test("Tab manager relays active worker thinking and tool call output", async () 
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-rendering-"));
   const textReplies: string[] = [];
   const markdownReplies: string[] = [];
+  const streamReplies: string[] = [];
+  const streamEdits: string[] = [];
   const backends = new Map<string, FakeTabBackend>();
   const manager = createTelegramTabManager<string>({
     getConfig: () => ({
@@ -264,6 +270,15 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       markdownReplies.push(markdown);
       return markdownReplies.length;
     },
+    sendStreamMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+      streamReplies.push(markdown);
+      return 100 + streamReplies.length;
+    },
+    editStreamMarkdownMessage: async (_chatId, messageId, markdown) => {
+      streamEdits.push(`${messageId}:${markdown}`);
+      return messageId;
+    },
+    streamEditThrottleMs: 0,
   });
 
   await manager.handleCommand("new A", 1, 10, "ctx");
@@ -284,15 +299,98 @@ test("Tab manager relays active worker thinking and tool call output", async () 
     assistantMessageEvent: {
       type: "thinking_delta",
       contentIndex: 0,
-      delta: "I should inspect the repo.",
+      delta: "I should ",
     },
   });
+  await waitForTabStreamFlush();
+  assert.match(streamReplies.at(-1) ?? "", /💡 Thinking/);
+  assert.match(streamReplies.at(-1) ?? "", /I should/);
+
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "thinking_delta",
+      contentIndex: 0,
+      delta: "inspect the repo.",
+    },
+  });
+  await waitForTabStreamFlush();
+  assert.match(streamEdits.at(-1) ?? "", /101:💡 Thinking/);
+  assert.match(streamEdits.at(-1) ?? "", /I should inspect the repo\./);
+
   backend.emit({
     type: "message_update",
     assistantMessageEvent: { type: "thinking_end", contentIndex: 0 },
   });
-  assert.match(markdownReplies.at(-1) ?? "", /💡 Thinking/);
-  assert.match(markdownReplies.at(-1) ?? "", /I should inspect the repo\./);
+  await waitForTabStreamFlush();
+  assert.equal(
+    [...streamReplies, ...streamEdits].filter((reply) =>
+      reply.includes("I should inspect the repo."),
+    ).length,
+    1,
+  );
+
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "toolcall_start",
+      contentIndex: 1,
+      partial: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "I should inspect the repo." },
+          {
+            type: "toolCall",
+            id: "tool-1",
+            name: "bash",
+            arguments: {},
+            partialJson: "",
+          },
+        ],
+      },
+    },
+  });
+  await waitForTabStreamFlush();
+  assert.match(streamReplies.at(-1) ?? "", /🔧 `bash`/);
+
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "toolcall_delta",
+      contentIndex: 1,
+      partial: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "I should inspect the repo." },
+          {
+            type: "toolCall",
+            id: "tool-1",
+            name: "bash",
+            arguments: { command: "pwd" },
+            partialJson: '{ "command": "pwd" }',
+          },
+        ],
+      },
+    },
+  });
+  await waitForTabStreamFlush();
+  assert.match(streamEdits.at(-1) ?? "", /102:🔧 `bash`/);
+  assert.match(streamEdits.at(-1) ?? "", /"command": "pwd"/);
+
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "toolcall_end",
+      contentIndex: 1,
+      toolCall: {
+        type: "toolCall",
+        id: "tool-1",
+        name: "bash",
+        arguments: { command: "pwd" },
+      },
+    },
+  });
+  await waitForTabStreamFlush();
 
   backend.emit({
     type: "message_end",
@@ -311,12 +409,17 @@ test("Tab manager relays active worker thinking and tool call output", async () 
     },
   });
   assert.equal(
-    markdownReplies.filter((reply) => reply.includes("I should inspect the repo."))
-      .length,
+    [...streamReplies, ...streamEdits, ...markdownReplies].filter((reply) =>
+      reply.includes("I should inspect the repo."),
+    ).length,
     1,
   );
-  assert.match(markdownReplies.at(-1) ?? "", /🔧 `bash`/);
-  assert.match(markdownReplies.at(-1) ?? "", /"command": "pwd"/);
+  assert.equal(markdownReplies.some((reply) => reply.includes("🔧 `bash`")), false);
+  assert.ok(
+    [...streamReplies, ...streamEdits].filter((reply) =>
+      reply.includes("🔧 `bash`"),
+    ).length >= 2,
+  );
 
   backend.emit({
     type: "agent_end",
@@ -327,5 +430,6 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       },
     ],
   });
+  await waitForTabStreamFlush();
   assert.equal(markdownReplies.at(-1), "Done.");
 });

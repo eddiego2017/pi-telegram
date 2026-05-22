@@ -259,6 +259,11 @@ export default function (pi: Pi.ExtensionAPI) {
     getCwd: Pi.getExtensionContextCwd,
     sendTextReply,
     sendMarkdownReply,
+    sendStreamMarkdownReply: replyRuntime.sendMarkdownReply,
+    editStreamMarkdownMessage: TabManager.createTelegramTabMarkdownMessageEditor({
+      renderTelegramMessage: Replies.renderTelegramMessage,
+      editRenderedMessage: replyTransport.editRenderedMessage,
+    }),
     recordRuntimeEvent,
   });
   const dispatchNextQueuedTelegramTurn =

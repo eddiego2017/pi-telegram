@@ -3,9 +3,9 @@
 This document is the short reset-safe handoff for concurrent `/tab` support in
 `pi-telegram`.
 
-Status as of 2026-05-22: MVP plus active-tab `/llm`, `/model`, thinking display,
-tool-call display, and Markdown final replies are implemented, deployed, and
-live-tested in the `pi` Kubernetes deployment.
+Status as of 2026-05-22: MVP plus active-tab `/llm`, `/model`, live thinking
+streaming, live tool-call preview streaming, and Markdown final replies are
+implemented, deployed, and live-tested in the `pi` Kubernetes deployment.
 
 Last committed MVP baseline:
 
@@ -21,7 +21,7 @@ Committed updates after that baseline:
 - `/model` now opens the active tab's model picker and routes model-menu picks
   to the active tab's RPC child.
 - Busy active tabs reject model switches until idle.
-- Active tabs relay worker thinking blocks, tool-call blocks, and final
+- Active tabs stream worker thinking previews, tool-call previews, and final
   Markdown replies through the parent Telegram bridge.
 
 ## What Works Now
@@ -35,7 +35,7 @@ Committed updates after that baseline:
   single model matches.
 - `/model` shows the active tab's current model marker when the child has
   reported a model and applies menu selections to that tab's worker.
-- Active tab runs show worker thinking content and assistant tool-call blocks
+- Active tab runs stream worker thinking content and assistant tool-call previews
   again without loading full Telegram extensions in the worker.
 - `/tab close B` closes a tab and keeps its session file.
 - Restarting the host `pi` process preserves tab registry and conversation state.
@@ -236,9 +236,10 @@ Recommended order:
    - optional inline keyboard tab switcher
 
 3. Optional active tab rendering polish.
-   - Current active tabs relay thinking, tool-call blocks, and final Markdown.
-   - Future work can add editable streaming previews if needed, but the core
-     visibility gap is closed.
+   - Current active tabs stream thinking/tool-call previews and send final
+     Markdown through the parent bridge.
+   - Future work can reuse more of the original single-session renderer for
+     richer progress/status blocks, but the core visibility gap is closed.
 
 4. Add worker-safe attachment spool only if real use shows file delivery is
    important.
