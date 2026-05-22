@@ -441,8 +441,14 @@ export function createTelegramInboundRouteRuntime<
     openModelMenu: deps.menuActions.openModelMenu,
     listAvailableModels: deps.listAvailableModels,
     isModelSwitchAllowed: (ctx) =>
-      deps.isIdle(ctx) || deps.modelSwitchController.canOfferInFlightSwitch(ctx),
+      deps.tabManager?.isEnabled()
+        ? deps.tabManager.canSwitchActiveModel(ctx)
+        : deps.isIdle(ctx) ||
+          deps.modelSwitchController.canOfferInFlightSwitch(ctx),
     selectLlmModel: async (target, ctx) => {
+      if (deps.tabManager?.isEnabled()) {
+        return deps.tabManager.selectActiveModel(target, ctx);
+      }
       const fullModel = deps.findActiveModelByIdentity(target, ctx);
       if (!fullModel) return false;
       const changed = await deps.setModel(fullModel);

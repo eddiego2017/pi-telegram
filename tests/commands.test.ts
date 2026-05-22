@@ -1868,7 +1868,7 @@ test("/llm command lists available models", async () => {
   const runLlm = async (
     args: string,
     overrides: {
-      isModelSwitchAllowed?: (ctx: Ctx) => boolean;
+      isModelSwitchAllowed?: (ctx: Ctx) => boolean | Promise<boolean>;
       selectLlmModel?: (model: { provider: string; id: string }) => boolean;
     } = {},
   ): Promise<string[]> => {
@@ -1908,6 +1908,12 @@ test("/llm command lists available models", async () => {
   assert.deepEqual(await runLlm("nope"), ["No models match: nope"]);
   assert.deepEqual(
     await runLlm("flash", { isModelSwitchAllowed: () => false }),
+    [
+      "Cannot switch model while π is busy. Send /abort, /next, or /stop.",
+    ],
+  );
+  assert.deepEqual(
+    await runLlm("flash", { isModelSwitchAllowed: async () => false }),
     [
       "Cannot switch model while π is busy. Send /abort, /next, or /stop.",
     ],

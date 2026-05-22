@@ -1006,7 +1006,7 @@ export interface TelegramCommandRuntimeDeps<
   listAvailableModels: (
     ctx: TContext,
   ) => readonly TelegramAvailableLlmModel[];
-  isModelSwitchAllowed: (ctx: TContext) => boolean;
+  isModelSwitchAllowed: (ctx: TContext) => boolean | Promise<boolean>;
   selectLlmModel: (
     model: TelegramAvailableLlmModel,
     ctx: TContext,
@@ -1498,7 +1498,7 @@ export async function handleTelegramLlmCommand<TContext>(deps: {
   listAvailableModels: (
     ctx: TContext,
   ) => readonly TelegramAvailableLlmModel[];
-  isModelSwitchAllowed: (ctx: TContext) => boolean;
+  isModelSwitchAllowed: (ctx: TContext) => boolean | Promise<boolean>;
   selectLlmModel: (
     model: TelegramAvailableLlmModel,
     ctx: TContext,
@@ -1523,7 +1523,7 @@ export async function handleTelegramLlmCommand<TContext>(deps: {
     }
     const target = matches[0];
     if (!target) return;
-    if (!deps.isModelSwitchAllowed(deps.ctx)) {
+    if (!(await deps.isModelSwitchAllowed(deps.ctx))) {
       await deps.sendTextReply(
         "Cannot switch model while \u03c0 is busy. Send /abort, /next, or /stop.",
       );

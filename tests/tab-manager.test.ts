@@ -23,6 +23,7 @@ class FakeTabBackend implements TelegramTabBackend {
   readonly prompts: string[] = [];
   readonly followUps: string[] = [];
   readonly aborts: string[] = [];
+  readonly modelSelections: string[] = [];
   disposed = false;
   readonly tabName: string;
   private listeners = new Set<(event: RpcChildBackendEvent) => void>();
@@ -69,6 +70,14 @@ class FakeTabBackend implements TelegramTabBackend {
 
   async getState(): Promise<RpcChildSessionState> {
     return this.state;
+  }
+
+  async setModel(provider: string, modelId: string): Promise<void> {
+    this.modelSelections.push(`${provider}/${modelId}`);
+    this.state = {
+      ...this.state,
+      model: { provider, id: modelId },
+    };
   }
 
   emit(event: RpcChildBackendEvent): void {
@@ -145,6 +154,15 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     (backendOptions[0] as { args?: string[] }).args,
     ["--extension", "/agent/extensions/provider.ts"],
   );
+  assert.equal(await manager.canSwitchActiveModel("ctx"), true);
+  assert.equal(
+    await manager.selectActiveModel(
+      { provider: "openai", id: "gpt-5.5" },
+      "ctx",
+    ),
+    true,
+  );
+  assert.deepEqual(backends.get("A")?.modelSelections, ["openai/gpt-5.5"]);
 
   await manager.dispatchPrompt(
     {
@@ -156,6 +174,15 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
   );
   assert.deepEqual(backends.get("A")?.prompts, ["hello A"]);
   assert.match(replies.at(-1) ?? "", /Started tab A/);
+  assert.equal(await manager.canSwitchActiveModel("ctx"), false);
+  assert.equal(
+    await manager.selectActiveModel(
+      { provider: "openai", id: "gpt-5.4" },
+      "ctx",
+    ),
+    false,
+  );
+  assert.deepEqual(backends.get("A")?.modelSelections, ["openai/gpt-5.5"]);
 
   await manager.dispatchPrompt(
     {

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` `/llm [tokens...]` now targets the active tab's RPC child when `concurrentTabs.enabled` is true, preserving the existing model list/filter/single-match UX while keeping the parent session model unchanged. Busy active tabs reject model switches until they are idle.
 - `[Concurrent Tabs]` Added the opt-in `/tab` MVP. When `concurrentTabs.enabled` is true, `/tab new <name>`, `/tab <name>`, `/tab status`, `/tab abort`, `/tab close`, and `/tab restart` are handled by the parent Telegram bridge while prompts route to the active tab's isolated `pi --mode rpc --no-extensions` worker.
 - `[Concurrent Tabs]` Added durable tab registry storage in `telegram-tabs.json`, per-tab session directories under `telegram-tabs/sessions/`, inactive-tab completion notices, and text-first final reply delivery. Worker tabs intentionally do not load extensions yet, so `telegram_attach` from concurrent workers remains future work.
 - `[Tests]` Added `tests/tabs.test.ts`, `tests/rpc-child.test.ts`, and `tests/tab-manager.test.ts` for tab parsing/state formatting, JSONL RPC helpers, no-extension worker args, and parent-side tab routing behavior.

@@ -53,6 +53,12 @@ export interface TelegramTabBackend {
   followUp: (message: string) => Promise<void>;
   abort: () => Promise<void>;
   getState: () => Promise<RpcChildSessionState>;
+  setModel: (provider: string, modelId: string) => Promise<void>;
+}
+
+export interface TelegramTabModelSelection {
+  provider: string;
+  id: string;
 }
 
 export interface TelegramTabManagerDeps<TContext> {
@@ -87,6 +93,11 @@ interface RuntimeTab {
 
 export interface TelegramTabManager<TContext> {
   isEnabled: () => boolean;
+  canSwitchActiveModel: (ctx: TContext) => Promise<boolean>;
+  selectActiveModel: (
+    model: TelegramTabModelSelection,
+    ctx: TContext,
+  ) => Promise<boolean>;
   handleCommand: (
     args: string,
     chatId: number,
@@ -164,6 +175,10 @@ function applyRpcStateToRecord(
   } else if (record.status === "starting" || record.status === "running") {
     record.status = "idle";
   }
+}
+
+function canSwitchTelegramTabModel(record: TelegramTabRecord): boolean {
+  return record.status !== "running" && record.status !== "starting";
 }
 
 function buildTelegramTabWorkerExtensionArgs(
@@ -343,6 +358,21 @@ export function createTelegramTabManager<TContext>(
       await persist();
       throw error;
     }
+  };
+  const refreshRuntimeState = async (runtime: RuntimeTab): Promise<void> => {
+    if (!runtime.backend) return;
+    await runtime.backend
+      .getState()
+      .then((childState) => applyRpcStateToRecord(runtime.record, childState))
+      .catch((error) => {
+        runtime.record.status = "error";
+        runtime.record.lastError = getErrorMessage(error);
+      });
+    await persist();
+  };
+  const getActiveRuntime = async (ctx: TContext): Promise<RuntimeTab | undefined> => {
+    const tabState = await ensureState(deps.getCwd(ctx));
+    return getRuntime(tabState, tabState.activeTab);
   };
   const replyDisabled = (
     chatId: number,
@@ -568,6 +598,35 @@ export function createTelegramTabManager<TContext>(
   };
   return {
     isEnabled,
+    canSwitchActiveModel: async (ctx) => {
+      if (!isEnabled()) return false;
+      const runtime = await getActiveRuntime(ctx);
+      if (!runtime) return false;
+      await refreshRuntimeState(runtime);
+      return canSwitchTelegramTabModel(runtime.record);
+    },
+    selectActiveModel: async (model, ctx) => {
+      if (!isEnabled()) return false;
+      const runtime = await getActiveRuntime(ctx);
+      if (!runtime) return false;
+      await refreshRuntimeState(runtime);
+      if (!canSwitchTelegramTabModel(runtime.record)) return false;
+      try {
+        const backend = await ensureBackend(runtime, deps.getCwd(ctx));
+        await backend.setModel(model.provider, model.id);
+        await refreshRuntimeState(runtime);
+        return true;
+      } catch (error) {
+        runtime.record.status = "error";
+        runtime.record.lastError = getErrorMessage(error);
+        deps.recordRuntimeEvent?.("tabs", error, {
+          tab: runtime.record.name,
+          action: "set_model",
+        });
+        await persist();
+        return false;
+      }
+    },
     handleCommand: async (args, chatId, replyToMessageId, ctx) => {
       if (!isEnabled()) {
         await replyDisabled(chatId, replyToMessageId);
