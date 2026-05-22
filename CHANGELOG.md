@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` Active tabs now relay worker thinking blocks, assistant tool-call blocks, and final Markdown replies from RPC events through the parent Telegram bridge while workers continue to run with `--no-extensions`.
 - `[Concurrent Tabs]` `/model` now opens the active tab's model picker when `concurrentTabs.enabled` is true. Model-menu callbacks route selections to the active RPC child, refresh the menu with the tab's current model marker, and leave the parent session model untouched.
 - `[Concurrent Tabs]` `/llm [tokens...]` now targets the active tab's RPC child when `concurrentTabs.enabled` is true, preserving the existing model list/filter/single-match UX while keeping the parent session model unchanged. Busy active tabs reject model switches until they are idle.
 - `[Docs]` Updated the concurrent tabs handoff notes to record the successful Telegram smoke test for isolated `/llm` and `/model` active-tab switching.

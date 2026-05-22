@@ -235,3 +235,97 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
   await manager.handleCommand("abort A", 1, 50, "ctx");
   assert.deepEqual(backends.get("A")?.aborts, ["A"]);
 });
+
+test("Tab manager relays active worker thinking and tool call output", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-rendering-"));
+  const textReplies: string[] = [];
+  const markdownReplies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionRoot: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      textReplies.push(text);
+      return textReplies.length;
+    },
+    sendMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+      markdownReplies.push(markdown);
+      return markdownReplies.length;
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.dispatchPrompt(
+    {
+      chatId: 1,
+      replyToMessageId: 20,
+      content: [{ type: "text", text: "inspect repo" }],
+    },
+    "ctx",
+  );
+
+  const backend = backends.get("A");
+  assert.ok(backend);
+  backend.emit({ type: "agent_start" });
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "thinking_delta",
+      contentIndex: 0,
+      delta: "I should inspect the repo.",
+    },
+  });
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_end", contentIndex: 0 },
+  });
+  assert.match(markdownReplies.at(-1) ?? "", /💡 Thinking/);
+  assert.match(markdownReplies.at(-1) ?? "", /I should inspect the repo\./);
+
+  backend.emit({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "I should inspect the repo." },
+        { type: "text", text: "I'll check the working directory." },
+        {
+          type: "toolCall",
+          id: "tool-1",
+          name: "bash",
+          arguments: { command: "pwd" },
+        },
+      ],
+    },
+  });
+  assert.equal(
+    markdownReplies.filter((reply) => reply.includes("I should inspect the repo."))
+      .length,
+    1,
+  );
+  assert.match(markdownReplies.at(-1) ?? "", /🔧 `bash`/);
+  assert.match(markdownReplies.at(-1) ?? "", /"command": "pwd"/);
+
+  backend.emit({
+    type: "agent_end",
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+      },
+    ],
+  });
+  assert.equal(markdownReplies.at(-1), "Done.");
+});

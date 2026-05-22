@@ -9,13 +9,16 @@ import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
-  extractRpcAssistantText,
   extractRpcTextDelta,
   RpcChildBackend,
   type RpcChildBackendEvent,
   type RpcChildBackendOptions,
   type RpcChildSessionState,
 } from "./rpc-child.ts";
+import {
+  getAgentMessageText,
+  isAssistantAgentMessage,
+} from "./replies.ts";
 import {
   createDefaultTelegramTabsState,
   findTelegramTabNameCaseConflict,
@@ -67,8 +70,13 @@ export interface TelegramTabManagerDeps<TContext> {
   getCwd: (ctx: TContext) => string;
   sendTextReply: (
     chatId: number,
-    replyToMessageId: number,
+    replyToMessageId: number | undefined,
     text: string,
+  ) => Promise<number | undefined>;
+  sendMarkdownReply?: (
+    chatId: number,
+    replyToMessageId: number | undefined,
+    markdown: string,
   ) => Promise<number | undefined>;
   now?: () => number;
   agentDir?: string;
@@ -87,6 +95,9 @@ interface RuntimeTab {
   backend?: TelegramTabBackend;
   unreadEvents: number;
   activeBuffer: string;
+  thinkingBuffers: Map<number, string>;
+  sentThinkingTexts: Set<string>;
+  sentToolCallMessages: Set<string>;
   activeChatId?: number;
   activeReplyToMessageId?: number;
   unsubscribe?: () => void;
@@ -258,6 +269,119 @@ function buildTelegramTabWorkerExtensionArgs(
   return extensions.flatMap((extensionPath) => ["--extension", extensionPath]);
 }
 
+function createRuntimeTab(record: TelegramTabRecord): RuntimeTab {
+  return {
+    record,
+    unreadEvents: 0,
+    activeBuffer: "",
+    thinkingBuffers: new Map(),
+    sentThinkingTexts: new Set(),
+    sentToolCallMessages: new Set(),
+  };
+}
+
+function resetRuntimeTurnBuffers(runtime: RuntimeTab): void {
+  runtime.activeBuffer = "";
+  runtime.thinkingBuffers.clear();
+  runtime.sentThinkingTexts.clear();
+  runtime.sentToolCallMessages.clear();
+}
+
+function getRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function getRpcAssistantMessageEvent(
+  event: RpcChildBackendEvent,
+): Record<string, unknown> | undefined {
+  return getRecord(event.assistantMessageEvent);
+}
+
+function getRpcAssistantEventContentIndex(
+  assistantEvent: Record<string, unknown>,
+): number {
+  const index = assistantEvent.contentIndex;
+  return typeof index === "number" && Number.isInteger(index) && index >= 0
+    ? index
+    : 0;
+}
+
+function getRpcAssistantThinkingDelta(
+  event: RpcChildBackendEvent,
+): { index: number; delta: string } | undefined {
+  if (event.type !== "message_update") return undefined;
+  const assistantEvent = getRpcAssistantMessageEvent(event);
+  if (!assistantEvent || assistantEvent.type !== "thinking_delta") {
+    return undefined;
+  }
+  return typeof assistantEvent.delta === "string"
+    ? {
+        index: getRpcAssistantEventContentIndex(assistantEvent),
+        delta: assistantEvent.delta,
+      }
+    : undefined;
+}
+
+function getRpcAssistantThinkingEndIndex(
+  event: RpcChildBackendEvent,
+): number | undefined {
+  if (event.type !== "message_update") return undefined;
+  const assistantEvent = getRpcAssistantMessageEvent(event);
+  if (!assistantEvent || assistantEvent.type !== "thinking_end") {
+    return undefined;
+  }
+  return getRpcAssistantEventContentIndex(assistantEvent);
+}
+
+function getAgentMessageContent(message: unknown): unknown[] {
+  const raw = getRecord(message)?.content;
+  return Array.isArray(raw) ? raw : [];
+}
+
+function extractAgentThinkingBlocks(message: unknown): string[] {
+  return getAgentMessageContent(message)
+    .map((block) => {
+      const raw = getRecord(block);
+      if (!raw || raw.type !== "thinking") return "";
+      return typeof raw.thinking === "string" ? raw.thinking.trim() : "";
+    })
+    .filter(Boolean);
+}
+
+function agentMessageHasToolCall(message: unknown): boolean {
+  return getAgentMessageContent(message).some(
+    (block) => getRecord(block)?.type === "toolCall",
+  );
+}
+
+function getLatestAssistantMessage(messages: unknown): unknown | undefined {
+  if (!Array.isArray(messages)) return undefined;
+  for (const message of messages.slice().reverse()) {
+    if (isAssistantAgentMessage(message)) return message;
+  }
+  return undefined;
+}
+
+function extractRpcAssistantText(event: RpcChildBackendEvent): string {
+  if (event.type === "message_end") {
+    return getAgentMessageText(event.message);
+  }
+  if (event.type !== "agent_end") return "";
+  const latestAssistant = getLatestAssistantMessage(event.messages);
+  return latestAssistant ? getAgentMessageText(latestAssistant) : "";
+}
+
+function formatTelegramTabThinkingMarkdown(text: string): string {
+  const quoted = text
+    .trim()
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  return `💡 Thinking\n${quoted}`;
+}
+
 export function createTelegramTabManager<TContext>(
   deps: TelegramTabManagerDeps<TContext>,
 ): TelegramTabManager<TContext> {
@@ -287,11 +411,7 @@ export function createTelegramTabManager<TContext>(
     if (!state) {
       state = await readTelegramTabsState(statePath, cwd, now());
       for (const record of Object.values(state.tabs)) {
-        runtimeTabs.set(record.name, {
-          record,
-          unreadEvents: 0,
-          activeBuffer: "",
-        });
+        runtimeTabs.set(record.name, createRuntimeTab(record));
       }
       await persist();
     }
@@ -305,7 +425,7 @@ export function createTelegramTabManager<TContext>(
     if (!record) return undefined;
     let runtime = runtimeTabs.get(name);
     if (!runtime) {
-      runtime = { record, unreadEvents: 0, activeBuffer: "" };
+      runtime = createRuntimeTab(record);
       runtimeTabs.set(name, runtime);
     }
     runtime.record = record;
@@ -321,6 +441,60 @@ export function createTelegramTabManager<TContext>(
     }
     return deps.sendTextReply(chatId, replyToMessageId, text);
   };
+  const sendTabMarkdownReply = (
+    chatId: number | undefined,
+    replyToMessageId: number | undefined,
+    markdown: string,
+  ): Promise<number | undefined> => {
+    if (chatId === undefined) return Promise.resolve(undefined);
+    return deps.sendMarkdownReply
+      ? deps.sendMarkdownReply(chatId, replyToMessageId, markdown)
+      : deps.sendTextReply(chatId, replyToMessageId, markdown);
+  };
+  const sendActiveTabThinking = (
+    tabState: TelegramTabsState,
+    tabName: string,
+    runtime: RuntimeTab,
+    text: string,
+  ): void => {
+    const trimmed = text.trim();
+    if (!trimmed || runtime.sentThinkingTexts.has(trimmed)) return;
+    if (tabState.activeTab !== tabName) return;
+    runtime.sentThinkingTexts.add(trimmed);
+    void sendTabMarkdownReply(
+      runtime.activeChatId,
+      runtime.activeReplyToMessageId,
+      formatTelegramTabThinkingMarkdown(trimmed),
+    );
+  };
+  const flushActiveTabThinkingBuffer = (
+    tabState: TelegramTabsState,
+    tabName: string,
+    runtime: RuntimeTab,
+    index: number,
+  ): void => {
+    const text = runtime.thinkingBuffers.get(index) ?? "";
+    runtime.thinkingBuffers.delete(index);
+    sendActiveTabThinking(tabState, tabName, runtime, text);
+  };
+  const sendActiveTabToolCallMessage = (
+    tabState: TelegramTabsState,
+    tabName: string,
+    runtime: RuntimeTab,
+    message: unknown,
+  ): boolean => {
+    if (!agentMessageHasToolCall(message)) return false;
+    const markdown = getAgentMessageText(message);
+    if (!markdown || runtime.sentToolCallMessages.has(markdown)) return true;
+    if (tabState.activeTab !== tabName) return false;
+    runtime.sentToolCallMessages.add(markdown);
+    void sendTabMarkdownReply(
+      runtime.activeChatId,
+      runtime.activeReplyToMessageId,
+      markdown,
+    );
+    return true;
+  };
   const handleChildEvent = (
     tabName: string,
     runtime: RuntimeTab,
@@ -331,7 +505,7 @@ export function createTelegramTabManager<TContext>(
     const record = runtime.record;
     const eventNow = now();
     if (event.type === "agent_start") {
-      runtime.activeBuffer = "";
+      resetRuntimeTurnBuffers(runtime);
       record.status = "running";
       record.lastError = undefined;
       record.lastAgentStartAt = eventNow;
@@ -340,17 +514,53 @@ export function createTelegramTabManager<TContext>(
     }
     const delta = extractRpcTextDelta(event);
     if (delta) runtime.activeBuffer += delta;
+    const thinkingDelta = getRpcAssistantThinkingDelta(event);
+    if (thinkingDelta) {
+      runtime.thinkingBuffers.set(
+        thinkingDelta.index,
+        `${runtime.thinkingBuffers.get(thinkingDelta.index) ?? ""}${
+          thinkingDelta.delta
+        }`,
+      );
+    }
+    const thinkingEndIndex = getRpcAssistantThinkingEndIndex(event);
+    if (thinkingEndIndex !== undefined) {
+      flushActiveTabThinkingBuffer(tabState, tabName, runtime, thinkingEndIndex);
+    }
     const assistantText = extractRpcAssistantText(event);
     if (assistantText) record.lastAssistantText = assistantText;
+    if (event.type === "message_end" && isAssistantAgentMessage(event.message)) {
+      for (const thinking of extractAgentThinkingBlocks(event.message)) {
+        sendActiveTabThinking(tabState, tabName, runtime, thinking);
+      }
+      sendActiveTabToolCallMessage(tabState, tabName, runtime, event.message);
+    }
     if (event.type === "agent_end") {
+      for (const index of [...runtime.thinkingBuffers.keys()]) {
+        flushActiveTabThinkingBuffer(tabState, tabName, runtime, index);
+      }
+      const latestAssistant = getLatestAssistantMessage(event.messages);
+      if (latestAssistant) {
+        for (const thinking of extractAgentThinkingBlocks(latestAssistant)) {
+          sendActiveTabThinking(tabState, tabName, runtime, thinking);
+        }
+      }
+      const finalAlreadySentAsToolCall = latestAssistant
+        ? sendActiveTabToolCallMessage(
+            tabState,
+            tabName,
+            runtime,
+            latestAssistant,
+          )
+        : false;
       record.status = "idle";
       record.lastAgentEndAt = eventNow;
       if (!record.lastAssistantText && runtime.activeBuffer) {
         record.lastAssistantText = runtime.activeBuffer;
       }
       const isActive = tabState.activeTab === tabName;
-      if (isActive && record.lastAssistantText) {
-        void sendTabReply(
+      if (isActive && record.lastAssistantText && !finalAlreadySentAsToolCall) {
+        void sendTabMarkdownReply(
           runtime.activeChatId,
           runtime.activeReplyToMessageId,
           record.lastAssistantText,
@@ -511,11 +721,7 @@ export function createTelegramTabManager<TContext>(
       };
       tabState.tabs[name] = record;
       tabState.activeTab = name;
-      const runtime: RuntimeTab = {
-        record,
-        unreadEvents: 0,
-        activeBuffer: "",
-      };
+      const runtime: RuntimeTab = createRuntimeTab(record);
       runtimeTabs.set(name, runtime);
       await persist();
       try {

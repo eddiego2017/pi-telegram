@@ -258,6 +258,7 @@ export default function (pi: Pi.ExtensionAPI) {
     getConfig: getConcurrentTabsConfig,
     getCwd: Pi.getExtensionContextCwd,
     sendTextReply,
+    sendMarkdownReply,
     recordRuntimeEvent,
   });
   const dispatchNextQueuedTelegramTurn =
