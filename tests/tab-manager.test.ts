@@ -294,6 +294,104 @@ test("Tab manager sends last-turn replay after tab switch", async () => {
   assert.deepEqual(replays, ["A:/sessions/A.jsonl:7:30"]);
 });
 
+test("Tab manager opens interactive dashboard and handles tab callbacks", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-dashboard-"));
+  const textReplies: string[] = [];
+  const interactiveSends: string[] = [];
+  const interactiveEdits: string[] = [];
+  const answers: string[] = [];
+  const replays: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 10,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionRoot: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      textReplies.push(text);
+      return textReplies.length;
+    },
+    sendInteractiveMessage: async (_chatId, text, mode, markup) => {
+      interactiveSends.push(
+        `${mode}:${text.split("\n")[0]}:${markup.inline_keyboard[0]?.map((button) => button.text).join("|")}`,
+      );
+      return 77;
+    },
+    editInteractiveMessage: async (_chatId, _messageId, text, mode, markup) => {
+      interactiveEdits.push(
+        `${mode}:${text.split("\n")[0]}:${markup.inline_keyboard[0]?.map((button) => button.text).join("|")}`,
+      );
+    },
+    answerCallbackQuery: async (_id, text) => {
+      answers.push(text ?? "");
+    },
+    sendLastTurnsOnSwitch: async (reference, chatId, replyToMessageId) => {
+      replays.push(`${reference.tabName}:${chatId}:${replyToMessageId}`);
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.handleCommand("new B", 1, 11, "ctx");
+  await manager.handleCommand("", 1, 12, "ctx");
+
+  assert.deepEqual(interactiveSends, ["plain:Tabs 3/10:default|A"]);
+
+  await manager.handleCallbackQuery(
+    {
+      id: "cb-switch",
+      data: "tab:switch:A",
+      message: { chat: { id: 7 }, message_id: 77 },
+    },
+    "ctx",
+  );
+
+  assert.equal(answers.at(-1), "Switching to A.");
+  assert.match(textReplies.at(-1) ?? "", /Switched to tab A/);
+  assert.deepEqual(replays, ["A:7:77"]);
+  assert.match(interactiveEdits.at(-1) ?? "", /plain:Tabs 3\/10/);
+
+  await manager.handleCallbackQuery(
+    {
+      id: "cb-last5",
+      data: "tab:last5",
+      message: { chat: { id: 7 }, message_id: 77 },
+    },
+    "ctx",
+  );
+  assert.equal(answers.at(-1), "Replaying last 5 turns.");
+  assert.deepEqual(replays, ["A:7:77", "A:7:77"]);
+
+  await manager.handleCallbackQuery(
+    {
+      id: "cb-close",
+      data: "tab:close:A",
+      message: { chat: { id: 7 }, message_id: 77 },
+    },
+    "ctx",
+  );
+  assert.match(interactiveEdits.at(-1) ?? "", /Close tab A/);
+  await manager.handleCallbackQuery(
+    {
+      id: "cb-close-do",
+      data: "tab:close:do:A",
+      message: { chat: { id: 7 }, message_id: 77 },
+    },
+    "ctx",
+  );
+  assert.equal(answers.at(-1), "Closing A.");
+  assert.match(textReplies.at(-1) ?? "", /Closed tab A/);
+});
+
 test("Tab manager renames tabs without discarding session state", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-rename-"));
   const replies: string[] = [];

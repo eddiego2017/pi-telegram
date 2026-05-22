@@ -7,8 +7,9 @@ Status as of 2026-05-22: MVP plus active-tab `/llm`, `/model`, live answer
 text streaming, live thinking streaming, live tool-call preview streaming,
 Markdown final replies, active-tab `/session`/`/tree` history browsing,
 `/session` image replay, a 10-tab default limit, `/tab rename`, active-tab
-Telegram typing actions, and automatic last-5 replay on tab switch are
-implemented, tested, and deployed in the `pi` Kubernetes deployment.
+Telegram typing actions, automatic last-5 replay on tab switch, and the inline
+`/tab` dashboard are implemented, tested, and deployed in the `pi` Kubernetes
+deployment.
 
 Last committed MVP baseline:
 
@@ -36,6 +37,7 @@ active-tab /session and /tree now read the selected tab worker session file
 default concurrent tab limit is 10 and /tab rename is available
 active tab worker runs show native Telegram typing actions
 /tab <name> automatically replays that tab's last 5 user turns
+/tab opens an inline dashboard for switching and active-tab controls
 ```
 
 Implemented updates after the MVP baseline:
@@ -65,13 +67,17 @@ Implemented updates after the MVP baseline:
 - `/tab <name>` automatically sends the selected tab's last 5 user turns,
   including agent replies and replayable image attachments, using the same
   replay formatter as `/session`.
+- Bare `/tab` opens a Telegram inline dashboard showing active/running/unread
+  tab state. Buttons switch tabs, refresh the panel, replay active-tab Last 5,
+  send status, and confirm abort/close actions.
 - `/tree` now opens the active tab's prompt history when concurrent tabs are
   enabled. It is read-only for worker tabs until child-safe tree navigation and
   branch mutation are implemented.
 
 ## What Works Now
 
-- `/tab` lists tabs without starting a worker.
+- `/tab` opens an inline dashboard without starting a worker; when interactive
+  delivery is unavailable it falls back to the text tab list.
 - `/tab new A` creates a new independent tab.
 - Normal Telegram messages go to the active tab when concurrent tabs are enabled.
 - A prompt running in tab A does not block tab B.

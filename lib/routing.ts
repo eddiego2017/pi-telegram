@@ -19,7 +19,10 @@ import * as OutboundHandlers from "./outbound-handlers.ts";
 import * as PromptTemplates from "./prompt-templates.ts";
 import * as Queue from "./queue.ts";
 import type { TelegramBridgeRuntime } from "./runtime.ts";
-import type { TelegramTabManager } from "./tab-manager.ts";
+import type {
+  TelegramTabCallbackQuery,
+  TelegramTabManager,
+} from "./tab-manager.ts";
 import * as TextGroups from "./text-groups.ts";
 import * as Turns from "./turns.ts";
 import type { TelegramUser } from "./updates.ts";
@@ -35,6 +38,7 @@ export type TelegramRoutedCallbackQuery = Updates.TelegramCallbackQuery &
   Menu.MenuCallbackQuery &
   MenuDump.TelegramDumpMenuCallbackQuery &
   MenuSession.TelegramSessionMenuCallbackQuery &
+  TelegramTabCallbackQuery &
   MenuTree.TelegramTreeMenuCallbackQuery;
 
 export interface TelegramInboundRouteRuntimeDeps<
@@ -205,6 +209,7 @@ const TELEGRAM_OWNED_CALLBACK_PREFIXES = [
   "session:",
   "settings:",
   "status:",
+  "tab:",
   "tgbtn:",
   "thinking:",
   "tree:",
@@ -375,6 +380,8 @@ export function createTelegramInboundRouteRuntime<
     if (handledByTree) return;
     const handledByDump = await deps.dumpMenuCallbackHandler?.(query, ctx);
     if (handledByDump) return;
+    const handledByTab = await deps.tabManager?.handleCallbackQuery(query, ctx);
+    if (handledByTab) return;
     const callbackData = query.data;
     if (
       deps.sendUserMessage &&

@@ -38,6 +38,7 @@ import {
 } from "./tabs.ts";
 import type { TelegramConcurrentTabsConfig } from "./config.ts";
 import { getTelegramAgentDir } from "./config.ts";
+import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
 
 const TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS = 1200;
 const TELEGRAM_TAB_STREAM_MARKDOWN_LIMIT = 3600;
@@ -103,6 +104,23 @@ export interface TelegramTabManagerDeps<TContext> {
     messageId: number,
     markdown: string,
   ) => Promise<number | undefined>;
+  sendInteractiveMessage?: (
+    chatId: number,
+    text: string,
+    mode: "html" | "plain",
+    replyMarkup: TelegramInlineKeyboardMarkup,
+  ) => Promise<number | undefined>;
+  editInteractiveMessage?: (
+    chatId: number,
+    messageId: number,
+    text: string,
+    mode: "html" | "plain",
+    replyMarkup: TelegramInlineKeyboardMarkup,
+  ) => Promise<void>;
+  answerCallbackQuery?: (
+    callbackQueryId: string,
+    text?: string,
+  ) => Promise<void>;
   sendLastTurnsOnSwitch?: (
     reference: TelegramTabSessionReference,
     chatId: number,
@@ -200,8 +218,18 @@ export interface TelegramTabManager<TContext> {
     replyToMessageId: number,
     ctx: TContext,
   ) => Promise<boolean>;
+  handleCallbackQuery: (
+    query: TelegramTabCallbackQuery,
+    ctx: TContext,
+  ) => Promise<boolean>;
   dispatchPrompt: (turn: TelegramTabPromptTurn, ctx: TContext) => Promise<boolean>;
   dispose: () => Promise<void>;
+}
+
+export interface TelegramTabCallbackQuery {
+  id: string;
+  data?: string;
+  message?: { chat?: { id?: number }; message_id?: number };
 }
 
 export interface TelegramTabAwareModelMenuPorts<
@@ -604,6 +632,121 @@ function formatTelegramTabThinkingMarkdown(text: string): string {
     .map((line) => `> ${line}`)
     .join("\n");
   return `💡 Thinking\n${quoted}`;
+}
+
+function formatTelegramTabDashboardModel(record: TelegramTabRecord): string {
+  return record.currentModel
+    ? `${record.currentModel.provider}/${record.currentModel.id}`
+    : "model unknown";
+}
+
+function formatTelegramTabDashboardSummary(
+  state: TelegramTabsState,
+  unreadByTab: Record<string, number>,
+  maxTabs: number,
+): string {
+  const tabs = Object.values(state.tabs).sort((a, b) => a.createdAt - b.createdAt);
+  const active = state.tabs[state.activeTab];
+  const unreadTabs = tabs
+    .filter((tab) => (unreadByTab[tab.name] ?? 0) > 0)
+    .map((tab) => `${tab.name} ${unreadByTab[tab.name]}`);
+  const lines = [
+    `Tabs ${tabs.length}/${maxTabs}`,
+    active
+      ? `Active: ${active.name} · ${active.status} · ${formatTelegramTabDashboardModel(active)}`
+      : `Active: ${state.activeTab}`,
+  ];
+  if (active?.currentThinkingLevel) {
+    lines.push(`Thinking: ${active.currentThinkingLevel}`);
+  }
+  lines.push(`Unread: ${unreadTabs.length > 0 ? unreadTabs.join(", ") : "none"}`);
+  lines.push("");
+  for (const tab of tabs) {
+    const marker = tab.name === state.activeTab ? "●" : "○";
+    const unread = unreadByTab[tab.name] ? ` · unread ${unreadByTab[tab.name]}` : "";
+    const model = tab.currentModel ? ` · ${formatTelegramTabDashboardModel(tab)}` : "";
+    lines.push(`${marker} ${tab.name} · ${tab.status}${unread}${model}`);
+  }
+  return lines.join("\n");
+}
+
+function formatTelegramTabButtonLabel(
+  record: TelegramTabRecord,
+  activeTab: string,
+  unreadCount: number,
+): string {
+  const active = record.name === activeTab ? "● " : "";
+  const unread = unreadCount > 0 ? ` ${unreadCount}` : "";
+  const running = record.status === "running" || record.status === "starting"
+    ? " ▶"
+    : record.status === "error"
+      ? " !"
+      : "";
+  return `${active}${record.name}${unread}${running}`;
+}
+
+function encodeTelegramTabCallbackName(name: string): string {
+  return encodeURIComponent(name);
+}
+
+function decodeTelegramTabCallbackName(name: string | undefined): string | undefined {
+  if (!name) return undefined;
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return undefined;
+  }
+}
+
+function buildTelegramTabDashboardReplyMarkup(
+  state: TelegramTabsState,
+  unreadByTab: Record<string, number>,
+): TelegramInlineKeyboardMarkup {
+  const rows: TelegramInlineKeyboardMarkup["inline_keyboard"] = [];
+  const tabs = Object.values(state.tabs).sort((a, b) => a.createdAt - b.createdAt);
+  for (let index = 0; index < tabs.length; index += 2) {
+    const row = tabs.slice(index, index + 2).map((tab) => ({
+      text: formatTelegramTabButtonLabel(
+        tab,
+        state.activeTab,
+        unreadByTab[tab.name] ?? 0,
+      ),
+      callback_data:
+        tab.name === state.activeTab
+          ? "tab:noop"
+          : `tab:switch:${encodeTelegramTabCallbackName(tab.name)}`,
+    }));
+    rows.push(row);
+  }
+  rows.push([
+    { text: "Refresh", callback_data: "tab:refresh" },
+    { text: "Last 5", callback_data: "tab:last5" },
+    { text: "Status", callback_data: "tab:status" },
+  ]);
+  rows.push([
+    { text: "Abort", callback_data: `tab:abort:${encodeTelegramTabCallbackName(state.activeTab)}` },
+    { text: "Close", callback_data: `tab:close:${encodeTelegramTabCallbackName(state.activeTab)}` },
+  ]);
+  rows.push([
+    { text: "New", callback_data: "tab:help:new" },
+    { text: "Rename", callback_data: "tab:help:rename" },
+  ]);
+  return { inline_keyboard: rows };
+}
+
+function buildTelegramTabConfirmReplyMarkup(
+  action: "abort" | "close",
+  tabName: string,
+): TelegramInlineKeyboardMarkup {
+  const encoded = encodeTelegramTabCallbackName(tabName);
+  return {
+    inline_keyboard: [
+      [
+        { text: action === "abort" ? "Confirm Abort" : "Confirm Close", callback_data: `tab:${action}:do:${encoded}` },
+      ],
+      [{ text: "Cancel", callback_data: "tab:refresh" }],
+    ],
+  };
 }
 
 function truncateTelegramTabStreamMarkdown(markdown: string): string {
@@ -1188,23 +1331,71 @@ export function createTelegramTabManager<TContext>(
       replyToMessageId,
       "Concurrent tabs are disabled. Set concurrentTabs.enabled to true in telegram.json to use /tab.",
     );
+  const getUnreadByTab = (): Record<string, number> =>
+    Object.fromEntries(
+      [...runtimeTabs.entries()].map(([name, runtime]) => [
+        name,
+        runtime.unreadEvents,
+      ]),
+    );
+  const sendTabDashboard = async (
+    tabState: TelegramTabsState,
+    chatId: number,
+    replyToMessageId: number,
+  ): Promise<void> => {
+    const unreadByTab = getUnreadByTab();
+    if (!deps.sendInteractiveMessage) {
+      await deps.sendTextReply(
+        chatId,
+        replyToMessageId,
+        formatTelegramTabList(tabState, unreadByTab, now()),
+      );
+      return;
+    }
+    await deps.sendInteractiveMessage(
+      chatId,
+      formatTelegramTabDashboardSummary(
+        tabState,
+        unreadByTab,
+        deps.getConfig().maxTabs,
+      ),
+      "plain",
+      buildTelegramTabDashboardReplyMarkup(tabState, unreadByTab),
+    );
+  };
+  const editTabDashboard = async (
+    tabState: TelegramTabsState,
+    chatId: number,
+    messageId: number,
+  ): Promise<void> => {
+    const unreadByTab = getUnreadByTab();
+    if (!deps.editInteractiveMessage) return;
+    await deps.editInteractiveMessage(
+      chatId,
+      messageId,
+      formatTelegramTabDashboardSummary(
+        tabState,
+        unreadByTab,
+        deps.getConfig().maxTabs,
+      ),
+      "plain",
+      buildTelegramTabDashboardReplyMarkup(tabState, unreadByTab),
+    );
+  };
+  const answerTabCallback = (
+    callbackQueryId: string,
+    text?: string,
+  ): Promise<void> =>
+    deps.answerCallbackQuery
+      ? deps.answerCallbackQuery(callbackQueryId, text)
+      : Promise.resolve();
   const commandHandlers = {
     list: async (
       tabState: TelegramTabsState,
       chatId: number,
       replyToMessageId: number,
     ) => {
-      const unread = Object.fromEntries(
-        [...runtimeTabs.entries()].map(([name, runtime]) => [
-          name,
-          runtime.unreadEvents,
-        ]),
-      );
-      await deps.sendTextReply(
-        chatId,
-        replyToMessageId,
-        formatTelegramTabList(tabState, unread, now()),
-      );
+      await sendTabDashboard(tabState, chatId, replyToMessageId);
     },
     new: async (
       tabState: TelegramTabsState,
@@ -1591,6 +1782,113 @@ export function createTelegramTabManager<TContext>(
           await deps.sendTextReply(chatId, replyToMessageId, formatTelegramTabUsage());
           return true;
       }
+    },
+    handleCallbackQuery: async (query, ctx) => {
+      const data = query.data;
+      if (!data?.startsWith("tab:")) return false;
+      if (!isEnabled()) {
+        await answerTabCallback(query.id, "Concurrent tabs are disabled.");
+        return true;
+      }
+      const chatId = query.message?.chat?.id;
+      const messageId = query.message?.message_id;
+      if (typeof chatId !== "number" || typeof messageId !== "number") {
+        await answerTabCallback(query.id);
+        return true;
+      }
+      const tabState = await ensureState(deps.getCwd(ctx));
+      const [, action, rawMode, rawName] = data.split(":");
+      if (action === "noop") {
+        await answerTabCallback(query.id, `Active tab: ${tabState.activeTab}`);
+        return true;
+      }
+      if (action === "refresh") {
+        await editTabDashboard(tabState, chatId, messageId);
+        await answerTabCallback(query.id, "Refreshed.");
+        return true;
+      }
+      if (action === "switch") {
+        const name = decodeTelegramTabCallbackName(rawMode);
+        if (!name || !tabState.tabs[name]) {
+          await answerTabCallback(query.id, "Tab no longer exists.");
+          await editTabDashboard(tabState, chatId, messageId);
+          return true;
+        }
+        await answerTabCallback(query.id, `Switching to ${name}.`);
+        await commandHandlers.switch(tabState, name, chatId, messageId);
+        await editTabDashboard(tabState, chatId, messageId);
+        return true;
+      }
+      if (action === "last5") {
+        const runtime = getRuntime(tabState, tabState.activeTab);
+        if (!runtime || !deps.sendLastTurnsOnSwitch) {
+          await answerTabCallback(query.id, "No replay available.");
+          return true;
+        }
+        await answerTabCallback(query.id, "Replaying last 5 turns.");
+        await deps.sendLastTurnsOnSwitch(
+          getTelegramTabSessionReference(runtime.record),
+          chatId,
+          messageId,
+        );
+        return true;
+      }
+      if (action === "status") {
+        await answerTabCallback(query.id, "Sending status.");
+        await commandHandlers.status(tabState, tabState.activeTab, chatId, messageId);
+        return true;
+      }
+      if (action === "help") {
+        const text =
+          rawMode === "rename"
+            ? "Use /tab rename [old-name] <new-name>."
+            : "Use /tab new <name>.";
+        await answerTabCallback(query.id, text);
+        return true;
+      }
+      if (action === "abort" || action === "close") {
+        const mode = rawMode;
+        const name = decodeTelegramTabCallbackName(
+          mode === "do" ? rawName : rawMode,
+        );
+        if (!name || !tabState.tabs[name]) {
+          await answerTabCallback(query.id, "Tab no longer exists.");
+          await editTabDashboard(tabState, chatId, messageId);
+          return true;
+        }
+        if (mode === "do") {
+          await answerTabCallback(
+            query.id,
+            action === "abort" ? `Aborting ${name}.` : `Closing ${name}.`,
+          );
+          if (action === "abort") {
+            await commandHandlers.abort(tabState, name, chatId, messageId);
+          } else {
+            await commandHandlers.close(tabState, name, true, chatId, messageId);
+          }
+          await editTabDashboard(tabState, chatId, messageId);
+          return true;
+        }
+        const runtime = getRuntime(tabState, name);
+        const detail =
+          action === "abort"
+            ? `Abort tab ${name}?`
+            : `Close tab ${name}? Session file will be kept.`;
+        const status = runtime?.record.status
+          ? `\nStatus: ${runtime.record.status}`
+          : "";
+        await deps.editInteractiveMessage?.(
+          chatId,
+          messageId,
+          `${detail}${status}`,
+          "plain",
+          buildTelegramTabConfirmReplyMarkup(action, name),
+        );
+        await answerTabCallback(query.id);
+        return true;
+      }
+      await answerTabCallback(query.id);
+      return true;
     },
     dispatchPrompt: async (turn, ctx) => {
       if (!isEnabled()) return false;

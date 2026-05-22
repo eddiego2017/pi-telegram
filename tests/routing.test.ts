@@ -323,6 +323,7 @@ test("Routing runtime applies model menu picks to the active tab when enabled", 
     },
     setActiveThinkingLevel: async () => true,
     handleCommand: async () => true,
+    handleCallbackQuery: async () => false,
     dispatchPrompt: async () => false,
     dispose: async () => undefined,
   };
