@@ -54,6 +54,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   tree: "🌳",
   dump: "🧾",
   name: "🏷️",
+  tab: "🗂️",
   queue: "🔢",
   next: "⏩",
   continue: "▶️",
@@ -159,6 +160,13 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       description: formatTelegramBotCommandDescription(
         "llm",
         "List available LLM models",
+      ),
+    },
+    {
+      command: "tab",
+      description: formatTelegramBotCommandDescription(
+        "tab",
+        "Manage concurrent tabs",
       ),
     },
     {
@@ -505,6 +513,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "name",
   "model",
   "llm",
+  "tab",
   "thinking",
   "settings",
   "help",
@@ -546,6 +555,7 @@ export type TelegramCommandAction =
   | { kind: "status"; executionMode: "immediate" }
   | { kind: "model"; executionMode: "immediate" }
   | { kind: "llm"; args: string; executionMode: "immediate" }
+  | { kind: "tab"; args: string; executionMode: "immediate" }
   | { kind: "thinking"; executionMode: "immediate" }
   | { kind: "settings"; executionMode: "immediate" }
   | {
@@ -574,6 +584,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
   handleLlm: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
+  handleTab?: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleThinking: (message: TMessage, ctx: TContext) => Promise<void>;
   handleSettings?: (message: TMessage, ctx: TContext) => Promise<void>;
   handleHelp: (
@@ -948,6 +959,7 @@ export interface TelegramCommandOrPromptRuntimeDeps<TMessage, TContext> {
     args: string,
   ) => string | undefined;
   replaceMessageText: (message: TMessage, text: string) => TMessage;
+  dispatchPrompt?: (messages: TMessage[], ctx: TContext) => Promise<boolean>;
   enqueueTurn: (messages: TMessage[], ctx: TContext) => Promise<void>;
 }
 
@@ -1014,6 +1026,11 @@ export interface TelegramCommandRuntimeDeps<
     ctx: TContext,
     turnLimit?: number,
   ) => Promise<void>;
+  handleTabCommand?: (
+    message: TMessage,
+    args: string,
+    ctx: TContext,
+  ) => Promise<void>;
   getSessionName: (ctx: TContext) => string | undefined;
   setSessionName: (name: string, ctx: TContext) => void | Promise<void>;
   getAllowedUserId: () => number | undefined;
@@ -1038,6 +1055,7 @@ export const TELEGRAM_APP_MENU_INTRO_HTML = [
   `${formatTelegramCommandEmojiPrefix("dump")}/dump [N] — Export visible transcript`,
   `${formatTelegramCommandEmojiPrefix("name")}/name — Set current session name`,
   `${formatTelegramCommandEmojiPrefix("llm")}/llm — List available LLM models`,
+  `${formatTelegramCommandEmojiPrefix("tab")}/tab — Manage concurrent tabs`,
   `${formatTelegramCommandEmojiPrefix("next")}/next — Force next turn`,
   `${formatTelegramCommandEmojiPrefix("continue")}/continue — Queue continue prompt`,
   `${formatTelegramCommandEmojiPrefix("abort")}/abort — Abort π`,
@@ -1116,6 +1134,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   name: { kind: "name", args: "", executionMode: "immediate" },
   model: { kind: "model", executionMode: "immediate" },
   llm: { kind: "llm", args: "", executionMode: "immediate" },
+  tab: { kind: "tab", args: "", executionMode: "immediate" },
   thinking: { kind: "thinking", executionMode: "immediate" },
   settings: { kind: "settings", executionMode: "immediate" },
   help: { kind: "help", commandName: "help", executionMode: "immediate" },
@@ -1134,7 +1153,8 @@ export function buildTelegramCommandAction(
     baseAction.kind === "llm" ||
     baseAction.kind === "name" ||
     baseAction.kind === "resume" ||
-    baseAction.kind === "dump"
+    baseAction.kind === "dump" ||
+    baseAction.kind === "tab"
   ) {
     return { ...baseAction, args: args ?? "" };
   }
@@ -1585,6 +1605,10 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
     case "llm":
       await deps.handleLlm(message, action.args, ctx);
       return true;
+    case "tab":
+      if (!deps.handleTab) return false;
+      await deps.handleTab(message, action.args, ctx);
+      return true;
     case "thinking":
       await deps.handleThinking(message, ctx);
       return true;
@@ -1687,6 +1711,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     openSessionMenu: commandTargetRuntime.openSessionMenu,
     openTreeMenu: commandTargetRuntime.openTreeMenu,
     openDumpMenu: commandTargetRuntime.openDumpMenu,
+    handleTabCommand: deps.handleTabCommand,
     getSessionName: deps.getSessionName,
     setSessionName: deps.setSessionName,
     getAllowedUserId: deps.getAllowedUserId,
@@ -1744,16 +1769,16 @@ export function createTelegramCommandOrPromptRuntime<TMessage, TContext>(
           command.args,
         );
         if (expanded !== undefined) {
-          await deps.enqueueTurn(
-            [
-              deps.replaceMessageText(firstMessage, expanded),
-              ...messages.slice(1),
-            ],
-            ctx,
-          );
+          const expandedMessages = [
+            deps.replaceMessageText(firstMessage, expanded),
+            ...messages.slice(1),
+          ];
+          if (await deps.dispatchPrompt?.(expandedMessages, ctx)) return;
+          await deps.enqueueTurn(expandedMessages, ctx);
           return;
         }
       }
+      if (await deps.dispatchPrompt?.(messages, ctx)) return;
       await deps.enqueueTurn(messages, ctx);
     },
   };
@@ -1935,6 +1960,11 @@ async function handleTelegramCommandRuntime<
           sendTextReply: sendReplyFor(nextMessage),
         });
       },
+      handleTab: deps.handleTabCommand
+        ? async (nextMessage, args, commandCtx) => {
+            await deps.handleTabCommand?.(nextMessage, args, commandCtx);
+          }
+        : undefined,
       handleThinking: async (nextMessage, commandCtx) => {
         await deps.openThinkingMenu(nextMessage, commandCtx);
       },

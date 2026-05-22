@@ -97,6 +97,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.tree, "🌳");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.dump, "🧾");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.reload, "🔄");
+  assert.deepEqual(TELEGRAM_COMMAND_EMOJI.tab, "🗂️");
   assert.equal(formatTelegramCommandEmojiPrefix("model"), "🤖 ");
   const expectedBuiltins = [
     {
@@ -116,6 +117,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
     { command: "dump", description: "🧾 Export visible transcript" },
     { command: "name", description: "🏷️ Set current session name" },
     { command: "llm", description: "🧬 List available LLM models" },
+    { command: "tab", description: "🗂️ Manage concurrent tabs" },
     {
       command: "next",
       description: "⏩ Force next turn",
@@ -699,6 +701,11 @@ test("Command helpers build command actions", () => {
     args: "apple cat",
     executionMode: "immediate",
   });
+  assert.deepEqual(buildTelegramCommandAction("tab", "new A"), {
+    kind: "tab",
+    args: "new A",
+    executionMode: "immediate",
+  });
   assert.deepEqual(Object.keys(TELEGRAM_COMMAND_ACTIONS), [
     ...TELEGRAM_RESERVED_COMMAND_NAMES,
   ]);
@@ -727,6 +734,7 @@ test("Command execution mode contract keeps Telegram controls immediate", () => 
     ["name", "immediate"],
     ["session", "immediate"],
     ["dump", "immediate"],
+    ["tab", "immediate"],
     ["unknown", "ignored"],
     [undefined, "ignored"],
   ];
@@ -1154,6 +1162,9 @@ test("Command handler target runtime binds command targets into command handling
     selectLlmModel: async () => true,
     openThinkingMenu: async () => {},
     openQueueMenu: async () => {},
+    handleTabCommand: async (_message, args, ctx) => {
+      calls.push(`tab:${args}:${ctx}`);
+    },
     openResumeMenu: async () => {},
     openSessionMenu: async () => {},
     getAllowedUserId: () => undefined,
@@ -1171,7 +1182,16 @@ test("Command handler target runtime binds command targets into command handling
     ),
     true,
   );
-  assert.deepEqual(calls, ["show:ctx"]);
+  assert.equal(
+    await handleCommand(
+      "tab",
+      "new A",
+      { chat: { id: 7 }, message_id: 11 },
+      "ctx",
+    ),
+    true,
+  );
+  assert.deepEqual(calls, ["show:ctx", "tab:new A:ctx"]);
 });
 
 test("Command runtime routes commands through runtime ports", async () => {
@@ -1433,6 +1453,31 @@ test("Command or prompt runtime routes commands before enqueue fallback", async 
   ]);
 });
 
+test("Command or prompt runtime can route prompt fallback to concurrent tabs", async () => {
+  const events: string[] = [];
+  const runtime = createTelegramCommandOrPromptRuntime<
+    { text: string },
+    { id: string }
+  >({
+    extractRawText: (messages) =>
+      messages.map((message) => message.text).join(" "),
+    handleCommand: async () => false,
+    expandPromptTemplateCommand: (commandName, args) =>
+      commandName === "review" ? `expanded:${args}` : undefined,
+    replaceMessageText: (message, text) => ({ ...message, text }),
+    dispatchPrompt: async (messages, ctx) => {
+      events.push(`tab:${messages[0]?.text}:${ctx.id}`);
+      return true;
+    },
+    enqueueTurn: async (messages, ctx) => {
+      events.push(`enqueue:${messages[0]?.text}:${ctx.id}`);
+    },
+  });
+  await runtime.dispatchMessages([{ text: "/review staged" }], { id: "ctx" });
+  await runtime.dispatchMessages([{ text: "hello" }], { id: "ctx" });
+  assert.deepEqual(events, ["tab:expanded:staged:ctx", "tab:hello:ctx"]);
+});
+
 test("Command helpers execute command actions through provided handlers", async () => {
   const events: string[] = [];
   const deps = {
@@ -1453,6 +1498,9 @@ test("Command helpers execute command actions through provided handlers", async 
     },
     handleLlm: async () => {
       events.push("llm");
+    },
+    handleTab: async (_message: unknown, args: string) => {
+      events.push(`tab:${args}`);
     },
     handleThinking: async () => {
       events.push("thinking");
@@ -1557,6 +1605,15 @@ test("Command helpers execute command actions through provided handlers", async 
     ),
     true,
   );
+  assert.equal(
+    await executeTelegramCommandAction(
+      { kind: "tab", args: "new A", executionMode: "immediate" },
+      {},
+      {},
+      deps,
+    ),
+    true,
+  );
   assert.deepEqual(events, [
     "stop",
     "help:start",
@@ -1564,6 +1621,7 @@ test("Command helpers execute command actions through provided handlers", async 
     "name:label",
     "resume:apple cat",
     "dump:20",
+    "tab:new A",
   ]);
 });
 

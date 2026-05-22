@@ -41,6 +41,7 @@ import * as Routing from "./lib/routing.ts";
 import * as Runtime from "./lib/runtime.ts";
 import * as Setup from "./lib/setup.ts";
 import * as Status from "./lib/status.ts";
+import * as TabManager from "./lib/tab-manager.ts";
 import * as TextGroups from "./lib/text-groups.ts";
 import * as ThreadContext from "./lib/thread-context.ts";
 import * as TreeExport from "./lib/tree-export.ts";
@@ -64,6 +65,8 @@ export default function (pi: Pi.ExtensionAPI) {
   const configStore = Config.createTelegramConfigStore();
   const isProactivePushEnabled =
     Config.createTelegramProactivePushChecker(configStore);
+  const getConcurrentTabsConfig =
+    Config.createTelegramConcurrentTabsConfigGetter(configStore);
   const setProactivePushEnabled =
     Config.createTelegramProactivePushSetter(configStore);
   const lockRuntime = Locks.createTelegramLockRuntime<Pi.ExtensionContext>();
@@ -251,6 +254,12 @@ export default function (pi: Pi.ExtensionAPI) {
       getHandlers: configStore.getOutboundHandlers,
       recordRuntimeEvent,
     });
+  const tabManager = TabManager.createTelegramTabManager<Pi.ExtensionContext>({
+    getConfig: getConcurrentTabsConfig,
+    getCwd: Pi.getExtensionContextCwd,
+    sendTextReply,
+    recordRuntimeEvent,
+  });
   const dispatchNextQueuedTelegramTurn =
     Queue.createTelegramQueueDispatchRuntime<Pi.ExtensionContext>({
       ...telegramQueueStore,
@@ -483,6 +492,7 @@ export default function (pi: Pi.ExtensionAPI) {
     treeMenuMessageHandler: treeMenuRuntime.handleTextMessage,
     openDumpMenu: dumpMenuRuntime.openDumpMenu,
     dumpMenuCallbackHandler: dumpMenuRuntime.handleCallbackQuery,
+    tabManager,
     sectionRegistry,
     buttonActionStore,
     inboundHandlerRuntime,
@@ -575,7 +585,12 @@ export default function (pi: Pi.ExtensionAPI) {
   });
   const sessionLifecycleRuntime = Lifecycle.appendTelegramLifecycleHooks(
     queueSessionLifecycle,
-    { onSessionStart: lockedPollingRuntime.onSessionStart },
+    {
+      onSessionStart: lockedPollingRuntime.onSessionStart,
+      onSessionShutdown: TabManager.createTelegramTabManagerShutdownHook(
+        tabManager,
+      ),
+    },
   );
 
   // --- Extension API Bindings ---

@@ -19,6 +19,7 @@ import * as OutboundHandlers from "./outbound-handlers.ts";
 import * as PromptTemplates from "./prompt-templates.ts";
 import * as Queue from "./queue.ts";
 import type { TelegramBridgeRuntime } from "./runtime.ts";
+import type { TelegramTabManager } from "./tab-manager.ts";
 import * as TextGroups from "./text-groups.ts";
 import * as Turns from "./turns.ts";
 import type { TelegramUser } from "./updates.ts";
@@ -101,6 +102,7 @@ export interface TelegramInboundRouteRuntimeDeps<
     message: TMessage,
     ctx: TContext,
   ) => Promise<boolean>;
+  tabManager?: TelegramTabManager<TContext>;
   openResumeMenu?: (
     chatId: number,
     replyToMessageId: number,
@@ -461,6 +463,16 @@ export function createTelegramInboundRouteRuntime<
     openSessionMenu: deps.openSessionMenu,
     openTreeMenu: deps.openTreeMenu,
     openDumpMenu: deps.openDumpMenu,
+    handleTabCommand: deps.tabManager
+      ? async (message, args, ctx) => {
+          await deps.tabManager?.handleCommand(
+            args,
+            message.chat.id,
+            message.message_id,
+            ctx,
+          );
+        }
+      : undefined,
     getAllowedUserId: deps.configStore.getAllowedUserId,
     setAllowedUserId: deps.configStore.setAllowedUserId,
     setMyCommands: deps.setMyCommands,
@@ -496,6 +508,13 @@ export function createTelegramInboundRouteRuntime<
       ),
     replaceMessageText: (message, text) =>
       ({ ...message, text, caption: undefined }) as TMessage,
+    dispatchPrompt: deps.tabManager
+      ? async (messages, ctx) => {
+          if (!deps.tabManager?.isEnabled()) return false;
+          const turn = await promptTurnBuilder(messages, [], ctx);
+          return deps.tabManager.dispatchPrompt(turn, ctx);
+        }
+      : undefined,
     enqueueTurn: promptEnqueue,
   });
   const mediaDispatch = Media.createTelegramMediaGroupDispatchRuntime<

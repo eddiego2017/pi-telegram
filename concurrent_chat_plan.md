@@ -1,10 +1,60 @@
 # Concurrent Chat / Multi-Tab Plan for pi-telegram
 
-This plan is written for a future implementer, likely Codex, to add concurrent chat support to `pi-telegram` without rewriting pi core.
+This plan was originally written for a future implementer, likely Codex, to add concurrent chat support to `pi-telegram` without rewriting pi core. It now also records the MVP that was implemented and smoke-tested on 2026-05-22.
 
 The key design is: **keep pi-telegram as the Telegram-facing parent/supervisor, and run each chat tab as a separate headless `pi --mode rpc` child process.**
 
 This is intentionally different from an in-process multi-`AgentSessionRuntime` design. It uses OS processes for isolation and pi's existing RPC protocol for child communication.
+
+---
+
+## 0. Current implementation status
+
+Status as of 2026-05-22: **MVP implemented and live-tested in the `pi` Kubernetes pod.**
+
+Implemented:
+
+- `lib/tabs.ts`: pure tab state, name validation, command parsing, list/status formatting.
+- `lib/rpc-child.ts`: `pi --mode rpc` JSONL child backend, response-id correlation, stderr ring buffer, graceful dispose, text extraction helpers.
+- `lib/tab-manager.ts`: durable tab registry, per-tab worker lifecycle, prompt routing, inactive completion notices, parent-owned `/tab` handling, shutdown cleanup.
+- `lib/config.ts`: `concurrentTabs` config, including `workerExtensions` for explicitly loading provider-only extensions into workers.
+- `lib/commands.ts`: `/tab` as a reserved immediate Telegram command and bot command menu entry.
+- `lib/routing.ts`: normal prompts route to the active tab only when concurrent tabs are enabled; `/tab` commands bypass worker prompt routing.
+- `index.ts`: composition wiring and session shutdown disposal.
+- Tests for config, command routing, tab state, RPC child helpers, and tab manager orchestration.
+- Docs updated in `README.md`, `docs/architecture.md`, `BACKLOG.md`, and `CHANGELOG.md`.
+
+Live smoke result:
+
+- `/tab` lists tabs without starting a worker.
+- `/tab new A` creates a tab and supports multi-turn conversation.
+- `/tab new B` creates an isolated second tab.
+- `/tab close B` closes the second tab.
+- Restarting the host `pi` process preserves tab state and conversation session files.
+
+Important implementation fix found during smoke testing:
+
+- The command target runtime must pass `handleTabCommand` through to the lower command handler. Without that wiring, `/tab` is parsed as a known command but returns "not handled", then the concurrent prompt fallback sends `/tab` to the active worker. That bug caused the default worker to start and fail with a provider error. This is now covered by tests.
+
+Current live config shape:
+
+```json
+{
+  "concurrentTabs": {
+    "enabled": true,
+    "maxTabs": 4,
+    "inactiveNotify": true,
+    "workerExtensions": [
+      "/home/pi/.pi/agent/extensions/cpa-openai-proxy.ts",
+      "/home/pi/.pi/agent/extensions/cpa-anthropic-proxy.ts",
+      "/home/pi/.pi/agent/extensions/opencode-cpa-provider.ts",
+      "/home/pi/.pi/agent/extensions/groq-filter.ts"
+    ]
+  }
+}
+```
+
+The `workerExtensions` entries are intentionally provider-only. Workers still use `--no-extensions`, so they do not discover or load full `pi-telegram`; they only load the explicit extensions needed to make the configured models available.
 
 ---
 
@@ -88,7 +138,18 @@ pi --mode rpc --no-extensions ...
 
 This is non-negotiable for the MVP.
 
-Implication: child workers will not have extension-provided tools such as `telegram_attach`. That is acceptable for MVP, but must be documented and later solved with a tiny worker-safe extension.
+Implication: child workers will not have general extension-provided tools such as `telegram_attach`. That is acceptable for MVP, but must be documented and later solved with a tiny worker-safe extension.
+
+Important nuance discovered during implementation: custom model providers can also be registered by extensions. If the parent session uses provider extensions, a worker launched with only `--no-extensions` may not know about those providers and can fail before the first prompt. The implemented solution keeps extension discovery disabled but allows an explicit allowlist:
+
+```bash
+pi --mode rpc \
+  --no-extensions \
+  -e /path/to/provider-only-extension.ts \
+  --session-dir <tab-session-dir>
+```
+
+This preserves the main safety property: workers still do not load full `pi-telegram`, do not poll Telegram, and do not compete for the singleton lock.
 
 ---
 
@@ -110,6 +171,14 @@ host pi process
             ├─ pi --mode rpc --no-extensions --session <A.jsonl>
             └─ pi --mode rpc --no-extensions --session <B.jsonl>
 ```
+
+Implemented worker commands may also include explicit provider-only extensions after `--no-extensions`:
+
+```text
+pi --mode rpc --no-extensions -e <provider-extension> --session-dir <tab-dir>
+```
+
+Those explicit extensions are configured through `concurrentTabs.workerExtensions`.
 
 The parent remains the only Telegram bridge. Children are pure headless agents.
 
@@ -313,6 +382,19 @@ Recommended env overrides:
 ```
 
 Do not pass secrets explicitly. Let child inherit provider API env vars already available to the parent pod/process.
+
+Implemented addition:
+
+```ts
+interface TelegramConcurrentTabsConfig {
+  enabled?: boolean;
+  maxTabs?: number;
+  inactiveNotify?: boolean;
+  workerExtensions?: string[];
+}
+```
+
+`workerExtensions` is converted into repeated `--extension <path>` args while keeping `--no-extensions` in place. Use it only for worker-safe provider registration extensions. Do not put `pi-telegram`, Telegram polling extensions, status-stream extensions, or UI-owning extensions in this list.
 
 Optional future hardening:
 
@@ -605,6 +687,13 @@ Concurrent tab MVP is text-first. Generated files are saved locally and path is 
 
 Future solution: worker-safe mini extension.
 
+Why this is needed:
+
+- The existing `telegram_attach` behavior is parent-turn scoped. It depends on the parent `pi-telegram` runtime knowing the active Telegram chat, message, Bot API client, and delivery rules.
+- A worker is intentionally launched with `--no-extensions`, so it cannot call parent-owned Telegram tools.
+- Loading full `pi-telegram` inside a worker would be unsafe: the worker could start another poller, register bot commands, touch the singleton lock, or recurse back into Telegram handling.
+- A worker-safe attach extension keeps the boundary clean. The child only writes an attachment request to disk; the parent remains the only process that sends Telegram messages or files.
+
 Child command later:
 
 ```bash
@@ -679,7 +768,24 @@ Add a setting in `telegram.json` or bridge settings menu:
   "concurrentTabs": {
     "enabled": false,
     "maxTabs": 4,
-    "inactiveNotify": true
+    "inactiveNotify": true,
+    "workerExtensions": []
+  }
+}
+```
+
+In deployments where models are registered by extensions, explicitly allow only the provider extensions:
+
+```json
+{
+  "concurrentTabs": {
+    "enabled": true,
+    "maxTabs": 4,
+    "inactiveNotify": true,
+    "workerExtensions": [
+      "/home/pi/.pi/agent/extensions/cpa-openai-proxy.ts",
+      "/home/pi/.pi/agent/extensions/cpa-anthropic-proxy.ts"
+    ]
   }
 }
 ```
@@ -847,22 +953,26 @@ Then terminate cautiously.
 
 Feature is acceptable when:
 
-1. Child workers are always spawned with `--no-extensions` or equivalent isolation.
-2. No second Telegram poller is started by worker tabs.
-3. `/tab new A` and `/tab new B` can create two independent child pi RPC workers.
-4. A long-running prompt in A does not prevent prompt dispatch to B.
-5. `/tab` commands remain responsive while children run.
-6. Child crash in A does not kill B or parent Telegram polling.
-7. Session files are not shared between tabs.
-8. Host shutdown disposes children.
-9. Feature can be disabled without affecting current single-session bridge.
-10. Documentation clearly states MVP lacks worker `telegram_attach`.
+1. Done: child workers are always spawned with `--no-extensions` or equivalent isolation.
+2. Done: no second Telegram poller is started by worker tabs.
+3. Done: `/tab new A` and `/tab new B` can create two independent child pi RPC workers.
+4. Done: a long-running prompt in A does not prevent prompt dispatch to B.
+5. Done: `/tab` commands remain parent-owned and responsive while children run.
+6. Covered by design/tests: child crash in A marks A failed and does not kill B or parent Telegram polling.
+7. Done: session files are stored per tab under `~/.pi/agent/telegram-tabs/sessions/<tab>/`.
+8. Done: host shutdown disposes children through a lifecycle hook.
+9. Done: feature is disabled by default and bypasses the tab path unless `concurrentTabs.enabled` is true.
+10. Done: documentation states MVP lacks worker `telegram_attach`.
+11. Done: provider-only worker extensions can be explicitly loaded without enabling general extension discovery.
+12. Done: restart smoke test preserves tab registry and session files.
 
 ---
 
 ## 23. Recommended implementation phases
 
 ### Phase 0: Spike, no Telegram UI
+
+Status: done.
 
 Create `RpcChildBackend` and a small local script/test that:
 
@@ -876,17 +986,23 @@ Goal: prove backend reliable.
 
 ### Phase 1: TabManager without full UI
 
+Status: done.
+
 Implement tab registry + create/switch/status/close in pure code with fake backend tests.
 
 Goal: tab lifecycle reliable without Telegram complexity.
 
 ### Phase 2: Telegram `/tab` commands
 
+Status: done.
+
 Wire `/tab` command parsing into update routing. Keep all existing behavior untouched when disabled.
 
 Goal: text-only concurrent tabs work from Telegram.
 
 ### Phase 3: Better rendering and inactive notifications
+
+Status: partially done. The MVP sends final text replies and inactive completion notices. Rich streaming preview/tool rendering parity with the original single-session Telegram path is still future work.
 
 Integrate with existing preview/final rendering where feasible.
 
@@ -897,6 +1013,8 @@ Goal: active tab feels close to current Telegram streaming UX; inactive tabs not
 Add mini extension and spool mechanism for `telegram_attach` from workers.
 
 Goal: generated files from child tabs can be sent back to Telegram.
+
+Status: not started.
 
 ### Phase 5: advanced session controls
 
@@ -909,6 +1027,8 @@ Add per-tab versions of:
 - model/thinking menus
 
 Use RPC commands where possible. Avoid tmux injection for child sessions.
+
+Status: not started.
 
 ---
 

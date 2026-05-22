@@ -12,8 +12,10 @@ import test from "node:test";
 import type { TelegramConfig } from "../lib/config.ts";
 import {
   createTelegramConfigStore,
+  createTelegramConcurrentTabsConfigGetter,
   createTelegramUserPairingRuntime,
   getTelegramAuthorizationState,
+  normalizeTelegramConcurrentTabsConfig,
   pairTelegramUserIfNeeded,
   readTelegramConfig,
   writeTelegramConfig,
@@ -61,6 +63,12 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
       botToken: "initial",
       inboundHandlers: [{ type: "text", template: "translate" }],
       attachmentHandlers: [{ mime: "audio/*", template: "transcribe {file}" }],
+      concurrentTabs: {
+        enabled: true,
+        maxTabs: 2,
+        inactiveNotify: false,
+        workerExtensions: ["/agent/extensions/provider.ts"],
+      },
     },
     agentDir,
     configPath,
@@ -69,6 +77,12 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
     botToken: "initial",
     inboundHandlers: [{ type: "text", template: "translate" }],
     attachmentHandlers: [{ mime: "audio/*", template: "transcribe {file}" }],
+    concurrentTabs: {
+      enabled: true,
+      maxTabs: 2,
+      inactiveNotify: false,
+      workerExtensions: ["/agent/extensions/provider.ts"],
+    },
   });
   store.update((config) => {
     config.allowedUserId = 42;
@@ -83,6 +97,12 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
   assert.deepEqual(store.getAttachmentHandlers(), [
     { mime: "audio/*", template: "transcribe {file}" },
   ]);
+  assert.deepEqual(store.getConcurrentTabsConfig(), {
+    enabled: true,
+    maxTabs: 2,
+    inactiveNotify: false,
+    workerExtensions: ["/agent/extensions/provider.ts"],
+  });
   store.setAllowedUserId(43);
   assert.equal(store.getAllowedUserId(), 43);
   await store.persist();
@@ -90,6 +110,12 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
     botToken: "initial",
     inboundHandlers: [{ type: "text", template: "translate" }],
     attachmentHandlers: [{ mime: "audio/*", template: "transcribe {file}" }],
+    concurrentTabs: {
+      enabled: true,
+      maxTabs: 2,
+      inactiveNotify: false,
+      workerExtensions: ["/agent/extensions/provider.ts"],
+    },
     allowedUserId: 43,
   });
   store.set({ botToken: "next" });
@@ -99,7 +125,50 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
     botToken: "initial",
     inboundHandlers: [{ type: "text", template: "translate" }],
     attachmentHandlers: [{ mime: "audio/*", template: "transcribe {file}" }],
+    concurrentTabs: {
+      enabled: true,
+      maxTabs: 2,
+      inactiveNotify: false,
+      workerExtensions: ["/agent/extensions/provider.ts"],
+    },
     allowedUserId: 43,
+  });
+});
+
+test("Telegram concurrent tabs config normalizes defaults and invalid limits", () => {
+  assert.deepEqual(normalizeTelegramConcurrentTabsConfig(), {
+    enabled: false,
+    maxTabs: 4,
+    inactiveNotify: true,
+    workerExtensions: [],
+  });
+  assert.deepEqual(
+    normalizeTelegramConcurrentTabsConfig({
+      enabled: true,
+      maxTabs: -1,
+      inactiveNotify: false,
+      workerExtensions: ["/agent/extensions/provider.ts", "", 1 as unknown as string],
+    }),
+    {
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: false,
+      workerExtensions: ["/agent/extensions/provider.ts"],
+    },
+  );
+  const getConfig = createTelegramConcurrentTabsConfigGetter({
+    getConcurrentTabsConfig: () => ({
+      enabled: true,
+      maxTabs: 8,
+      inactiveNotify: false,
+      workerExtensions: ["/agent/extensions/provider.ts"],
+    }),
+  });
+  assert.deepEqual(getConfig(), {
+    enabled: true,
+    maxTabs: 8,
+    inactiveNotify: false,
+    workerExtensions: ["/agent/extensions/provider.ts"],
   });
 });
 

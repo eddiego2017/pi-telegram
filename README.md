@@ -94,6 +94,7 @@ Use these inside the Telegram DM with your bot. The main entrypoint is `/start`:
 - **`/dump [N]`**: Open a transcript export menu for the current active branch. `/dump` includes all visible User/Agent text; `/dump 20` includes the latest 20 user turns. The dump excludes tools, thinking, system metadata, compact summaries, and Telegram attachment/reply/output blocks, then offers `📄 Send TXT` or a privacy-confirmed secret GitHub Gist with delete support.
 - **`/name [new name]`**: Show, set, or clear the current π session display name directly from Telegram. `/name <new name>` appends a session-info entry, `/name` shows the current name plus usage, and `/name --clear` clears it.
 - **`/llm [tokens...]`**: List available LLM models (`provider/id`). With tokens, filter by case-insensitive AND substring match on the model id; if exactly one model matches, switch the active model for this session and reply `Model switched to provider/id`. Multiple matches list the filtered subset; no match replies `No models match: <tokens>`.
+- **`/tab`**: Manage the opt-in concurrent tab MVP. Enable it in `telegram.json` with `{"concurrentTabs":{"enabled":true,"maxTabs":4,"inactiveNotify":true}}`, then use `/tab new A`, `/tab B`, `/tab status`, `/tab abort`, and `/tab close A`. Each tab runs a separate `pi --mode rpc --no-extensions` worker with its own session directory, so a long run in one tab does not block prompts sent to another tab. The MVP is text-first: worker tabs do not have `telegram_attach` yet, so generated files are saved locally and should be referenced by path.
 - **`/next`**: Dispatch the next queued turn, aborting π first if needed.
 - **`/continue`**: Enqueue a priority `continue` prompt.
 - **`/abort`**: Abort the active run without touching the queue.
@@ -129,6 +130,10 @@ The inline application menu is the primary operator surface. It exposes status, 
 Messages sent while π is busy enter the prompt queue and are processed in order. Control actions and model-switch continuation turns use higher-priority lanes so operational commands can resume before normal prompts.
 
 The menu is the primary way to inspect and mutate the queue. Reactions are an extra shortcut when Telegram delivers `message_reaction` updates for the chat: `👍`, `⚡️`, `❤️`, `🕊`, and `🔥` promote waiting work; `👎`, `👻`, `💔`, `💩`, and `🗑` remove it. The same rules apply to text, voice, files, images, and media groups.
+
+### Concurrent tabs MVP
+
+Concurrent tabs are disabled by default. When `concurrentTabs.enabled` is true, normal Telegram prompts go to the active tab instead of the single-session queue. `/tab` commands stay parent-owned and responsive while workers run. Each tab uses an isolated RPC child launched with `--no-extensions`, preventing a second Telegram poller from starting inside a worker. Inactive tabs collect output quietly and send a compact completion notice; switching back with `/tab <name>` shows the latest reply.
 
 ### Streaming and Telegram HTML rendering
 

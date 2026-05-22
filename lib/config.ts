@@ -12,14 +12,21 @@ import { join, resolve } from "node:path";
 import type { TelegramInboundHandlerConfig } from "./inbound-handlers.ts";
 import type { CommandTemplateObjectConfig } from "./command-templates.ts";
 
-function getAgentDir(): string {
+export interface TelegramConcurrentTabsConfig {
+  enabled?: boolean;
+  maxTabs?: number;
+  inactiveNotify?: boolean;
+  workerExtensions?: string[];
+}
+
+export function getTelegramAgentDir(): string {
   return process.env.PI_CODING_AGENT_DIR
     ? resolve(process.env.PI_CODING_AGENT_DIR)
     : join(homedir(), ".pi", "agent");
 }
 
 function getConfigPath(): string {
-  return join(getAgentDir(), "telegram.json");
+  return join(getTelegramAgentDir(), "telegram.json");
 }
 
 export type TelegramOutboundCommandTemplateConfig =
@@ -43,6 +50,7 @@ export interface TelegramConfig {
   attachmentHandlers?: TelegramInboundHandlerConfig[];
   outboundHandlers?: TelegramOutboundHandlerConfig[];
   proactivePush?: boolean;
+  concurrentTabs?: TelegramConcurrentTabsConfig;
 }
 
 export interface TelegramConfigStore {
@@ -55,6 +63,7 @@ export interface TelegramConfigStore {
   getInboundHandlers: () => TelegramInboundHandlerConfig[] | undefined;
   getAttachmentHandlers: () => TelegramInboundHandlerConfig[] | undefined;
   getOutboundHandlers: () => TelegramOutboundHandlerConfig[] | undefined;
+  getConcurrentTabsConfig: () => Required<TelegramConcurrentTabsConfig>;
   setAllowedUserId: (userId: number) => void;
   load: () => Promise<void>;
   persist: (config?: TelegramConfig) => Promise<void>;
@@ -94,7 +103,7 @@ export function createTelegramConfigStore(
   options: TelegramConfigStoreOptions = {},
 ): TelegramConfigStore {
   let config: TelegramConfig = options.initialConfig ?? {};
-  const agentDir = options.agentDir ?? getAgentDir();
+  const agentDir = options.agentDir ?? getTelegramAgentDir();
   const configPath = options.configPath ?? getConfigPath();
   return {
     get: () => config,
@@ -113,6 +122,9 @@ export function createTelegramConfigStore(
     ],
     getAttachmentHandlers: () => config.attachmentHandlers,
     getOutboundHandlers: () => config.outboundHandlers,
+    getConcurrentTabsConfig: () => normalizeTelegramConcurrentTabsConfig(
+      config.concurrentTabs,
+    ),
     setAllowedUserId: (userId) => {
       config.allowedUserId = userId;
     },
@@ -123,6 +135,33 @@ export function createTelegramConfigStore(
       await writeTelegramConfig(agentDir, configPath, nextConfig);
     },
   };
+}
+
+export function normalizeTelegramConcurrentTabsConfig(
+  config?: TelegramConcurrentTabsConfig,
+): Required<TelegramConcurrentTabsConfig> {
+  const maxTabs =
+    typeof config?.maxTabs === "number" &&
+    Number.isInteger(config.maxTabs) &&
+    config.maxTabs > 0
+      ? config.maxTabs
+      : 4;
+  return {
+    enabled: config?.enabled ?? false,
+    maxTabs,
+    inactiveNotify: config?.inactiveNotify ?? true,
+    workerExtensions: Array.isArray(config?.workerExtensions)
+      ? config.workerExtensions.filter(
+          (path): path is string => typeof path === "string" && path.length > 0,
+        )
+      : [],
+  };
+}
+
+export function createTelegramConcurrentTabsConfigGetter(
+  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
+): () => Required<TelegramConcurrentTabsConfig> {
+  return () => configStore.getConcurrentTabsConfig();
 }
 
 export function createTelegramProactivePushChecker(

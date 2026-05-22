@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` Added the opt-in `/tab` MVP. When `concurrentTabs.enabled` is true, `/tab new <name>`, `/tab <name>`, `/tab status`, `/tab abort`, `/tab close`, and `/tab restart` are handled by the parent Telegram bridge while prompts route to the active tab's isolated `pi --mode rpc --no-extensions` worker.
+- `[Concurrent Tabs]` Added durable tab registry storage in `telegram-tabs.json`, per-tab session directories under `telegram-tabs/sessions/`, inactive-tab completion notices, and text-first final reply delivery. Worker tabs intentionally do not load extensions yet, so `telegram_attach` from concurrent workers remains future work.
+- `[Tests]` Added `tests/tabs.test.ts`, `tests/rpc-child.test.ts`, and `tests/tab-manager.test.ts` for tab parsing/state formatting, JSONL RPC helpers, no-extension worker args, and parent-side tab routing behavior.
 - `[Dump Menu]` Added Telegram-side `/dump [N]`, a transcript export menu for the current active branch. `/dump` exports all visible User/Agent text, `/dump 20` exports the latest 20 user turns, and the transcript excludes tools, thinking, system metadata, compact summaries, and Telegram reply/attachment/output blocks. Outputs are available as Telegram TXT documents or privacy-confirmed secret GitHub Gists with delete support.
 - `[Commands]` The bot command menu now lists 🧾 `/dump`, `dump` is Telegram-reserved, and `dump:` is a pi-telegram-owned callback prefix alongside `session:`/`tree:`/menu prefixes.
 - `[Tests]` Added `tests/dump-export.test.ts` and `tests/menu-dump.test.ts` for transcript extraction, turn limiting, TXT file generation, menu rendering, and TXT/Gist callback flows; updated command and routing tests for `/dump` ownership.
