@@ -14,7 +14,18 @@ Last committed MVP baseline:
 9c494d5 feat: add concurrent Telegram tabs
 ```
 
-Committed updates after that baseline:
+Latest committed state:
+
+```text
+7bf5304 feat: stream tab worker answer text
+87fe9cb feat: stream tab worker thinking and tool calls
+ed2ae95 feat: relay tab worker thinking and tool calls
+8ebb546 docs: record concurrent tab model smoke test
+f598e74 feat: route model menu to active tab
+5ee3637 feat: route llm command to active tab
+```
+
+Implemented updates after the MVP baseline:
 
 - `/llm [tokens...]` keeps the existing list/filter/single-match UX.
 - When `concurrentTabs.enabled` is true, `/llm` now switches the active tab's
@@ -22,8 +33,10 @@ Committed updates after that baseline:
 - `/model` now opens the active tab's model picker and routes model-menu picks
   to the active tab's RPC child.
 - Busy active tabs reject model switches until idle.
-- Active tabs stream worker answer text, thinking previews, tool-call previews,
-  and final Markdown replies through the parent Telegram bridge.
+- Active tabs first restored thinking/tool-call display by relaying worker RPC
+  events through the parent bridge.
+- Active tabs now stream worker answer text, thinking previews, tool-call
+  previews, and final Markdown replies through the parent Telegram bridge.
 
 ## What Works Now
 
@@ -154,7 +167,7 @@ Full validation passed:
 ```bash
 npm run typecheck
 npm test
-# 624 pass, 0 fail
+# 626 pass, 0 fail
 ```
 
 ## Important Bug Already Fixed
