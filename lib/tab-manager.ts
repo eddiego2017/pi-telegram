@@ -899,7 +899,10 @@ export function createTelegramTabManager<TContext>(
       formatTelegramTabThinkingMarkdown(trimmed),
       force,
     );
-    if (force) runtime.sentThinkingTexts.add(trimmed);
+    if (force) {
+      runtime.sentThinkingTexts.add(trimmed);
+      runtime.thinkingStreams.delete(index);
+    }
   };
   const flushActiveTabThinkingBuffer = (
     tabState: TelegramTabsState,
@@ -919,10 +922,13 @@ export function createTelegramTabManager<TContext>(
     markdown: string,
     final: boolean,
   ): void => {
-    if (!markdown || runtime.sentToolCallMessages.has(markdown)) return;
+    if (!markdown) return;
     const stream = getStreamState(runtime.toolCallStreams, index);
     streamActiveTabMarkdown(tabState, tabName, runtime, stream, markdown, final);
-    if (final) runtime.sentToolCallMessages.add(markdown);
+    if (final) {
+      runtime.sentToolCallMessages.add(markdown);
+      runtime.toolCallStreams.delete(index);
+    }
   };
   const sendActiveTabToolCallMessage = (
     tabState: TelegramTabsState,
@@ -931,7 +937,10 @@ export function createTelegramTabManager<TContext>(
     message: unknown,
   ): boolean => {
     if (!agentMessageHasToolCall(message)) return false;
-    if (runtime.toolCallStreams.size > 0) {
+    if (
+      runtime.toolCallStreams.size > 0 ||
+      runtime.sentToolCallMessages.size > 0
+    ) {
       return true;
     }
     const markdown = getAgentMessageText(message);

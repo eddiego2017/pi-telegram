@@ -644,3 +644,167 @@ test("Tab manager relays active worker thinking and tool call output", async () 
   await waitForTabStreamFlush();
   assert.equal(markdownReplies.at(-1), "Done.");
 });
+
+test("Tab manager does not reuse finalized thinking or tool streams", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-stream-seal-"));
+  const streamReplies: string[] = [];
+  const streamEdits: string[] = [];
+  const markdownReplies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionRoot: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async () => undefined,
+    sendMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+      markdownReplies.push(markdown);
+      return markdownReplies.length;
+    },
+    sendStreamMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+      streamReplies.push(markdown);
+      return 100 + streamReplies.length;
+    },
+    editStreamMarkdownMessage: async (_chatId, messageId, markdown) => {
+      streamEdits.push(`${messageId}:${markdown}`);
+      return messageId;
+    },
+    streamEditThrottleMs: 0,
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.dispatchPrompt(
+    {
+      chatId: 1,
+      replyToMessageId: 20,
+      content: [{ type: "text", text: "inspect repo" }],
+    },
+    "ctx",
+  );
+
+  const backend = backends.get("A");
+  assert.ok(backend);
+  backend.emit({ type: "agent_start" });
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "thinking_delta",
+      contentIndex: 0,
+      delta: "first thought",
+    },
+  });
+  await waitForTabStreamFlush();
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_end", contentIndex: 0 },
+  });
+  await waitForTabStreamFlush();
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "thinking_delta",
+      contentIndex: 0,
+      delta: "second thought",
+    },
+  });
+  await waitForTabStreamFlush();
+
+  assert.equal(streamReplies.length, 2);
+  assert.match(streamReplies[0] ?? "", /first thought/);
+  assert.match(streamReplies[1] ?? "", /second thought/);
+  assert.equal(streamEdits.some((edit) => edit.includes("second thought")), false);
+
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "toolcall_start",
+      contentIndex: 0,
+      partial: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "tool-1",
+            name: "bash",
+            arguments: {},
+            partialJson: "",
+          },
+        ],
+      },
+    },
+  });
+  await waitForTabStreamFlush();
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: {
+        type: "toolCall",
+        id: "tool-1",
+        name: "bash",
+        arguments: { command: "pwd" },
+      },
+    },
+  });
+  await waitForTabStreamFlush();
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "toolcall_start",
+      contentIndex: 0,
+      partial: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "tool-2",
+            name: "bash",
+            arguments: { command: "ls" },
+            partialJson: '{ "command": "ls" }',
+          },
+        ],
+      },
+    },
+  });
+  await waitForTabStreamFlush();
+
+  assert.equal(streamReplies.length, 4);
+  assert.match(streamReplies[2] ?? "", /🔧 `bash`/);
+  assert.match(streamReplies[3] ?? "", /"command": "ls"/);
+  assert.equal(
+    streamEdits.some(
+      (edit) => edit.startsWith("103:") && edit.includes('"command": "ls"'),
+    ),
+    false,
+  );
+
+  backend.emit({
+    type: "agent_end",
+    messages: [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "tool-2",
+            name: "bash",
+            arguments: { command: "ls" },
+          },
+        ],
+      },
+    ],
+  });
+  await waitForTabStreamFlush();
+  assert.equal(markdownReplies.length, 0);
+});
