@@ -255,6 +255,45 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
   assert.deepEqual(backends.get("A")?.aborts, ["A"]);
 });
 
+test("Tab manager sends last-turn replay after tab switch", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-switch-replay-"));
+  const replies: string[] = [];
+  const replays: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 10,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionRoot: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+    sendLastTurnsOnSwitch: async (reference, chatId, replyToMessageId) => {
+      replays.push(
+        `${reference.tabName}:${reference.sessionFile}:${chatId}:${replyToMessageId}`,
+      );
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.handleCommand("new B", 1, 20, "ctx");
+  await manager.handleCommand("A", 7, 30, "ctx");
+
+  assert.match(replies.at(-1) ?? "", /Switched to tab A/);
+  assert.deepEqual(replays, ["A:/sessions/A.jsonl:7:30"]);
+});
+
 test("Tab manager renames tabs without discarding session state", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-rename-"));
   const replies: string[] = [];

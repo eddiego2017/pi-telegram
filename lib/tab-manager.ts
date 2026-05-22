@@ -103,6 +103,11 @@ export interface TelegramTabManagerDeps<TContext> {
     messageId: number,
     markdown: string,
   ) => Promise<number | undefined>;
+  sendLastTurnsOnSwitch?: (
+    reference: TelegramTabSessionReference,
+    chatId: number,
+    replyToMessageId: number,
+  ) => Promise<void>;
   streamEditThrottleMs?: number;
   sendTypingAction?: (chatId: number) => Promise<unknown>;
   typingIntervalMs?: number;
@@ -361,6 +366,19 @@ function applyRpcStateToRecord(
 
 function canSwitchTelegramTabModel(record: TelegramTabRecord): boolean {
   return record.status !== "running" && record.status !== "starting";
+}
+
+function getTelegramTabSessionReference(
+  record: TelegramTabRecord,
+  fallbackCwd?: string,
+): TelegramTabSessionReference {
+  return {
+    tabName: record.name,
+    cwd: record.cwd || fallbackCwd || "",
+    sessionFile: record.sessionFile,
+    sessionId: record.sessionId,
+    sessionName: record.sessionName,
+  };
 }
 
 function parseTelegramTabModelSelection(
@@ -1265,6 +1283,18 @@ export function createTelegramTabManager<TContext>(
         replyToMessageId,
         `Switched to tab ${name}.${latest}`,
       );
+      if (deps.sendLastTurnsOnSwitch) {
+        await deps.sendLastTurnsOnSwitch(
+          getTelegramTabSessionReference(runtime.record),
+          chatId,
+          replyToMessageId,
+        ).catch((error) => {
+          deps.recordRuntimeEvent?.("tabs", error, {
+            tab: runtime.record.name,
+            action: "switch_replay",
+          });
+        });
+      }
     },
     rename: async (
       tabState: TelegramTabsState,
@@ -1455,14 +1485,7 @@ export function createTelegramTabManager<TContext>(
       const tabState = ensureStateSync(deps.getCwd(ctx));
       const runtime = getRuntime(tabState, tabState.activeTab);
       if (!runtime) return undefined;
-      const record = runtime.record;
-      return {
-        tabName: record.name,
-        cwd: record.cwd || deps.getCwd(ctx),
-        sessionFile: record.sessionFile,
-        sessionId: record.sessionId,
-        sessionName: record.sessionName,
-      };
+      return getTelegramTabSessionReference(runtime.record, deps.getCwd(ctx));
     },
     canSwitchActiveModel: async (ctx) => {
       if (!isEnabled()) return false;

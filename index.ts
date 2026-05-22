@@ -259,6 +259,14 @@ export default function (pi: Pi.ExtensionAPI) {
       sendMultipart: callMultipart,
       sendTextReply,
     });
+  const sendTabLastTurnsOnSwitch =
+    MenuSession.createTelegramLastTurnsReplaySender<
+      TabManager.TelegramTabSessionReference
+    >({
+      getSnapshot: Pi.getSessionSnapshotFromReference,
+      sendReplayMessage: sendMarkdownReply,
+      sendReplayAttachment: sendSessionReplayAttachment,
+    });
   const tabManager = TabManager.createTelegramTabManager<Pi.ExtensionContext>({
     getConfig: getConcurrentTabsConfig,
     getCwd: Pi.getExtensionContextCwd,
@@ -269,6 +277,7 @@ export default function (pi: Pi.ExtensionAPI) {
       renderTelegramMessage: Replies.renderTelegramMessage,
       editRenderedMessage: replyTransport.editRenderedMessage,
     }),
+    sendLastTurnsOnSwitch: sendTabLastTurnsOnSwitch,
     sendTypingAction,
     recordRuntimeEvent,
   });

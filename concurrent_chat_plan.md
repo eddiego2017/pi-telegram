@@ -6,9 +6,9 @@ This document is the short reset-safe handoff for concurrent `/tab` support in
 Status as of 2026-05-22: MVP plus active-tab `/llm`, `/model`, live answer
 text streaming, live thinking streaming, live tool-call preview streaming,
 Markdown final replies, active-tab `/session`/`/tree` history browsing,
-`/session` image replay, a 10-tab default limit, `/tab rename`, and active-tab
-Telegram typing actions are implemented, tested, and deployed in the `pi`
-Kubernetes deployment.
+`/session` image replay, a 10-tab default limit, `/tab rename`, active-tab
+Telegram typing actions, and automatic last-5 replay on tab switch are
+implemented, tested, and deployed in the `pi` Kubernetes deployment.
 
 Last committed MVP baseline:
 
@@ -35,6 +35,7 @@ active-tab /session and /tree now read the selected tab worker session file
 /session replay re-uploads retained local images, including hidden sendPhoto tool calls
 default concurrent tab limit is 10 and /tab rename is available
 active tab worker runs show native Telegram typing actions
+/tab <name> automatically replays that tab's last 5 user turns
 ```
 
 Implemented updates after the MVP baseline:
@@ -61,6 +62,9 @@ Implemented updates after the MVP baseline:
 - Active tab worker runs show native Telegram `typing` chat actions from the
   parent bridge while the child process is answering; typing stops when the tab
   finishes, exits, errors, is aborted, or is switched away.
+- `/tab <name>` automatically sends the selected tab's last 5 user turns,
+  including agent replies and replayable image attachments, using the same
+  replay formatter as `/session`.
 - `/tree` now opens the active tab's prompt history when concurrent tabs are
   enabled. It is read-only for worker tabs until child-safe tree navigation and
   branch mutation are implemented.
@@ -81,6 +85,8 @@ Implemented updates after the MVP baseline:
   worker.
 - Active tab runs show Telegram's native `typing` indicator while the selected
   worker is answering.
+- Switching tabs with `/tab <name>` shows the selected tab's recent context by
+  replaying its last 5 user turns and matching agent replies.
 - Up to 10 concurrent tabs are allowed by default.
 - `/tab rename A B` renames tab A to B; `/tab rename B` renames the active tab.
 - `/session` history/replay controls show the active tab's conversation after

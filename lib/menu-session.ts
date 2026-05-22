@@ -1108,6 +1108,49 @@ export function createTelegramSessionReplayAttachmentSender(
   };
 }
 
+export interface TelegramSessionReferenceReplaySenderDeps<TReference> {
+  getSnapshot: (reference: TReference) => TelegramSessionSnapshot;
+  sendReplayMessage: (
+    chatId: number,
+    replyToMessageId: number | undefined,
+    text: string,
+  ) => Promise<number | undefined>;
+  sendReplayAttachment?: (
+    chatId: number,
+    replyToMessageId: number | undefined,
+    attachment: TelegramSessionReplayAttachment,
+  ) => Promise<number | undefined>;
+}
+
+export function createTelegramLastTurnsReplaySender<TReference>(
+  deps: TelegramSessionReferenceReplaySenderDeps<TReference>,
+): (
+  reference: TReference,
+  chatId: number,
+  replyToMessageId: number,
+) => Promise<void> {
+  return async function sendTelegramLastTurnsReplayFromReference(
+    reference,
+    chatId,
+    _replyToMessageId,
+  ) {
+    const snapshot = deps.getSnapshot(reference);
+    const plan = buildTelegramSessionReplayPlan(snapshot, "last5");
+    for (const message of plan.messages) {
+      const replayMessageId = await deps.sendReplayMessage(
+        chatId,
+        undefined,
+        formatTelegramSessionReplayMessage(message),
+      );
+      if (deps.sendReplayAttachment) {
+        for (const attachment of message.attachments) {
+          await deps.sendReplayAttachment(chatId, replayMessageId, attachment);
+        }
+      }
+    }
+  };
+}
+
 export interface TelegramSessionMenuCallbackDeps {
   getState: (messageId: number | undefined) => TelegramSessionMenuState | undefined;
   setState: (state: TelegramSessionMenuState) => void;

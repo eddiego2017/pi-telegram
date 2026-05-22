@@ -18,6 +18,7 @@ import {
   buildTelegramSessionReplayPlan,
   buildTelegramSessionReplayTurns,
   buildTelegramSessionStats,
+  createTelegramLastTurnsReplaySender,
   createTelegramSessionMenuRuntime,
   createTelegramSessionReplayAttachmentSender,
   formatTelegramSessionReplayMessage,
@@ -455,6 +456,60 @@ test("Session replay callback sends image attachments after their text", async (
     "text:Replay msg 2026-05-18 01:00 user\ncurrent prompt",
     "image:78:/tmp/telegram/demo.png:demo.png",
   ]);
+});
+
+test("Session reference last-turn replay sender replays recent turns and attachments", async () => {
+  const branch: TelegramSessionSnapshot["branch"] = [];
+  for (let i = 1; i <= 6; i += 1) {
+    branch.push({
+      type: "message",
+      id: `u${i}`,
+      timestamp: `2026-05-18T01:0${i}:00Z`,
+      message: {
+        role: "user",
+        content:
+          i === 6
+            ? "[telegram] prompt 6\n\n[attachments] /tmp/telegram\n- /demo.png"
+            : `[telegram] prompt ${i}`,
+      },
+    });
+    branch.push({
+      type: "message",
+      id: `a${i}`,
+      timestamp: `2026-05-18T01:0${i}:30Z`,
+      message: { role: "assistant", content: `answer ${i}` },
+    });
+  }
+  const snapshot: TelegramSessionSnapshot = {
+    cwd: "/repo",
+    sessionId: "session-ref",
+    entries: branch,
+    branch,
+  };
+  const events: string[] = [];
+  let nextMessageId = 90;
+  const sender = createTelegramLastTurnsReplaySender<string>({
+    getSnapshot: (reference) => {
+      events.push(`snapshot:${reference}`);
+      return snapshot;
+    },
+    sendReplayMessage: async (_chatId, replyToMessageId, text) => {
+      events.push(`text:${replyToMessageId ?? "none"}:${text}`);
+      return nextMessageId++;
+    },
+    sendReplayAttachment: async (_chatId, replyToMessageId, attachment) => {
+      events.push(`image:${replyToMessageId}:${attachment.path}:${attachment.fileName}`);
+      return nextMessageId++;
+    },
+  });
+
+  await sender("tab-A", 7, 77);
+
+  assert.equal(events.length, 12);
+  assert.equal(events[0], "snapshot:tab-A");
+  assert.equal(events[1], "text:none:Replay msg 2026-05-18 01:02 user\nprompt 2");
+  assert.equal(events[10], "image:98:/tmp/telegram/demo.png:demo.png");
+  assert.equal(events[11], "text:none:Replay msg 2026-05-18 01:06 agent\nanswer 6");
 });
 
 test("Session replay attachment sender uploads photos and reports failures", async () => {
