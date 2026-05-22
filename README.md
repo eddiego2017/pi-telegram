@@ -133,7 +133,7 @@ The menu is the primary way to inspect and mutate the queue. Reactions are an ex
 
 ### Concurrent tabs MVP
 
-Concurrent tabs are disabled by default. When `concurrentTabs.enabled` is true, normal Telegram prompts go to the active tab instead of the single-session queue. `/tab` commands stay parent-owned and responsive while workers run, and `/llm [tokens...]` plus `/model` switch the active tab's child model when that tab is idle. Each tab uses an isolated RPC child launched with `--no-extensions`, preventing a second Telegram poller from starting inside a worker. Inactive tabs collect output quietly and send a compact completion notice; switching back with `/tab <name>` shows the latest reply.
+Concurrent tabs are disabled by default. When `concurrentTabs.enabled` is true, normal Telegram prompts go to the active tab instead of the single-session queue. `/tab` commands stay parent-owned and responsive while workers run, and `/llm [tokens...]` plus `/model` switch the active tab's child model when that tab is idle. This active-tab model behavior has been smoke-tested in Telegram across isolated tabs. Each tab uses an isolated RPC child launched with `--no-extensions`, preventing a second Telegram poller from starting inside a worker. Inactive tabs collect output quietly and send a compact completion notice; switching back with `/tab <name>` shows the latest reply.
 
 ### Streaming and Telegram HTML rendering
 

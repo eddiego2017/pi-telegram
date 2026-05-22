@@ -3,8 +3,9 @@
 This document is the short reset-safe handoff for concurrent `/tab` support in
 `pi-telegram`.
 
-Status as of 2026-05-22: MVP is implemented, committed, pushed, and live-tested
-in the `pi` Kubernetes deployment.
+Status as of 2026-05-22: MVP plus active-tab `/llm` and `/model` controls are
+implemented, committed, pushed, deployed, and live-tested in the `pi`
+Kubernetes deployment.
 
 Last committed MVP baseline:
 
@@ -12,7 +13,7 @@ Last committed MVP baseline:
 9c494d5 feat: add concurrent Telegram tabs
 ```
 
-Current working update after that baseline:
+Committed updates after that baseline:
 
 - `/llm [tokens...]` keeps the existing list/filter/single-match UX.
 - When `concurrentTabs.enabled` is true, `/llm` now switches the active tab's
@@ -47,6 +48,14 @@ conversation in B isolated from A
 /tab close B
 restart host pi
 continue preserved tab session
+/tab A
+/llm <model tokens>
+active tab A model switched
+/model
+active tab A model picker shows/applies the tab model
+/tab B
+/model
+tab B model picker remains isolated from A
 ```
 
 ## Current Architecture
