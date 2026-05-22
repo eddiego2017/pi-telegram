@@ -299,6 +299,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   const textReplies: string[] = [];
   const interactiveSends: string[] = [];
   const interactiveEdits: string[] = [];
+  const dashboardMarkups: string[] = [];
   const answers: string[] = [];
   const replays: string[] = [];
   const backends = new Map<string, FakeTabBackend>();
@@ -322,6 +323,11 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
       return textReplies.length;
     },
     sendInteractiveMessage: async (_chatId, text, mode, markup) => {
+      dashboardMarkups.push(
+        markup.inline_keyboard
+          .map((row) => row.map((button) => button.text).join("|"))
+          .join("\n"),
+      );
       interactiveSends.push(
         `${mode}:${text.split("\n")[0]}:${markup.inline_keyboard[0]?.map((button) => button.text).join("|")}`,
       );
@@ -345,6 +351,12 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   await manager.handleCommand("", 1, 12, "ctx");
 
   assert.deepEqual(interactiveSends, ["plain:Tabs 3/10:default|A"]);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bRefresh\b/);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bLast 5\b/);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bStatus\b/);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bNew\b/);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bRename\b/);
+  assert.match(dashboardMarkups.at(-1) ?? "", /\bAbort\|Close\b/);
 
   await manager.handleCallbackQuery(
     {

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `[Concurrent Tabs]` `/tab` now opens a Telegram inline dashboard when interactive delivery is available. The dashboard shows active/running/unread tab state, switches tabs with buttons, refreshes state, replays the active tab's last 5 turns, sends status, and confirms abort/close actions.
+- `[Concurrent Tabs]` `/tab` now opens a Telegram inline dashboard when interactive delivery is available. The dashboard shows active/running/unread tab state, switches tabs with buttons, confirms abort/close actions, and displays stopped workers as `stopped` instead of the internal `exited` status.
 - `[Concurrent Tabs]` Switching tabs with `/tab <name>` now automatically replays that tab's last 5 user turns, including agent replies and replayable image attachments, using the same session replay formatter as `/session`.
 - `[Concurrent Tabs]` Active tab worker runs now show native Telegram `typing` chat actions while the child process is answering, and the typing loop stops when the tab finishes, exits, errors, is aborted, or is switched away.
 - `[Concurrent Tabs]` Raised the default concurrent tab limit from 4 to 10 and added `/tab rename [old-name] <new-name>` for renaming non-default tabs while preserving their worker session file and history.

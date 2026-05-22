@@ -245,6 +245,10 @@ function formatTelegramTabAge(ms: number): string {
   return `${Math.floor(ms / 86_400_000)}d`;
 }
 
+export function formatTelegramTabStatusLabel(status: TelegramTabStatus): string {
+  return status === "exited" ? "stopped" : status;
+}
+
 export function formatTelegramTabList(
   state: TelegramTabsState,
   unreadByTab: Record<string, number>,
@@ -259,7 +263,7 @@ export function formatTelegramTabList(
         ? ` ${formatTelegramTabAge(now - tab.lastAgentStartAt)}`
         : "";
       const error = tab.lastError ? ` (${tab.lastError})` : "";
-      return `- ${tab.name}${active} ${tab.status}${age}${unread}${error}`;
+      return `- ${tab.name}${active} ${formatTelegramTabStatusLabel(tab.status)}${age}${unread}${error}`;
     });
   return ["Tabs:", ...rows].join("\n");
 }
@@ -271,7 +275,7 @@ export function formatTelegramTabStatus(
 ): string {
   const lines = [
     `Tab: ${tab.name}`,
-    `Status: ${tab.status}`,
+    `Status: ${formatTelegramTabStatusLabel(tab.status)}`,
     `Cwd: ${tab.cwd}`,
     `Unread events: ${unreadCount}`,
   ];

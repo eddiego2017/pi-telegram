@@ -27,6 +27,7 @@ import {
   findTelegramTabNameCaseConflict,
   formatTelegramTabList,
   formatTelegramTabStatus,
+  formatTelegramTabStatusLabel,
   formatTelegramTabUsage,
   normalizeTelegramTabsState,
   parseTelegramTabCommand,
@@ -653,7 +654,11 @@ function formatTelegramTabDashboardSummary(
   const lines = [
     `Tabs ${tabs.length}/${maxTabs}`,
     active
-      ? `Active: ${active.name} · ${active.status} · ${formatTelegramTabDashboardModel(active)}`
+      ? [
+          `Active: ${active.name}`,
+          formatTelegramTabStatusLabel(active.status),
+          formatTelegramTabDashboardModel(active),
+        ].join(" · ")
       : `Active: ${state.activeTab}`,
   ];
   if (active?.currentThinkingLevel) {
@@ -665,7 +670,9 @@ function formatTelegramTabDashboardSummary(
     const marker = tab.name === state.activeTab ? "●" : "○";
     const unread = unreadByTab[tab.name] ? ` · unread ${unreadByTab[tab.name]}` : "";
     const model = tab.currentModel ? ` · ${formatTelegramTabDashboardModel(tab)}` : "";
-    lines.push(`${marker} ${tab.name} · ${tab.status}${unread}${model}`);
+    lines.push(
+      `${marker} ${tab.name} · ${formatTelegramTabStatusLabel(tab.status)}${unread}${model}`,
+    );
   }
   return lines.join("\n");
 }
@@ -719,17 +726,14 @@ function buildTelegramTabDashboardReplyMarkup(
     rows.push(row);
   }
   rows.push([
-    { text: "Refresh", callback_data: "tab:refresh" },
-    { text: "Last 5", callback_data: "tab:last5" },
-    { text: "Status", callback_data: "tab:status" },
-  ]);
-  rows.push([
-    { text: "Abort", callback_data: `tab:abort:${encodeTelegramTabCallbackName(state.activeTab)}` },
-    { text: "Close", callback_data: `tab:close:${encodeTelegramTabCallbackName(state.activeTab)}` },
-  ]);
-  rows.push([
-    { text: "New", callback_data: "tab:help:new" },
-    { text: "Rename", callback_data: "tab:help:rename" },
+    {
+      text: "Abort",
+      callback_data: `tab:abort:${encodeTelegramTabCallbackName(state.activeTab)}`,
+    },
+    {
+      text: "Close",
+      callback_data: `tab:close:${encodeTelegramTabCallbackName(state.activeTab)}`,
+    },
   ]);
   return { inline_keyboard: rows };
 }
@@ -1875,7 +1879,7 @@ export function createTelegramTabManager<TContext>(
             ? `Abort tab ${name}?`
             : `Close tab ${name}? Session file will be kept.`;
         const status = runtime?.record.status
-          ? `\nStatus: ${runtime.record.status}`
+          ? `\nStatus: ${formatTelegramTabStatusLabel(runtime.record.status)}`
           : "";
         await deps.editInteractiveMessage?.(
           chatId,
