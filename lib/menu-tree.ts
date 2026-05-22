@@ -698,7 +698,15 @@ export function buildTelegramTreeDetailText(entry: TelegramTreeMenuEntry): strin
 
 export function buildTelegramTreeDetailReplyMarkup(
   entry: TelegramTreeMenuEntry,
+  options: { readOnly?: boolean } = {},
 ): TelegramTreeReplyMarkup {
+  if (options.readOnly) {
+    return {
+      inline_keyboard: [
+        [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
+      ],
+    };
+  }
   return {
     inline_keyboard: [
       [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
@@ -782,6 +790,7 @@ export interface TelegramTreeMenuTextDeps {
   getState: (messageId: number | undefined) => TelegramTreeMenuState | undefined;
   setState: (state: TelegramTreeMenuState) => void;
   getSnapshot: () => TelegramTreeSnapshot;
+  isReadOnly?: (snapshot: TelegramTreeSnapshot) => boolean;
   editTreeMessage: (
     chatId: number,
     messageId: number,
@@ -815,6 +824,10 @@ export async function handleTelegramTreeMenuTextMessage(
   }
   const state = deps.getState(replyToMessageId);
   if (!state?.pendingRename || state.chatId !== chatId) return false;
+  if (deps.isReadOnly?.(deps.getSnapshot())) {
+    await deps.sendTextReply(chatId, messageId, "Tree history is read-only for this session.");
+    return true;
+  }
   const entry = state.entries[state.pendingRename.entryIndex];
   if (!entry || entry.entryId !== state.pendingRename.entryId || entry.kind !== "branch") {
     await deps.sendTextReply(chatId, messageId, "Branch rename expired. Send /tree again.");
@@ -871,6 +884,7 @@ export interface TelegramTreeMenuCallbackDeps {
   getState: (messageId: number | undefined) => TelegramTreeMenuState | undefined;
   setState: (state: TelegramTreeMenuState) => void;
   getSnapshot: () => TelegramTreeSnapshot;
+  isReadOnly?: (snapshot: TelegramTreeSnapshot) => boolean;
   editTreeMessage: (
     chatId: number,
     messageId: number,
@@ -920,6 +934,11 @@ async function handleTelegramTreeMenuCallbackUnsafe(
   const now = deps.now ?? Date.now;
   const updateState = (next: Partial<TelegramTreeMenuState>) => {
     deps.setState({ ...state, ...next, updatedAt: now() });
+  };
+  const isReadOnly = (): boolean => deps.isReadOnly?.(deps.getSnapshot()) ?? false;
+  const answerReadOnly = async (): Promise<boolean> => {
+    await deps.answerCallbackQuery(query.id, "Tree history is read-only for this session.");
+    return true;
   };
 
   if (data === "tree:export:svg" || data === "tree:export:png") {
@@ -1120,7 +1139,7 @@ async function handleTelegramTreeMenuCallbackUnsafe(
       chatId,
       messageId,
       buildTelegramTreeDetailText(entry),
-      buildTelegramTreeDetailReplyMarkup(entry),
+      buildTelegramTreeDetailReplyMarkup(entry, { readOnly: isReadOnly() }),
     );
     updateState({
       view: "detail",
@@ -1133,6 +1152,7 @@ async function handleTelegramTreeMenuCallbackUnsafe(
   }
 
   if (data.startsWith("tree:rename:")) {
+    if (isReadOnly()) return answerReadOnly();
     const index = parseIndex(data, "tree:rename:", state.entries.length);
     if (index === undefined) {
       await deps.answerCallbackQuery(query.id, "Branch no longer exists.");
@@ -1174,6 +1194,7 @@ async function handleTelegramTreeMenuCallbackUnsafe(
   }
 
   if (data.startsWith("tree:delete:")) {
+    if (isReadOnly()) return answerReadOnly();
     const index = parseIndex(data, "tree:delete:", state.entries.length);
     if (index === undefined) {
       await deps.answerCallbackQuery(query.id, "Branch no longer exists.");
@@ -1207,6 +1228,7 @@ async function handleTelegramTreeMenuCallbackUnsafe(
   }
 
   if (data.startsWith("tree:delete-confirm:")) {
+    if (isReadOnly()) return answerReadOnly();
     const index = parseIndex(data, "tree:delete-confirm:", state.entries.length);
     if (index === undefined) {
       await deps.answerCallbackQuery(query.id, "Branch no longer exists.");
@@ -1239,6 +1261,7 @@ async function handleTelegramTreeMenuCallbackUnsafe(
   }
 
   if (data.startsWith("tree:switch:")) {
+    if (isReadOnly()) return answerReadOnly();
     const index = parseIndex(data, "tree:switch:", state.entries.length);
     if (index === undefined) {
       await deps.answerCallbackQuery(query.id, "Branch no longer exists.");
@@ -1271,6 +1294,7 @@ async function handleTelegramTreeMenuCallbackUnsafe(
   }
 
   if (data.startsWith("tree:rewind:")) {
+    if (isReadOnly()) return answerReadOnly();
     const index = parseIndex(data, "tree:rewind:", state.entries.length);
     if (index === undefined) {
       await deps.answerCallbackQuery(query.id, "Entry no longer exists.");
@@ -1352,6 +1376,7 @@ export interface TelegramTreeMenuRuntime<TContext> {
 
 export interface TelegramTreeMenuRuntimeDeps<TContext> {
   getSnapshot: (ctx: TContext) => TelegramTreeSnapshot;
+  isReadOnly?: (snapshot: TelegramTreeSnapshot, ctx: TContext) => boolean;
   sendInteractiveMessage: (
     chatId: number,
     text: string,
@@ -1413,6 +1438,9 @@ export function createTelegramTreeMenuRuntime<TContext>(
         getSnapshot: function getSnapshotForCallback() {
           return deps.getSnapshot(ctx);
         },
+        isReadOnly: deps.isReadOnly
+          ? (snapshot) => deps.isReadOnly?.(snapshot, ctx) ?? false
+          : undefined,
         editTreeMessage: function editTreeMessageHtml(
           chatId,
           messageId,
@@ -1452,6 +1480,9 @@ export function createTelegramTreeMenuRuntime<TContext>(
         getSnapshot: function getSnapshotForTextMessage() {
           return deps.getSnapshot(ctx);
         },
+        isReadOnly: deps.isReadOnly
+          ? (snapshot) => deps.isReadOnly?.(snapshot, ctx) ?? false
+          : undefined,
         editTreeMessage: function editTreeMessageHtml(
           chatId,
           messageId,
@@ -1499,6 +1530,7 @@ export function createTelegramTreeNavigationGate<TContext>(
 
 export interface TelegramTreeMenuRuntimePiContextDeps<TContext> {
   getSnapshot: (ctx: TContext) => TelegramTreeSnapshot;
+  isReadOnly?: TelegramTreeMenuRuntimeDeps<TContext>["isReadOnly"];
   sendInteractiveMessage: TelegramTreeMenuRuntimeDeps<TContext>["sendInteractiveMessage"];
   editInteractiveMessage: TelegramTreeMenuRuntimeDeps<TContext>["editInteractiveMessage"];
   answerCallbackQuery: TelegramTreeMenuRuntimeDeps<TContext>["answerCallbackQuery"];
@@ -1518,6 +1550,7 @@ export function buildTelegramTreeMenuRuntime<TContext>(
 ): TelegramTreeMenuRuntime<TContext> {
   return createTelegramTreeMenuRuntime({
     getSnapshot: deps.getSnapshot,
+    isReadOnly: deps.isReadOnly,
     sendInteractiveMessage: deps.sendInteractiveMessage,
     editInteractiveMessage: deps.editInteractiveMessage,
     answerCallbackQuery: deps.answerCallbackQuery,

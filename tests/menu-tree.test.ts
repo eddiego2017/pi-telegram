@@ -281,6 +281,72 @@ test("Tree navigation gate rejects any busy queue or pi state", () => {
   assert.equal(gate({ idle: true, pending: true }), false);
 });
 
+test("Tree menu read-only mode hides and blocks mutation callbacks", async () => {
+  const snapshot = createSnapshot();
+  const entries = buildTelegramTreeMenuEntries(snapshot);
+  const store = createTelegramTreeMenuStore();
+  store.set({
+    chatId: 7,
+    messageId: 99,
+    entries,
+    page: 0,
+    view: "list",
+    filter: "active",
+    updatedAt: Date.now(),
+  });
+  const events: string[] = [];
+  const baseDeps = {
+    getState: store.get,
+    setState: store.set,
+    getSnapshot: () => snapshot,
+    isReadOnly: () => true,
+    injectTreeExec: async () => {
+      events.push("inject");
+    },
+    canNavigate: () => true,
+  };
+  const handledEntry = await handleTelegramTreeMenuCallback(
+    {
+      id: "cb-entry",
+      data: "tree:entry:1",
+      message: { chat: { id: 7 }, message_id: 99 },
+    },
+    {
+      ...baseDeps,
+      editTreeMessage: async (_chatId, _messageId, _text, markup) => {
+        events.push(`edit:${markup.inline_keyboard.length}`);
+      },
+      answerCallbackQuery: async (_id, text) => {
+        events.push(`answer:${text ?? ""}`);
+      },
+    },
+  );
+  const handledRewind = await handleTelegramTreeMenuCallback(
+    {
+      id: "cb-rewind",
+      data: "tree:rewind:1:none",
+      message: { chat: { id: 7 }, message_id: 99 },
+    },
+    {
+      ...baseDeps,
+      editTreeMessage: async () => {
+        events.push("edit-rewind");
+      },
+      answerCallbackQuery: async (_id, text) => {
+        events.push(`answer:${text ?? ""}`);
+      },
+    },
+  );
+
+  assert.equal(handledEntry, true);
+  assert.equal(handledRewind, true);
+  assert.deepEqual(events, [
+    "edit:1",
+    "answer:",
+    "answer:Tree history is read-only for this session.",
+  ]);
+});
+
 test("Tree SVG export callback renders and sends file", async () => {
   const snapshot = createSnapshot();
   const entries = buildTelegramTreeMenuEntries(snapshot);

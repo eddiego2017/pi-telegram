@@ -14,6 +14,7 @@ import {
   type SessionShutdownEvent,
   type SessionStartEvent,
   type SlashCommandInfo,
+  SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 
@@ -55,6 +56,13 @@ export interface PiExtensionApiRuntimePorts {
 export interface PiTelegramTreeBranchMutators<TContext> {
   setBranchName(entryId: string, name: string | undefined, ctx: TContext): void;
   deleteBranch(entryId: string, ctx: TContext): void;
+}
+
+export interface PiSessionSnapshotReference {
+  cwd: string;
+  sessionFile?: string;
+  sessionId?: string;
+  sessionName?: string;
 }
 
 export function createExtensionApiRuntimePorts(
@@ -276,6 +284,41 @@ export function getExtensionContextSessionSnapshot(ctx: ExtensionContext) {
     entries: ctx.sessionManager.getEntries(),
     branch: ctx.sessionManager.getBranch(),
     contextUsage: ctx.getContextUsage(),
+  };
+}
+
+export function getSessionSnapshotFromReference(
+  reference: PiSessionSnapshotReference,
+) {
+  if (reference.sessionFile) {
+    try {
+      const sessionManager = SessionManager.open(
+        reference.sessionFile,
+        undefined,
+        reference.cwd,
+      );
+      return {
+        cwd: sessionManager.getCwd(),
+        sessionId: sessionManager.getSessionId(),
+        sessionFile: sessionManager.getSessionFile(),
+        sessionName: sessionManager.getSessionName(),
+        leafId: sessionManager.getLeafId(),
+        entries: sessionManager.getEntries(),
+        branch: sessionManager.getBranch(),
+      };
+    } catch {
+      // Fall through to a minimal snapshot so tab-owned menus do not drift
+      // back to the parent session when a worker file is temporarily missing.
+    }
+  }
+  return {
+    cwd: reference.cwd,
+    sessionId: reference.sessionId ?? "unknown",
+    sessionFile: reference.sessionFile,
+    sessionName: reference.sessionName,
+    leafId: null,
+    entries: [],
+    branch: [],
   };
 }
 

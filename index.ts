@@ -266,6 +266,12 @@ export default function (pi: Pi.ExtensionAPI) {
     }),
     recordRuntimeEvent,
   });
+  const tabAwareSessionSnapshotPorts =
+    TabManager.createTelegramTabAwareSessionSnapshotPorts({
+      tabManager,
+      getParentSnapshot: Pi.getExtensionContextSessionSnapshot,
+      getTabSnapshot: Pi.getSessionSnapshotFromReference,
+    });
   const dispatchNextQueuedTelegramTurn =
     Queue.createTelegramQueueDispatchRuntime<Pi.ExtensionContext>({
       ...telegramQueueStore,
@@ -413,7 +419,8 @@ export default function (pi: Pi.ExtensionAPI) {
   const sessionMenuRuntime = MenuSession.createTelegramSessionMenuRuntime<
     Pi.ExtensionContext
   >({
-    getSnapshot: Pi.getExtensionContextSessionSnapshot,
+    getSnapshot: tabAwareSessionSnapshotPorts.getSnapshot,
+    canDeleteCurrent: tabAwareSessionSnapshotPorts.canDeleteCurrent,
     sendInteractiveMessage,
     editInteractiveMessage,
     sendReplayMessage: sendMarkdownReply,
@@ -437,7 +444,8 @@ export default function (pi: Pi.ExtensionAPI) {
   const treeMenuRuntime = MenuTree.buildTelegramTreeMenuRuntime<
     Pi.ExtensionContext
   >({
-    getSnapshot: Pi.getExtensionContextSessionSnapshot,
+    getSnapshot: tabAwareSessionSnapshotPorts.getSnapshot,
+    isReadOnly: tabAwareSessionSnapshotPorts.isReadOnly,
     sendInteractiveMessage,
     editInteractiveMessage,
     answerCallbackQuery,

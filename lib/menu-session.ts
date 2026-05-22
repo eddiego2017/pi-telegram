@@ -773,6 +773,7 @@ function parseIndex(data: string, prefix: string, total: number): number | undef
 export interface TelegramSessionMenuOpenDeps {
   chatId: number;
   getSnapshot: () => TelegramSessionSnapshot;
+  canDeleteCurrent?: (snapshot: TelegramSessionSnapshot) => boolean;
   sendSessionMenu: (
     text: string,
     replyMarkup: TelegramSessionReplyMarkup,
@@ -787,9 +788,12 @@ export async function openTelegramSessionMenu(
   const now = deps.now ?? Date.now;
   const snapshot = deps.getSnapshot();
   const history = buildTelegramSessionHistoryItems(snapshot);
+  const canDeleteCurrent = deps.canDeleteCurrent
+    ? deps.canDeleteCurrent(snapshot)
+    : Boolean(snapshot.sessionFile);
   const messageId = await deps.sendSessionMenu(
     buildTelegramSessionMainText(snapshot),
-    buildTelegramSessionMainReplyMarkup(history.length > 0, Boolean(snapshot.sessionFile)),
+    buildTelegramSessionMainReplyMarkup(history.length > 0, canDeleteCurrent),
   );
   if (messageId === undefined) return;
   deps.storeState({
@@ -811,6 +815,7 @@ export interface TelegramSessionMenuCallbackDeps {
   getState: (messageId: number | undefined) => TelegramSessionMenuState | undefined;
   setState: (state: TelegramSessionMenuState) => void;
   getSnapshot: () => TelegramSessionSnapshot;
+  canDeleteCurrent?: (snapshot: TelegramSessionSnapshot) => boolean;
   editSessionMessage: (
     chatId: number,
     messageId: number,
@@ -854,6 +859,9 @@ async function handleTelegramSessionMenuCallbackUnsafe(
   const now = deps.now ?? Date.now;
   const snapshot = deps.getSnapshot();
   const history = buildTelegramSessionHistoryItems(snapshot);
+  const canDeleteCurrent = deps.canDeleteCurrent
+    ? deps.canDeleteCurrent(snapshot)
+    : Boolean(snapshot.sessionFile);
   const updateState = (next: Partial<TelegramSessionMenuState>) => {
     deps.setState({ ...state, ...next, updatedAt: now() });
   };
@@ -864,13 +872,17 @@ async function handleTelegramSessionMenuCallbackUnsafe(
       chatId,
       messageId,
       buildTelegramSessionMainText(snapshot),
-      buildTelegramSessionMainReplyMarkup(history.length > 0, Boolean(snapshot.sessionFile)),
+      buildTelegramSessionMainReplyMarkup(history.length > 0, canDeleteCurrent),
     );
     updateState({ view: "main", page: 0, detailIndex: undefined });
     return true;
   }
 
   if (data === "session:delete-current") {
+    if (!canDeleteCurrent) {
+      await deps.answerCallbackQuery(query.id, "Delete is not available for this session.");
+      return true;
+    }
     if (!snapshot.sessionFile) {
       await deps.answerCallbackQuery(query.id, "No session file to delete.");
       return true;
@@ -892,13 +904,17 @@ async function handleTelegramSessionMenuCallbackUnsafe(
       chatId,
       messageId,
       buildTelegramSessionMainText(snapshot),
-      buildTelegramSessionMainReplyMarkup(history.length > 0, Boolean(snapshot.sessionFile)),
+      buildTelegramSessionMainReplyMarkup(history.length > 0, canDeleteCurrent),
     );
     updateState({ view: "main", page: 0, detailIndex: undefined });
     return true;
   }
 
   if (data === "session:delete-current:confirm") {
+    if (!canDeleteCurrent) {
+      await deps.answerCallbackQuery(query.id, "Delete is not available for this session.");
+      return true;
+    }
     if (!snapshot.sessionFile) {
       await deps.answerCallbackQuery(query.id, "No session file to delete.");
       return true;
@@ -1086,6 +1102,10 @@ export interface TelegramSessionMenuRuntime<TContext> {
 
 export interface TelegramSessionMenuRuntimeDeps<TContext> {
   getSnapshot: (ctx: TContext) => TelegramSessionSnapshot;
+  canDeleteCurrent?: (
+    snapshot: TelegramSessionSnapshot,
+    ctx: TContext,
+  ) => boolean;
   sendInteractiveMessage: (
     chatId: number,
     text: string,
@@ -1121,6 +1141,9 @@ export function createTelegramSessionMenuRuntime<TContext>(
       return openTelegramSessionMenu({
         chatId,
         getSnapshot: () => deps.getSnapshot(ctx),
+        canDeleteCurrent: deps.canDeleteCurrent
+          ? (snapshot) => deps.canDeleteCurrent?.(snapshot, ctx) ?? false
+          : undefined,
         sendSessionMenu: (text, replyMarkup) =>
           deps.sendInteractiveMessage(chatId, text, "html", replyMarkup),
         storeState: store.set,
@@ -1131,6 +1154,9 @@ export function createTelegramSessionMenuRuntime<TContext>(
         getState: store.get,
         setState: store.set,
         getSnapshot: () => deps.getSnapshot(ctx),
+        canDeleteCurrent: deps.canDeleteCurrent
+          ? (snapshot) => deps.canDeleteCurrent?.(snapshot, ctx) ?? false
+          : undefined,
         editSessionMessage: (chatId, messageId, text, replyMarkup) =>
           deps.editInteractiveMessage(chatId, messageId, text, "html", replyMarkup),
         sendReplayMessage: deps.sendReplayMessage,

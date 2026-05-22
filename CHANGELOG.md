@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` `/session` and `/tree` now follow the active tab when `concurrentTabs.enabled` is true. `/session` reads the selected worker session for `Last 5 turns`, `Full replay`, and history pagination; `/tree` reads the selected worker prompt history in read-only mode until child-safe rewind and branch mutation are available.
+- `[Tests]` Extended active-tab regressions for worker session snapshots, `/session` replay/history callbacks, `/tree` active-tab history browsing, and read-only worker-tab tree rendering.
 - `[Concurrent Tabs]` Active tabs now stream worker answer text, thinking previews, assistant tool-call previews, and final Markdown replies from RPC events through the parent Telegram bridge while workers continue to run with `--no-extensions`.
 - `[Concurrent Tabs]` `/model` now opens the active tab's model picker when `concurrentTabs.enabled` is true. Model-menu callbacks route selections to the active RPC child, refresh the menu with the tab's current model marker, and leave the parent session model untouched.
 - `[Concurrent Tabs]` `/llm [tokens...]` now targets the active tab's RPC child when `concurrentTabs.enabled` is true, preserving the existing model list/filter/single-match UX while keeping the parent session model unchanged. Busy active tabs reject model switches until they are idle.

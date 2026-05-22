@@ -381,6 +381,40 @@ test("Session delete callback confirms and injects current session path", async 
   ]);
 });
 
+test("Session menu can hide and block current-session delete", async () => {
+  const events: string[] = [];
+  const snapshot = makeSnapshot();
+  const runtime = createTelegramSessionMenuRuntime<string>({
+    getSnapshot: () => snapshot,
+    canDeleteCurrent: () => false,
+    sendInteractiveMessage: async (_chatId, _text, _mode, markup) => {
+      events.push(`send:${markup.inline_keyboard.length}`);
+      return 99;
+    },
+    editInteractiveMessage: async () => {
+      events.push("edit");
+    },
+    sendReplayMessage: async () => 100,
+    answerCallbackQuery: async (_id, text) => {
+      events.push(`answer:${text ?? ""}`);
+    },
+    injectDeleteCurrentSession: async () => {
+      events.push("inject");
+    },
+  });
+
+  await runtime.openSessionMenu(7, 11, "ctx");
+  await runtime.handleCallbackQuery(
+    { id: "cb-delete", data: "session:delete-current", message: { chat: { id: 7 }, message_id: 99 } },
+    "ctx",
+  );
+
+  assert.deepEqual(events, [
+    "send:2",
+    "answer:Delete is not available for this session.",
+  ]);
+});
+
 test("Session callback failures are answered and swallowed", async () => {
   const snapshot = makeSnapshot();
   const answers: string[] = [];

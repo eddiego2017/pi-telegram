@@ -163,6 +163,13 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
 
   await manager.handleCommand("new A", 1, 10, "ctx");
   assert.match(replies.at(-1) ?? "", /Created and switched to tab A/);
+  assert.deepEqual(manager.getActiveSessionReference("ctx"), {
+    tabName: "A",
+    cwd: "/repo",
+    sessionFile: "/sessions/A.jsonl",
+    sessionId: "session-A",
+    sessionName: undefined,
+  });
   assert.deepEqual(
     (backendOptions[0] as { args?: string[] }).args,
     ["--extension", "/agent/extensions/provider.ts"],
@@ -217,6 +224,13 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
 
   await manager.handleCommand("new B", 1, 30, "ctx");
   assert.match(replies.at(-1) ?? "", /Created and switched to tab B/);
+  assert.deepEqual(manager.getActiveSessionReference("ctx"), {
+    tabName: "B",
+    cwd: "/repo",
+    sessionFile: "/sessions/B.jsonl",
+    sessionId: "session-B",
+    sessionName: undefined,
+  });
 
   currentTime = 2000;
   backends.get("A")?.emit({ type: "agent_start" });
@@ -235,6 +249,7 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
 
   await manager.handleCommand("A", 1, 40, "ctx");
   assert.match(replies.at(-1) ?? "", /Switched to tab A\.\n\nLast reply:\nanswer A/);
+  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
 
   await manager.handleCommand("abort A", 1, 50, "ctx");
   assert.deepEqual(backends.get("A")?.aborts, ["A"]);

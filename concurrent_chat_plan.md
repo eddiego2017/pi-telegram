@@ -4,9 +4,9 @@ This document is the short reset-safe handoff for concurrent `/tab` support in
 `pi-telegram`.
 
 Status as of 2026-05-22: MVP plus active-tab `/llm`, `/model`, live answer
-text streaming, live thinking streaming, live tool-call preview streaming, and
-Markdown final replies are implemented, tested, and deployed in the `pi`
-Kubernetes deployment.
+text streaming, live thinking streaming, live tool-call preview streaming,
+Markdown final replies, and active-tab `/session`/`/tree` history browsing are
+implemented, tested, and deployed in the `pi` Kubernetes deployment.
 
 Last committed MVP baseline:
 
@@ -14,15 +14,22 @@ Last committed MVP baseline:
 9c494d5 feat: add concurrent Telegram tabs
 ```
 
-Latest committed state:
+Recent committed milestones:
 
 ```text
+34ca48f docs: update concurrent tabs handoff
 7bf5304 feat: stream tab worker answer text
 87fe9cb feat: stream tab worker thinking and tool calls
 ed2ae95 feat: relay tab worker thinking and tool calls
 8ebb546 docs: record concurrent tab model smoke test
 f598e74 feat: route model menu to active tab
 5ee3637 feat: route llm command to active tab
+```
+
+Current implementation also includes:
+
+```text
+active-tab /session and /tree now read the selected tab worker session file
 ```
 
 Implemented updates after the MVP baseline:
@@ -37,6 +44,12 @@ Implemented updates after the MVP baseline:
   events through the parent bridge.
 - Active tabs now stream worker answer text, thinking previews, tool-call
   previews, and final Markdown replies through the parent Telegram bridge.
+- `/session` now opens the active tab's session snapshot when concurrent tabs
+  are enabled, so `Last 5 turns`, `Full replay`, and `History` survive tab
+  switching and read the selected worker's JSONL session file.
+- `/tree` now opens the active tab's prompt history when concurrent tabs are
+  enabled. It is read-only for worker tabs until child-safe tree navigation and
+  branch mutation are implemented.
 
 ## What Works Now
 
@@ -52,6 +65,10 @@ Implemented updates after the MVP baseline:
 - Active tab runs stream worker answer text, thinking content, and assistant
   tool-call previews again without loading full Telegram extensions in the
   worker.
+- `/session` history/replay controls show the active tab's conversation after
+  `/tab <name>` switches.
+- `/tree` shows the active tab's prompt history after `/tab <name>` switches;
+  rewind/branch mutation buttons are hidden or blocked for worker tabs.
 - `/tab close B` closes a tab and keeps its session file.
 - Restarting the host `pi` process preserves tab registry and conversation state.
 - Feature is opt-in through `telegram.json`; existing single-session behavior remains the fallback when disabled.
@@ -75,6 +92,11 @@ active tab A model picker shows/applies the tab model
 /tab B
 /model
 tab B model picker remains isolated from A
+/tab A
+/session
+Last 5 / Full replay / History show tab A history
+/tree
+active-path prompt history shows tab A prompts
 ```
 
 ## Current Architecture
@@ -162,12 +184,12 @@ tests/config.test.ts
 tests/commands.test.ts
 ```
 
-Full validation passed:
+Full validation passed for the current implementation:
 
 ```bash
 npm run typecheck
 npm test
-# 626 pass, 0 fail
+# 628 pass, 0 fail
 ```
 
 ## Important Bug Already Fixed
@@ -256,11 +278,18 @@ Recommended order:
    - Future work can reuse more of the original single-session renderer for
      richer progress/status blocks, but the core visibility gap is closed.
 
-4. Add worker-safe attachment spool only if real use shows file delivery is
+4. Add child-safe `/tree` navigation and branch mutation if tab-side rewind is
+   needed.
+   - Current `/tree` for worker tabs is intentionally read-only.
+   - Rewind, branch switch, rename, and soft delete still require parent-side
+     `ctx.sessionManager` today and must not target worker session files through
+     the parent tmux injector.
+
+5. Add worker-safe attachment spool only if real use shows file delivery is
    important.
    - This is phase 2/3, not an urgent fix.
 
-5. Add advanced per-tab session controls later.
+6. Add advanced per-tab session controls later.
    - specified-tab model controls, if `/llm` active-tab semantics are not enough
    - `/tab thinking`
    - `/tab compact`

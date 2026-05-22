@@ -4,7 +4,7 @@
  * Owns durable tab registry loading, per-tab RPC backend orchestration, and text-first Telegram delivery
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -69,6 +69,14 @@ export interface TelegramTabBackend {
 export interface TelegramTabModelSelection {
   provider: string;
   id: string;
+}
+
+export interface TelegramTabSessionReference {
+  tabName: string;
+  cwd: string;
+  sessionFile?: string;
+  sessionId?: string;
+  sessionName?: string;
 }
 
 export interface TelegramTabManagerDeps<TContext> {
@@ -164,6 +172,9 @@ export interface TelegramTabManager<TContext> {
     ctx: TContext,
   ) => Promise<TelegramTabModelSelection | undefined>;
   getActiveThinkingLevel: (ctx: TContext) => Promise<string | undefined>;
+  getActiveSessionReference: (
+    ctx: TContext,
+  ) => TelegramTabSessionReference | undefined;
   canSwitchActiveModel: (ctx: TContext) => Promise<boolean>;
   selectActiveModel: (
     model: TelegramTabModelSelection,
@@ -204,6 +215,35 @@ export interface TelegramTabAwareModelMenuPortDeps<
   ) => TModel | undefined;
   isParentIdle: (ctx: TContext) => boolean;
   canOfferParentInFlightModelSwitch: (ctx: TContext) => boolean;
+}
+
+export interface TelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot> {
+  getSnapshot: (ctx: TContext) => TSnapshot;
+  canDeleteCurrent: (snapshot: unknown, ctx: TContext) => boolean;
+  isReadOnly: (snapshot: unknown, ctx: TContext) => boolean;
+}
+
+export interface TelegramTabAwareSessionSnapshotPortDeps<TContext, TSnapshot> {
+  tabManager: TelegramTabManager<TContext>;
+  getParentSnapshot: (ctx: TContext) => TSnapshot;
+  getTabSnapshot: (reference: TelegramTabSessionReference) => TSnapshot;
+}
+
+export function createTelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot>(
+  deps: TelegramTabAwareSessionSnapshotPortDeps<TContext, TSnapshot>,
+): TelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot> {
+  const isActiveTabSession = (ctx: TContext): boolean =>
+    deps.tabManager.getActiveSessionReference(ctx) !== undefined;
+  return {
+    getSnapshot: (ctx) => {
+      const reference = deps.tabManager.getActiveSessionReference(ctx);
+      return reference
+        ? deps.getTabSnapshot(reference)
+        : deps.getParentSnapshot(ctx);
+    },
+    canDeleteCurrent: (_snapshot, ctx) => !isActiveTabSession(ctx),
+    isReadOnly: (_snapshot, ctx) => isActiveTabSession(ctx),
+  };
 }
 
 export function createTelegramTabAwareModelMenuPorts<
@@ -251,6 +291,16 @@ async function readTelegramTabsState(
 ): Promise<TelegramTabsState> {
   if (!existsSync(statePath)) return createDefaultTelegramTabsState(cwd, now);
   const raw = JSON.parse(await readFile(statePath, "utf8")) as unknown;
+  return normalizeTelegramTabsState(raw, cwd, now);
+}
+
+function readTelegramTabsStateSync(
+  statePath: string,
+  cwd: string,
+  now: number,
+): TelegramTabsState {
+  if (!existsSync(statePath)) return createDefaultTelegramTabsState(cwd, now);
+  const raw = JSON.parse(readFileSync(statePath, "utf8")) as unknown;
   return normalizeTelegramTabsState(raw, cwd, now);
 }
 
@@ -566,13 +616,26 @@ export function createTelegramTabManager<TContext>(
     );
     return persistChain;
   };
+  const hydrateRuntimeTabs = (tabState: TelegramTabsState): void => {
+    for (const record of Object.values(tabState.tabs)) {
+      if (!runtimeTabs.has(record.name)) {
+        runtimeTabs.set(record.name, createRuntimeTab(record));
+      }
+    }
+  };
   const ensureState = async (cwd: string): Promise<TelegramTabsState> => {
     if (!state) {
       state = await readTelegramTabsState(statePath, cwd, now());
-      for (const record of Object.values(state.tabs)) {
-        runtimeTabs.set(record.name, createRuntimeTab(record));
-      }
+      hydrateRuntimeTabs(state);
       await persist();
+    }
+    return state;
+  };
+  const ensureStateSync = (cwd: string): TelegramTabsState => {
+    if (!state) {
+      state = readTelegramTabsStateSync(statePath, cwd, now());
+      hydrateRuntimeTabs(state);
+      void persist();
     }
     return state;
   };
@@ -1281,6 +1344,20 @@ export function createTelegramTabManager<TContext>(
       if (!runtime) return undefined;
       await refreshRuntimeState(runtime);
       return runtime.record.currentThinkingLevel;
+    },
+    getActiveSessionReference: (ctx) => {
+      if (!isEnabled()) return undefined;
+      const tabState = ensureStateSync(deps.getCwd(ctx));
+      const runtime = getRuntime(tabState, tabState.activeTab);
+      if (!runtime) return undefined;
+      const record = runtime.record;
+      return {
+        tabName: record.name,
+        cwd: record.cwd || deps.getCwd(ctx),
+        sessionFile: record.sessionFile,
+        sessionId: record.sessionId,
+        sessionName: record.sessionName,
+      };
     },
     canSwitchActiveModel: async (ctx) => {
       if (!isEnabled()) return false;
