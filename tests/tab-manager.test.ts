@@ -24,6 +24,7 @@ class FakeTabBackend implements TelegramTabBackend {
   readonly followUps: string[] = [];
   readonly aborts: string[] = [];
   readonly modelSelections: string[] = [];
+  readonly thinkingSelections: string[] = [];
   disposed = false;
   readonly tabName: string;
   private listeners = new Set<(event: RpcChildBackendEvent) => void>();
@@ -77,6 +78,14 @@ class FakeTabBackend implements TelegramTabBackend {
     this.state = {
       ...this.state,
       model: { provider, id: modelId },
+    };
+  }
+
+  async setThinkingLevel(level: string): Promise<void> {
+    this.thinkingSelections.push(level);
+    this.state = {
+      ...this.state,
+      thinkingLevel: level,
     };
   }
 
@@ -163,6 +172,13 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     true,
   );
   assert.deepEqual(backends.get("A")?.modelSelections, ["openai/gpt-5.5"]);
+  assert.deepEqual(await manager.getActiveModel("ctx"), {
+    provider: "openai",
+    id: "gpt-5.5",
+  });
+  assert.equal(await manager.setActiveThinkingLevel("high", "ctx"), true);
+  assert.equal(await manager.getActiveThinkingLevel("ctx"), "high");
+  assert.deepEqual(backends.get("A")?.thinkingSelections, ["high"]);
 
   await manager.dispatchPrompt(
     {

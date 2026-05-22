@@ -13,6 +13,7 @@ import * as Queue from "../lib/queue.ts";
 import * as Routing from "../lib/routing.ts";
 import * as Runtime from "../lib/runtime.ts";
 import * as TextGroups from "../lib/text-groups.ts";
+import type { TelegramTabManager } from "../lib/tab-manager.ts";
 import type * as Updates from "../lib/updates.ts";
 
 interface TestContext {
@@ -21,7 +22,7 @@ interface TestContext {
 
 interface TestModel extends Model.MenuModel {
   provider: "test";
-  id: "model";
+  id: string;
 }
 
 interface TestUser extends Updates.TelegramUser {}
@@ -249,4 +250,166 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
       false,
     );
   }
+});
+
+test("Routing runtime applies model menu picks to the active tab when enabled", async () => {
+  const events: string[] = [];
+  const selectedModels: string[] = [];
+  const parentModels: string[] = [];
+  const modelA: TestModel = { provider: "test", id: "model-a" };
+  const modelB: TestModel = { provider: "test", id: "model-b" };
+  const bridgeRuntime = Runtime.createTelegramBridgeRuntime();
+  const activeTurnRuntime = Queue.createTelegramActiveTurnStore();
+  const telegramQueueStore = Queue.createTelegramQueueStore<TestContext>();
+  const queueMutationRuntime = Queue.createTelegramQueueMutationController({
+    ...telegramQueueStore,
+    updateStatus: () => events.push("status"),
+  });
+  const pendingModelSwitchStore =
+    Model.createPendingModelSwitchStore<Model.ScopedTelegramModel<TestModel>>();
+  const currentModelRuntime = Model.createCurrentModelRuntime<
+    TestContext,
+    TestModel
+  >({
+    getContextModel: () => modelA,
+    updateStatus: () => events.push("status"),
+  });
+  const modelSwitchController =
+    Model.createTelegramModelSwitchControllerRuntime<
+      TestContext,
+      Model.ScopedTelegramModel<TestModel>
+    >({
+      isIdle: () => false,
+      getPendingModelSwitch: pendingModelSwitchStore.get,
+      setPendingModelSwitch: pendingModelSwitchStore.set,
+      getActiveTurn: activeTurnRuntime.get,
+      getAbortHandler: bridgeRuntime.abort.getHandler,
+      hasAbortHandler: bridgeRuntime.abort.hasHandler,
+      getActiveToolExecutions: bridgeRuntime.lifecycle.getActiveToolExecutions,
+      allocateItemOrder: bridgeRuntime.queue.allocateItemOrder,
+      allocateControlOrder: bridgeRuntime.queue.allocateControlOrder,
+      appendQueuedItem: queueMutationRuntime.append,
+      updateStatus: () => events.push("status"),
+    });
+  const modelMenuRuntime = Menu.createTelegramModelMenuRuntime<TestModel>();
+  const state = Menu.buildTelegramModelMenuState({
+    chatId: 100,
+    activeModel: modelA,
+    availableModels: [modelA, modelB],
+    configuredScopedModelPatterns: [],
+  });
+  state.messageId = 42;
+  state.mode = "model";
+  modelMenuRuntime.storeState(state);
+  const menuActions: Menu.TelegramMenuActionRuntime<TestContext, TestModel> = {
+    updateModelMenuMessage: async () => {
+      events.push("model-menu");
+    },
+    updateThinkingMenuMessage: async () => undefined,
+    updateStatusMessage: async () => undefined,
+    sendStatusMessage: async () => undefined,
+    openModelMenu: async () => undefined,
+    openThinkingMenu: async () => undefined,
+  };
+  const tabManager: TelegramTabManager<TestContext> = {
+    isEnabled: () => true,
+    getActiveModel: async () => modelA,
+    getActiveThinkingLevel: async () => undefined,
+    canSwitchActiveModel: async () => true,
+    selectActiveModel: async (model) => {
+      selectedModels.push(`${model.provider}/${model.id}`);
+      return true;
+    },
+    setActiveThinkingLevel: async () => true,
+    handleCommand: async () => true,
+    dispatchPrompt: async () => false,
+    dispose: async () => undefined,
+  };
+  const routeRuntime = Routing.createTelegramInboundRouteRuntime<
+    TestUpdate,
+    TestMessage,
+    TestCallbackQuery,
+    TestContext,
+    TestModel
+  >({
+    configStore: {
+      getAllowedUserId: () => 7,
+      setAllowedUserId: () => undefined,
+      persist: async () => undefined,
+    },
+    bridgeRuntime,
+    activeTurnRuntime,
+    mediaGroupRuntime: Media.createTelegramMediaGroupController<
+      TestMessage,
+      TestContext
+    >(),
+    textGroupRuntime: TextGroups.createTelegramTextGroupController<
+      TestMessage,
+      TestContext
+    >(),
+    telegramQueueStore,
+    queueMutationRuntime,
+    modelMenuRuntime,
+    currentModelRuntime,
+    modelSwitchController,
+    menuActions,
+    openQueueMenu: async () => undefined,
+    queueMenuCallbackHandler: async () => false,
+    inboundHandlerRuntime: {
+      process: async (files, rawText) => ({
+        rawText,
+        promptFiles: files,
+        handlerOutputs: [],
+        handledFiles: [],
+      }),
+    },
+    updateStatus: () => events.push("status"),
+    dispatchNextQueuedTelegramTurn: () => events.push("dispatch"),
+    answerCallbackQuery: async (_callbackQueryId, text) => {
+      events.push(`answer:${text ?? ""}`);
+    },
+    answerGuestQuery: async () => {},
+    sendTextReply: async () => undefined,
+    setMyCommands: async () => undefined,
+    getCommands: () => [],
+    downloadFile: async (_fileId, fileName) => `/tmp/${fileName}`,
+    getThinkingLevel: () => "high",
+    setThinkingLevel: () => undefined,
+    setModel: async (model) => {
+      parentModels.push(`${model.provider}/${model.id}`);
+      return true;
+    },
+    listAvailableModels: () => [modelA, modelB],
+    findActiveModelByIdentity: (identity) =>
+      [modelA, modelB].find(
+        (model) =>
+          model.provider === identity.provider && model.id === identity.id,
+      ),
+    isIdle: () => false,
+    hasPendingMessages: () => false,
+    compact: () => undefined,
+    injectNewSession: async () => undefined,
+    injectClone: async () => undefined,
+    getSessionName: () => undefined,
+    setSessionName: () => undefined,
+    tabManager,
+  });
+  await routeRuntime.handleUpdate(
+    {
+      callback_query: {
+        id: "cb-model",
+        from: { id: 7, is_bot: false },
+        data: "model:pick:1",
+        message: {
+          message_id: 42,
+          chat: { id: 100, type: "private" },
+          from: { id: 7, is_bot: false },
+        },
+      },
+    },
+    { cwd: "/repo" },
+  );
+  assert.deepEqual(selectedModels, ["test/model-b"]);
+  assert.deepEqual(parentModels, []);
+  assert.deepEqual(events, ["model-menu", "answer:Switched to model-b"]);
 });

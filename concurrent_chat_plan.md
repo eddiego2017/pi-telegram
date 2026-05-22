@@ -6,17 +6,19 @@ This document is the short reset-safe handoff for concurrent `/tab` support in
 Status as of 2026-05-22: MVP is implemented, committed, pushed, and live-tested
 in the `pi` Kubernetes deployment.
 
-Last known commit:
+Last committed MVP baseline:
 
 ```text
 9c494d5 feat: add concurrent Telegram tabs
 ```
 
-Current working update after that commit:
+Current working update after that baseline:
 
 - `/llm [tokens...]` keeps the existing list/filter/single-match UX.
 - When `concurrentTabs.enabled` is true, `/llm` now switches the active tab's
   RPC child model instead of the parent session model.
+- `/model` now opens the active tab's model picker and routes model-menu picks
+  to the active tab's RPC child.
 - Busy active tabs reject model switches until idle.
 
 ## What Works Now
@@ -28,6 +30,8 @@ Current working update after that commit:
 - Same-tab follow-up prompts use RPC `streamingBehavior: "followUp"`.
 - `/llm [tokens...]` lists models and switches the active tab model when a
   single model matches.
+- `/model` shows the active tab's current model marker when the child has
+  reported a model and applies menu selections to that tab's worker.
 - `/tab close B` closes a tab and keeps its session file.
 - Restarting the host `pi` process preserves tab registry and conversation state.
 - Feature is opt-in through `telegram.json`; existing single-session behavior remains the fallback when disabled.
@@ -114,7 +118,7 @@ Wiring:
 ```text
 lib/config.ts        concurrentTabs config and workerExtensions
 lib/commands.ts      /tab reserved immediate command
-lib/routing.ts       prompt and /llm routing to active tab when enabled
+lib/routing.ts       prompt, /llm, and /model routing to active tab when enabled
 index.ts             tab manager composition and shutdown cleanup
 ```
 

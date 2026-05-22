@@ -16,6 +16,7 @@ import {
   handleTelegramModelMenuCallbackAction,
   openTelegramModelMenu,
   sendTelegramModelMenuMessage,
+  type TelegramMaybePromise,
   updateTelegramModelMenuMessage,
   type TelegramMenuMessageRuntimeDeps,
   type TelegramModelMenuState,
@@ -129,7 +130,7 @@ export interface TelegramMenuEffectPort<TModel extends MenuModel = MenuModel> {
   persistScopedModelPatterns?: (patterns: string[]) => Promise<void>;
   setModel: (model: TModel) => Promise<boolean>;
   setCurrentModel: (model: TModel) => void;
-  setThinkingLevel: (level: ThinkingLevel) => void;
+  setThinkingLevel: (level: ThinkingLevel) => TelegramMaybePromise<void>;
   getCurrentThinkingLevel: () => ThinkingLevel;
   stagePendingModelSwitch: (selection: ScopedTelegramModel<TModel>) => void;
   restartInterruptedTelegramTurn: (
@@ -181,9 +182,14 @@ export interface TelegramMenuCallbackRuntimeDeps<
   getStoredModelMenuState: (
     messageId: number | undefined,
   ) => TelegramModelMenuState<TModel> | undefined;
-  getActiveModel: (ctx: TContext) => TModel | undefined;
+  getActiveModel: (
+    ctx: TContext,
+  ) => TelegramMaybePromise<TModel | undefined>;
   getThinkingLevel: () => ThinkingLevel;
-  setThinkingLevel: (level: ThinkingLevel) => void;
+  setThinkingLevel: (
+    level: ThinkingLevel,
+    ctx: TContext,
+  ) => TelegramMaybePromise<void>;
   updateStatus: (ctx: TContext) => void;
   updateModelMenuMessage: (
     state: TelegramModelMenuState<TModel>,
@@ -205,7 +211,7 @@ export interface TelegramMenuCallbackRuntimeDeps<
     callbackQueryId: string,
     text?: string,
   ) => Promise<void>;
-  isIdle: (ctx: TContext) => boolean;
+  isIdle: (ctx: TContext) => TelegramMaybePromise<boolean>;
   hasActiveTelegramTurn: () => boolean;
   hasAbortHandler: () => boolean;
   hasActiveToolExecutions: () => boolean;
@@ -213,7 +219,7 @@ export interface TelegramMenuCallbackRuntimeDeps<
     patterns: string[],
     ctx: TContext,
   ) => Promise<void>;
-  setModel: (model: TModel) => Promise<boolean>;
+  setModel: (model: TModel, ctx: TContext) => Promise<boolean>;
   setCurrentModel: (model: TModel, ctx: TContext) => void;
   stagePendingModelSwitch: (
     selection: ScopedTelegramModel<TModel>,
@@ -249,13 +255,17 @@ export interface TelegramMenuActionRuntimeDeps<
     chatId: number,
     ctx: TContext,
   ) => Promise<TelegramModelMenuState<TModel>>;
-  getActiveModel: (ctx: TContext) => TModel | undefined;
+  getActiveModel: (
+    ctx: TContext,
+  ) => TelegramMaybePromise<TModel | undefined>;
   getThinkingLevel: () => ThinkingLevel;
   getQueueItemCount?: () => number;
   buildStatusHtml: (ctx: TContext) => string;
   storeModelMenuState: (state: TelegramModelMenuState<TModel>) => void;
-  isIdle: (ctx: TContext) => boolean;
-  canOfferInFlightModelSwitch: (ctx: TContext) => boolean;
+  isIdle: (ctx: TContext) => TelegramMaybePromise<boolean>;
+  canOfferInFlightModelSwitch: (
+    ctx: TContext,
+  ) => TelegramMaybePromise<boolean>;
   sendTextReply: (
     chatId: number,
     replyToMessageId: number,
@@ -415,9 +425,14 @@ export interface TelegramMenuCallbackRuntimeAdapterDeps<
   getStoredModelMenuState: (
     messageId: number | undefined,
   ) => TelegramModelMenuState<TModel> | undefined;
-  getActiveModel: (ctx: TContext) => TModel | undefined;
+  getActiveModel: (
+    ctx: TContext,
+  ) => TelegramMaybePromise<TModel | undefined>;
   getThinkingLevel: () => ThinkingLevel;
-  setThinkingLevel: (level: ThinkingLevel) => void;
+  setThinkingLevel: (
+    level: ThinkingLevel,
+    ctx: TContext,
+  ) => TelegramMaybePromise<void>;
   updateStatus: (ctx: TContext, error?: string) => void;
   updateModelMenuMessage: (
     state: TelegramModelMenuState<TModel>,
@@ -439,7 +454,7 @@ export interface TelegramMenuCallbackRuntimeAdapterDeps<
     callbackQueryId: string,
     text?: string,
   ) => Promise<void>;
-  isIdle: (ctx: TContext) => boolean;
+  isIdle: (ctx: TContext) => TelegramMaybePromise<boolean>;
   hasActiveTelegramTurn: () => boolean;
   hasAbortHandler: () => boolean;
   getActiveToolExecutions: () => number;
@@ -447,7 +462,7 @@ export interface TelegramMenuCallbackRuntimeAdapterDeps<
     patterns: string[],
     ctx: TContext,
   ) => Promise<void>;
-  setModel: (model: TModel) => Promise<boolean>;
+  setModel: (model: TModel, ctx: TContext) => Promise<boolean>;
   setCurrentModel: (model: TModel, ctx: TContext) => void;
   stagePendingModelSwitch: (
     selection: ScopedTelegramModel<TModel>,
@@ -631,7 +646,7 @@ export async function handleTelegramMenuCallbackRuntime<
       handleTelegramStatusMenuCallbackAction(
         query.id,
         query.data,
-        deps.getActiveModel(ctx),
+        await deps.getActiveModel(ctx),
         {
           updateModelMenuMessage: () => deps.updateModelMenuMessage(state, ctx),
           updateThinkingMenuMessage: () =>
@@ -645,10 +660,10 @@ export async function handleTelegramMenuCallbackRuntime<
       handleTelegramThinkingMenuCallbackAction(
         query.id,
         query.data,
-        deps.getActiveModel(ctx),
+        await deps.getActiveModel(ctx),
         {
-          setThinkingLevel: (level) => {
-            deps.setThinkingLevel(level);
+          setThinkingLevel: async (level) => {
+            await deps.setThinkingLevel(level, ctx);
             deps.updateStatus(ctx);
           },
           getCurrentThinkingLevel: deps.getThinkingLevel,
@@ -663,9 +678,9 @@ export async function handleTelegramMenuCallbackRuntime<
           {
             data: query.data,
             state,
-            activeModel: deps.getActiveModel(ctx),
+            activeModel: await deps.getActiveModel(ctx),
             currentThinkingLevel: deps.getThinkingLevel(),
-            isIdle: deps.isIdle(ctx),
+            isIdle: await deps.isIdle(ctx),
             canRestartBusyRun:
               deps.hasActiveTelegramTurn() && deps.hasAbortHandler(),
             hasActiveToolExecutions: deps.hasActiveToolExecutions(),
@@ -678,10 +693,10 @@ export async function handleTelegramMenuCallbackRuntime<
             persistScopedModelPatterns: deps.persistScopedModelPatterns
               ? (patterns) => deps.persistScopedModelPatterns!(patterns, ctx)
               : undefined,
-            setModel: deps.setModel,
+            setModel: (model) => deps.setModel(model, ctx),
             setCurrentModel: (model) => deps.setCurrentModel(model, ctx),
-            setThinkingLevel: (level) => {
-              deps.setThinkingLevel(level);
+            setThinkingLevel: async (level) => {
+              await deps.setThinkingLevel(level, ctx);
               deps.updateStatus(ctx);
             },
             stagePendingModelSwitch: (selection) => {
@@ -744,20 +759,24 @@ export function createTelegramMenuActionRuntime<
   deps: TelegramMenuActionRuntimeDeps<TContext, TModel>,
 ): TelegramMenuActionRuntime<TContext, TModel> {
   return {
-    updateModelMenuMessage: (state, ctx) =>
-      updateTelegramModelMenuMessage(state, deps.getActiveModel(ctx), deps),
-    updateThinkingMenuMessage: (state, ctx) =>
+    updateModelMenuMessage: async (state, ctx) =>
+      updateTelegramModelMenuMessage(
+        state,
+        await deps.getActiveModel(ctx),
+        deps,
+      ),
+    updateThinkingMenuMessage: async (state, ctx) =>
       updateTelegramThinkingMenuMessage(
         state,
-        deps.getActiveModel(ctx),
+        await deps.getActiveModel(ctx),
         deps.getThinkingLevel(),
         deps,
       ),
-    updateStatusMessage: (state, ctx) =>
+    updateStatusMessage: async (state, ctx) =>
       updateTelegramStatusMessage(
         state,
         deps.buildStatusHtml(ctx),
-        deps.getActiveModel(ctx),
+        await deps.getActiveModel(ctx),
         deps.getThinkingLevel(),
         deps,
         deps.getQueueItemCount?.() ?? 0,

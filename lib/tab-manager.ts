@@ -54,6 +54,7 @@ export interface TelegramTabBackend {
   abort: () => Promise<void>;
   getState: () => Promise<RpcChildSessionState>;
   setModel: (provider: string, modelId: string) => Promise<void>;
+  setThinkingLevel: (level: string) => Promise<void>;
 }
 
 export interface TelegramTabModelSelection {
@@ -93,9 +94,17 @@ interface RuntimeTab {
 
 export interface TelegramTabManager<TContext> {
   isEnabled: () => boolean;
+  getActiveModel: (
+    ctx: TContext,
+  ) => Promise<TelegramTabModelSelection | undefined>;
+  getActiveThinkingLevel: (ctx: TContext) => Promise<string | undefined>;
   canSwitchActiveModel: (ctx: TContext) => Promise<boolean>;
   selectActiveModel: (
     model: TelegramTabModelSelection,
+    ctx: TContext,
+  ) => Promise<boolean>;
+  setActiveThinkingLevel: (
+    level: string,
     ctx: TContext,
   ) => Promise<boolean>;
   handleCommand: (
@@ -106,6 +115,53 @@ export interface TelegramTabManager<TContext> {
   ) => Promise<boolean>;
   dispatchPrompt: (turn: TelegramTabPromptTurn, ctx: TContext) => Promise<boolean>;
   dispose: () => Promise<void>;
+}
+
+export interface TelegramTabAwareModelMenuPorts<
+  TContext,
+  TModel extends TelegramTabModelSelection,
+> {
+  getActiveModel: (ctx: TContext) => Promise<TModel | undefined>;
+  canSwitchModel: (ctx: TContext) => Promise<boolean> | boolean;
+  canOfferInFlightModelSwitch: (ctx: TContext) => boolean;
+}
+
+export interface TelegramTabAwareModelMenuPortDeps<
+  TContext,
+  TModel extends TelegramTabModelSelection,
+> {
+  tabManager: TelegramTabManager<TContext>;
+  getParentModel: (ctx: TContext) => TModel | undefined;
+  findModel: (
+    identity: TelegramTabModelSelection,
+    ctx: TContext,
+  ) => TModel | undefined;
+  isParentIdle: (ctx: TContext) => boolean;
+  canOfferParentInFlightModelSwitch: (ctx: TContext) => boolean;
+}
+
+export function createTelegramTabAwareModelMenuPorts<
+  TContext,
+  TModel extends TelegramTabModelSelection,
+>(
+  deps: TelegramTabAwareModelMenuPortDeps<TContext, TModel>,
+): TelegramTabAwareModelMenuPorts<TContext, TModel> {
+  return {
+    getActiveModel: async (ctx) => {
+      if (!deps.tabManager.isEnabled()) return deps.getParentModel(ctx);
+      const tabModel = await deps.tabManager.getActiveModel(ctx);
+      if (!tabModel) return undefined;
+      return deps.findModel(tabModel, ctx) ?? ({ ...tabModel } as TModel);
+    },
+    canSwitchModel: (ctx) =>
+      deps.tabManager.isEnabled()
+        ? deps.tabManager.canSwitchActiveModel(ctx)
+        : deps.isParentIdle(ctx),
+    canOfferInFlightModelSwitch: (ctx) =>
+      deps.tabManager.isEnabled()
+        ? false
+        : deps.canOfferParentInFlightModelSwitch(ctx),
+  };
 }
 
 export function createTelegramTabManagerShutdownHook<TContext>(
@@ -167,6 +223,11 @@ function applyRpcStateToRecord(
   record: TelegramTabRecord,
   state: RpcChildSessionState,
 ): void {
+  const model = parseTelegramTabModelSelection(state.model);
+  if (model) record.currentModel = model;
+  if (typeof state.thinkingLevel === "string") {
+    record.currentThinkingLevel = state.thinkingLevel;
+  }
   if (state.sessionFile) record.sessionFile = state.sessionFile;
   if (state.sessionId) record.sessionId = state.sessionId;
   if (state.sessionName !== undefined) record.sessionName = state.sessionName;
@@ -179,6 +240,16 @@ function applyRpcStateToRecord(
 
 function canSwitchTelegramTabModel(record: TelegramTabRecord): boolean {
   return record.status !== "running" && record.status !== "starting";
+}
+
+function parseTelegramTabModelSelection(
+  value: unknown,
+): TelegramTabModelSelection | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const raw = value as Record<string, unknown>;
+  return typeof raw.provider === "string" && typeof raw.id === "string"
+    ? { provider: raw.provider, id: raw.id }
+    : undefined;
 }
 
 function buildTelegramTabWorkerExtensionArgs(
@@ -598,6 +669,20 @@ export function createTelegramTabManager<TContext>(
   };
   return {
     isEnabled,
+    getActiveModel: async (ctx) => {
+      if (!isEnabled()) return undefined;
+      const runtime = await getActiveRuntime(ctx);
+      if (!runtime) return undefined;
+      await refreshRuntimeState(runtime);
+      return runtime.record.currentModel;
+    },
+    getActiveThinkingLevel: async (ctx) => {
+      if (!isEnabled()) return undefined;
+      const runtime = await getActiveRuntime(ctx);
+      if (!runtime) return undefined;
+      await refreshRuntimeState(runtime);
+      return runtime.record.currentThinkingLevel;
+    },
     canSwitchActiveModel: async (ctx) => {
       if (!isEnabled()) return false;
       const runtime = await getActiveRuntime(ctx);
@@ -614,6 +699,10 @@ export function createTelegramTabManager<TContext>(
       try {
         const backend = await ensureBackend(runtime, deps.getCwd(ctx));
         await backend.setModel(model.provider, model.id);
+        runtime.record.currentModel = {
+          provider: model.provider,
+          id: model.id,
+        };
         await refreshRuntimeState(runtime);
         return true;
       } catch (error) {
@@ -622,6 +711,29 @@ export function createTelegramTabManager<TContext>(
         deps.recordRuntimeEvent?.("tabs", error, {
           tab: runtime.record.name,
           action: "set_model",
+        });
+        await persist();
+        return false;
+      }
+    },
+    setActiveThinkingLevel: async (level, ctx) => {
+      if (!isEnabled()) return false;
+      const runtime = await getActiveRuntime(ctx);
+      if (!runtime) return false;
+      await refreshRuntimeState(runtime);
+      if (!canSwitchTelegramTabModel(runtime.record)) return false;
+      try {
+        const backend = await ensureBackend(runtime, deps.getCwd(ctx));
+        await backend.setThinkingLevel(level);
+        runtime.record.currentThinkingLevel = level;
+        await refreshRuntimeState(runtime);
+        return true;
+      } catch (error) {
+        runtime.record.status = "error";
+        runtime.record.lastError = getErrorMessage(error);
+        deps.recordRuntimeEvent?.("tabs", error, {
+          tab: runtime.record.name,
+          action: "set_thinking_level",
         });
         await persist();
         return false;

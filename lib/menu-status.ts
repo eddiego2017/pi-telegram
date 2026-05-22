@@ -11,6 +11,7 @@ import {
 } from "./extension-sections.ts";
 import {
   formatStatusButtonLabel,
+  type TelegramMaybePromise,
   type TelegramMenuMessageRuntimeDeps,
   type TelegramMenuRenderPayload,
   type TelegramModelMenuState,
@@ -35,11 +36,11 @@ export interface TelegramStatusMenuCallbackDeps {
 export interface TelegramStatusMenuOpenDeps<
   TModel extends MenuModel = MenuModel,
 > {
-  isIdle: () => boolean;
+  isIdle: () => TelegramMaybePromise<boolean>;
   sendBusyMessage: () => Promise<void>;
   getModelMenuState: () => Promise<TelegramModelMenuState<TModel>>;
   buildStatusHtml: () => string;
-  getActiveModel: () => TModel | undefined;
+  getActiveModel: () => TelegramMaybePromise<TModel | undefined>;
   getThinkingLevel: () => ThinkingLevel;
   getQueueItemCount?: () => number;
   sendStatusMenu: (
@@ -103,7 +104,7 @@ export async function openTelegramStatusMenu<
   const messageId = await deps.sendStatusMenu(
     state,
     deps.buildStatusHtml(),
-    deps.getActiveModel(),
+    await deps.getActiveModel(),
     deps.getThinkingLevel(),
     deps.getQueueItemCount?.() ?? 0,
   );

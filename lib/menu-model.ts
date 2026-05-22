@@ -20,6 +20,8 @@ const TELEGRAM_MODEL_MENU_CACHE_TTL_MS = 5000;
 const TELEGRAM_MODEL_MENU_STATE_TTL_MS = 10 * 60 * 1000;
 const MAX_STORED_TELEGRAM_MODEL_MENUS = 50;
 
+export type TelegramMaybePromise<T> = T | Promise<T>;
+
 export type TelegramModelScope = "all" | "scoped";
 
 export interface TelegramModelMenuState<TModel extends MenuModel = MenuModel> {
@@ -118,7 +120,9 @@ export interface TelegramModelMenuStateBuilderDeps<
 > {
   runtime: TelegramModelMenuRuntime<TModel>;
   createSettingsManager: (cwd: string) => MenuSettingsManager;
-  getActiveModel: (ctx: TContext) => TModel | undefined;
+  getActiveModel: (
+    ctx: TContext,
+  ) => TelegramMaybePromise<TModel | undefined>;
 }
 
 export type TelegramReplyMarkup = TelegramInlineKeyboardMarkup;
@@ -151,7 +155,7 @@ export type TelegramModelMenuCallbackDeps<
   persistScopedModelPatterns?: (patterns: string[]) => Promise<void>;
   setModel: (model: TModel) => Promise<boolean>;
   setCurrentModel: (model: TModel) => void;
-  setThinkingLevel: (level: ThinkingLevel) => void;
+  setThinkingLevel: (level: ThinkingLevel) => TelegramMaybePromise<void>;
   stagePendingModelSwitch: (selection: ScopedTelegramModel<TModel>) => void;
   restartInterruptedTelegramTurn: (
     selection: ScopedTelegramModel<TModel>,
@@ -161,12 +165,12 @@ export type TelegramModelMenuCallbackDeps<
 export interface TelegramModelMenuOpenDeps<
   TModel extends MenuModel = MenuModel,
 > {
-  isIdle: () => boolean;
-  canOfferInFlightModelSwitch: () => boolean;
+  isIdle: () => TelegramMaybePromise<boolean>;
+  canOfferInFlightModelSwitch: () => TelegramMaybePromise<boolean>;
   sendBusyMessage: () => Promise<void>;
   sendNoModelsMessage: () => Promise<void>;
   getModelMenuState: () => Promise<TelegramModelMenuState<TModel>>;
-  getActiveModel: () => TModel | undefined;
+  getActiveModel: () => TelegramMaybePromise<TModel | undefined>;
   sendModelMenu: (
     state: TelegramModelMenuState<TModel>,
     activeModel: TModel | undefined,
@@ -461,7 +465,7 @@ export function createTelegramModelMenuStateBuilder<
     const settingsManager = deps.createSettingsManager(ctx.cwd);
     return deps.runtime.buildState({
       chatId,
-      activeModel: deps.getActiveModel(ctx),
+      activeModel: await deps.getActiveModel(ctx),
       ctx,
       reloadSettings: () => settingsManager.reload(),
       getConfiguredScopedModelPatterns: () =>
@@ -869,7 +873,10 @@ export function buildTelegramModelCallbackPlan<
 export async function openTelegramModelMenu<
   TModel extends MenuModel = MenuModel,
 >(deps: TelegramModelMenuOpenDeps<TModel>): Promise<void> {
-  if (!deps.isIdle() && !deps.canOfferInFlightModelSwitch()) {
+  if (
+    !(await deps.isIdle()) &&
+    !(await deps.canOfferInFlightModelSwitch())
+  ) {
     await deps.sendBusyMessage();
     return;
   }
@@ -878,7 +885,10 @@ export async function openTelegramModelMenu<
     await deps.sendNoModelsMessage();
     return;
   }
-  const messageId = await deps.sendModelMenu(state, deps.getActiveModel());
+  const messageId = await deps.sendModelMenu(
+    state,
+    await deps.getActiveModel(),
+  );
   if (messageId === undefined) return;
   state.messageId = messageId;
   state.mode = "model";
@@ -918,7 +928,7 @@ export async function handleTelegramModelMenuCallbackAction<
   }
   if (plan.kind === "refresh-status") {
     if (plan.shouldApplyThinkingLevel && plan.selection.thinkingLevel) {
-      deps.setThinkingLevel(plan.selection.thinkingLevel);
+      await deps.setThinkingLevel(plan.selection.thinkingLevel);
     }
     await deps.updateModelMenuMessage();
     await deps.answerCallbackQuery(callbackQueryId, plan.callbackText);
@@ -931,7 +941,7 @@ export async function handleTelegramModelMenuCallbackAction<
   }
   deps.setCurrentModel(plan.selection.model);
   if (plan.selection.thinkingLevel) {
-    deps.setThinkingLevel(plan.selection.thinkingLevel);
+    await deps.setThinkingLevel(plan.selection.thinkingLevel);
   }
   await deps.updateModelMenuMessage();
   if (plan.mode === "restart-after-tool") {

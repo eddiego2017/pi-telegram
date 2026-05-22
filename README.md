@@ -100,7 +100,7 @@ Use these inside the Telegram DM with your bot. The main entrypoint is `/start`:
 - **`/abort`**: Abort the active run without touching the queue.
 - **`/stop`**: Abort the active run and clear waiting Telegram queue items.
 
-Hidden compatibility shortcuts: `/help` and `/status` open the main application menu, `/model` opens model controls, `/thinking` opens reasoning controls, `/queue` opens queue controls, and `/settings` opens bridge settings.
+Hidden compatibility shortcuts: `/help` and `/status` open the main application menu, `/model` opens model controls, `/thinking` opens reasoning controls, `/queue` opens queue controls, and `/settings` opens bridge settings. When concurrent tabs are enabled, `/model` opens the active tab's model picker and applies model picks to that tab's child worker while the tab is idle.
 
 Prompt-template commands are discovered from π prompt templates, mapped to Telegram-safe aliases (`fix-tests.md` becomes `/fix_tests`), shown in `/start`, and expanded before queueing.
 
@@ -133,7 +133,7 @@ The menu is the primary way to inspect and mutate the queue. Reactions are an ex
 
 ### Concurrent tabs MVP
 
-Concurrent tabs are disabled by default. When `concurrentTabs.enabled` is true, normal Telegram prompts go to the active tab instead of the single-session queue. `/tab` commands stay parent-owned and responsive while workers run, and `/llm [tokens...]` switches the active tab's child model when that tab is idle. Each tab uses an isolated RPC child launched with `--no-extensions`, preventing a second Telegram poller from starting inside a worker. Inactive tabs collect output quietly and send a compact completion notice; switching back with `/tab <name>` shows the latest reply.
+Concurrent tabs are disabled by default. When `concurrentTabs.enabled` is true, normal Telegram prompts go to the active tab instead of the single-session queue. `/tab` commands stay parent-owned and responsive while workers run, and `/llm [tokens...]` plus `/model` switch the active tab's child model when that tab is idle. Each tab uses an isolated RPC child launched with `--no-extensions`, preventing a second Telegram poller from starting inside a worker. Inactive tabs collect output quietly and send a compact completion notice; switching back with `/tab <name>` shows the latest reply.
 
 ### Streaming and Telegram HTML rendering
 

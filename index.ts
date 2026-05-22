@@ -324,13 +324,25 @@ export default function (pi: Pi.ExtensionAPI) {
       getCommands,
       reservedCommandNames: Commands.TELEGRAM_RESERVED_COMMAND_NAMES,
     });
+  const tabAwareModelMenuPorts =
+    TabManager.createTelegramTabAwareModelMenuPorts<
+      Pi.ExtensionContext,
+      ActivePiModel
+    >({
+      tabManager,
+      getParentModel: currentModelRuntime.get,
+      findModel: Pi.findExtensionContextAvailableModel,
+      isParentIdle: isIdle,
+      canOfferParentInFlightModelSwitch:
+        modelSwitchController.canOfferInFlightSwitch,
+    });
   const menuActions = Menu.createTelegramMenuActionRuntimeWithStateBuilder<
     ActivePiModel,
     Pi.ExtensionContext
   >({
     runtime: modelMenuRuntime,
     createSettingsManager: Pi.createSettingsManager,
-    getActiveModel: currentModelRuntime.get,
+    getActiveModel: tabAwareModelMenuPorts.getActiveModel,
     getThinkingLevel,
     getQueueItemCount,
     buildStatusHtml: Commands.createTelegramAppMenuHtmlBuilder({
@@ -341,8 +353,9 @@ export default function (pi: Pi.ExtensionAPI) {
       getPromptTemplateCommands,
     }),
     storeModelMenuState: modelMenuRuntime.storeState,
-    isIdle,
-    canOfferInFlightModelSwitch: modelSwitchController.canOfferInFlightSwitch,
+    isIdle: tabAwareModelMenuPorts.canSwitchModel,
+    canOfferInFlightModelSwitch:
+      tabAwareModelMenuPorts.canOfferInFlightModelSwitch,
     sendTextReply,
     editInteractiveMessage,
     sendInteractiveMessage,
@@ -354,7 +367,7 @@ export default function (pi: Pi.ExtensionAPI) {
   const getQueueMenuState = Menu.createTelegramModelMenuStateBuilder({
     runtime: modelMenuRuntime,
     createSettingsManager: Pi.createSettingsManager,
-    getActiveModel: currentModelRuntime.get,
+    getActiveModel: tabAwareModelMenuPorts.getActiveModel,
   });
   const queueMenuRuntime = MenuQueue.createTelegramQueueMenuRuntime({
     telegramQueueStore,

@@ -23,6 +23,8 @@ export interface TelegramTabRecord {
   sessionFile?: string;
   sessionId?: string;
   sessionName?: string;
+  currentModel?: { provider: string; id: string };
+  currentThinkingLevel?: string;
   createdAt: number;
   lastUsedAt: number;
   status: TelegramTabStatus;

@@ -234,29 +234,65 @@ export function createTelegramInboundRouteRuntime<
     TModel
   >,
 ): Updates.TelegramUpdateRuntimeController<TContext, TUpdate> {
+  const getActiveMenuModel = async (
+    ctx: TContext,
+  ): Promise<TModel | undefined> => {
+    if (!deps.tabManager?.isEnabled()) {
+      return deps.currentModelRuntime.get(ctx);
+    }
+    const tabModel = await deps.tabManager.getActiveModel(ctx);
+    if (!tabModel) return undefined;
+    return (
+      deps.findActiveModelByIdentity(tabModel, ctx) ?? (tabModel as TModel)
+    );
+  };
+  const isMenuModelSwitchAllowed = (ctx: TContext): Promise<boolean> | boolean =>
+    deps.tabManager?.isEnabled()
+      ? deps.tabManager.canSwitchActiveModel(ctx)
+      : deps.isIdle(ctx);
   const menuCallbackHandler = Menu.createTelegramMenuCallbackHandlerForContext<
     TCallbackQuery,
     TContext,
     TModel
   >({
     getStoredModelMenuState: deps.modelMenuRuntime.getState,
-    getActiveModel: deps.currentModelRuntime.get,
+    getActiveModel: getActiveMenuModel,
     getThinkingLevel: deps.getThinkingLevel,
-    setThinkingLevel: deps.setThinkingLevel,
+    setThinkingLevel: async (level, ctx) => {
+      if (deps.tabManager?.isEnabled()) {
+        const changed = await deps.tabManager.setActiveThinkingLevel(level, ctx);
+        if (!changed) {
+          throw new Error("Thinking level is not available.");
+        }
+        return;
+      }
+      deps.setThinkingLevel(level);
+    },
     updateStatus: deps.updateStatus,
     updateModelMenuMessage: deps.menuActions.updateModelMenuMessage,
     updateThinkingMenuMessage: deps.menuActions.updateThinkingMenuMessage,
     updateStatusMessage: deps.menuActions.updateStatusMessage,
     updateSettingsMenuMessage: deps.updateSettingsMenuMessage,
     answerCallbackQuery: deps.answerCallbackQuery,
-    isIdle: deps.isIdle,
-    hasActiveTelegramTurn: deps.activeTurnRuntime.has,
-    hasAbortHandler: deps.bridgeRuntime.abort.hasHandler,
-    getActiveToolExecutions:
-      deps.bridgeRuntime.lifecycle.getActiveToolExecutions,
+    isIdle: isMenuModelSwitchAllowed,
+    hasActiveTelegramTurn: () =>
+      !deps.tabManager?.isEnabled() && deps.activeTurnRuntime.has(),
+    hasAbortHandler: () =>
+      !deps.tabManager?.isEnabled() && deps.bridgeRuntime.abort.hasHandler(),
+    getActiveToolExecutions: () =>
+      deps.tabManager?.isEnabled()
+        ? 0
+        : deps.bridgeRuntime.lifecycle.getActiveToolExecutions(),
     persistScopedModelPatterns: deps.persistScopedModelPatterns,
-    setModel: deps.setModel,
-    setCurrentModel: deps.currentModelRuntime.setCurrentModel,
+    setModel: async (model, ctx) =>
+      deps.tabManager?.isEnabled()
+        ? deps.tabManager.selectActiveModel(model, ctx)
+        : deps.setModel(model),
+    setCurrentModel: (model, ctx) => {
+      if (!deps.tabManager?.isEnabled()) {
+        deps.currentModelRuntime.setCurrentModel(model, ctx);
+      }
+    },
     stagePendingModelSwitch: deps.modelSwitchController.stagePendingSwitch,
     restartInterruptedTelegramTurn:
       deps.modelSwitchController.restartInterruptedTurn,
