@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` Active tab worker runs now show native Telegram `typing` chat actions while the child process is answering, and the typing loop stops when the tab finishes, exits, errors, is aborted, or is switched away.
 - `[Concurrent Tabs]` Raised the default concurrent tab limit from 4 to 10 and added `/tab rename [old-name] <new-name>` for renaming non-default tabs while preserving their worker session file and history.
 - `[Session Menu]` `/session` replay now resends image attachments when replayed messages retain local image paths in session history, including Telegram `[attachments]` sections, file-backed `type: "image"` content blocks, and hidden assistant `sendPhoto` tool calls whose visible confirmation arrives in the next agent message. Missing local files produce a replay warning instead of aborting the whole replay.
 - `[Tests]` Added `/session` replay regressions for image attachment extraction, hidden `sendPhoto` replay recovery, callback delivery ordering, and multipart upload failure fallback.

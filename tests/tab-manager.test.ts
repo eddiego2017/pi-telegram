@@ -318,6 +318,64 @@ test("Tab manager renames tabs without discarding session state", async () => {
   assert.match(replies.at(-1) ?? "", /Cannot rename default tab/);
 });
 
+test("Tab manager sends typing actions for the active running tab", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-typing-"));
+  const replies: string[] = [];
+  const typingActions: number[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 10,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionRoot: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+    sendTypingAction: async (chatId) => {
+      typingActions.push(chatId);
+    },
+    typingIntervalMs: 5,
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.dispatchPrompt(
+    {
+      chatId: 7,
+      replyToMessageId: 20,
+      content: [{ type: "text", text: "long A" }],
+    },
+    "ctx",
+  );
+  assert.deepEqual(typingActions, [7]);
+
+  await manager.handleCommand("new B", 1, 30, "ctx");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(typingActions, [7]);
+
+  await manager.handleCommand("A", 1, 40, "ctx");
+  assert.deepEqual(typingActions, [7, 7]);
+  backends.get("A")?.emit({
+    type: "agent_end",
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "done A" }] },
+    ],
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(typingActions, [7, 7]);
+  await manager.dispose();
+});
+
 test("Tab manager relays active worker thinking and tool call output", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-rendering-"));
   const textReplies: string[] = [];

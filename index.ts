@@ -269,6 +269,7 @@ export default function (pi: Pi.ExtensionAPI) {
       renderTelegramMessage: Replies.renderTelegramMessage,
       editRenderedMessage: replyTransport.editRenderedMessage,
     }),
+    sendTypingAction,
     recordRuntimeEvent,
   });
   const tabAwareSessionSnapshotPorts =
