@@ -37,6 +37,7 @@ export interface TelegramTabRecord {
 export type TelegramTabCommand =
   | { kind: "list" }
   | { kind: "new"; name: string }
+  | { kind: "rename"; oldName?: string; newName: string }
   | { kind: "switch"; name: string }
   | { kind: "close"; name: string; force: boolean }
   | { kind: "status"; name?: string }
@@ -53,6 +54,7 @@ const TELEGRAM_TAB_COMMAND_WORDS = new Set([
   "close",
   "list",
   "new",
+  "rename",
   "restart",
   "status",
   "switch",
@@ -172,6 +174,18 @@ export function parseTelegramTabCommand(args: string): TelegramTabCommand {
       if (!name) return { kind: "invalid", message: "Usage: /tab new <name>" };
       return { kind: "new", name };
     }
+    case "rename": {
+      if (tail.length === 1) {
+        return { kind: "rename", newName: tail[0]! };
+      }
+      if (tail.length === 2) {
+        return { kind: "rename", oldName: tail[0]!, newName: tail[1]! };
+      }
+      return {
+        kind: "invalid",
+        message: "Usage: /tab rename [old-name] <new-name>",
+      };
+    }
     case "switch": {
       const [name] = tail;
       if (!name) {
@@ -210,6 +224,7 @@ export function formatTelegramTabUsage(): string {
     "Usage:",
     "/tab",
     "/tab new <name>",
+    "/tab rename [old-name] <new-name>",
     "/tab <name>",
     "/tab close <name> [--force]",
     "/tab status [name]",

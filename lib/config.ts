@@ -145,7 +145,7 @@ export function normalizeTelegramConcurrentTabsConfig(
     Number.isInteger(config.maxTabs) &&
     config.maxTabs > 0
       ? config.maxTabs
-      : 4;
+      : 10;
   return {
     enabled: config?.enabled ?? false,
     maxTabs,

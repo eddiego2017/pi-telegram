@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` Raised the default concurrent tab limit from 4 to 10 and added `/tab rename [old-name] <new-name>` for renaming non-default tabs while preserving their worker session file and history.
+- `[Session Menu]` `/session` replay now resends image attachments when replayed messages retain local image paths in session history, including Telegram `[attachments]` sections, file-backed `type: "image"` content blocks, and hidden assistant `sendPhoto` tool calls whose visible confirmation arrives in the next agent message. Missing local files produce a replay warning instead of aborting the whole replay.
+- `[Tests]` Added `/session` replay regressions for image attachment extraction, hidden `sendPhoto` replay recovery, callback delivery ordering, and multipart upload failure fallback.
 - `[Concurrent Tabs]` `/session` and `/tree` now follow the active tab when `concurrentTabs.enabled` is true. `/session` reads the selected worker session for `Last 5 turns`, `Full replay`, and history pagination; `/tree` reads the selected worker prompt history in read-only mode until child-safe rewind and branch mutation are available.
 - `[Tests]` Extended active-tab regressions for worker session snapshots, `/session` replay/history callbacks, `/tree` active-tab history browsing, and read-only worker-tab tree rendering.
 - `[Concurrent Tabs]` Active tabs now stream worker answer text, thinking previews, assistant tool-call previews, and final Markdown replies from RPC events through the parent Telegram bridge while workers continue to run with `--no-extensions`.

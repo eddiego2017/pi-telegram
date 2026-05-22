@@ -5,7 +5,8 @@ This document is the short reset-safe handoff for concurrent `/tab` support in
 
 Status as of 2026-05-22: MVP plus active-tab `/llm`, `/model`, live answer
 text streaming, live thinking streaming, live tool-call preview streaming,
-Markdown final replies, and active-tab `/session`/`/tree` history browsing are
+Markdown final replies, active-tab `/session`/`/tree` history browsing,
+`/session` image replay, a 10-tab default limit, and `/tab rename` are
 implemented, tested, and deployed in the `pi` Kubernetes deployment.
 
 Last committed MVP baseline:
@@ -30,6 +31,8 @@ Current implementation also includes:
 
 ```text
 active-tab /session and /tree now read the selected tab worker session file
+/session replay re-uploads retained local images, including hidden sendPhoto tool calls
+default concurrent tab limit is 10 and /tab rename is available
 ```
 
 Implemented updates after the MVP baseline:
@@ -47,6 +50,12 @@ Implemented updates after the MVP baseline:
 - `/session` now opens the active tab's session snapshot when concurrent tabs
   are enabled, so `Last 5 turns`, `Full replay`, and `History` survive tab
   switching and read the selected worker's JSONL session file.
+- `/session` replay re-uploads local images recorded in Telegram attachments,
+  file-backed image blocks, and hidden assistant `sendPhoto` tool calls that
+  later produce a visible confirmation message.
+- The default `concurrentTabs.maxTabs` limit is now 10.
+- `/tab rename [old-name] <new-name>` renames non-default tabs while preserving
+  their session file/history.
 - `/tree` now opens the active tab's prompt history when concurrent tabs are
   enabled. It is read-only for worker tabs until child-safe tree navigation and
   branch mutation are implemented.
@@ -65,8 +74,12 @@ Implemented updates after the MVP baseline:
 - Active tab runs stream worker answer text, thinking content, and assistant
   tool-call previews again without loading full Telegram extensions in the
   worker.
+- Up to 10 concurrent tabs are allowed by default.
+- `/tab rename A B` renames tab A to B; `/tab rename B` renames the active tab.
 - `/session` history/replay controls show the active tab's conversation after
   `/tab <name>` switches.
+- `/session` replay sends retained image attachments back to Telegram, including
+  images originally sent by hidden `sendPhoto` tool calls.
 - `/tree` shows the active tab's prompt history after `/tab <name>` switches;
   rewind/branch mutation buttons are hidden or blocked for worker tabs.
 - `/tab close B` closes a tab and keeps its session file.
@@ -138,7 +151,7 @@ The pod currently uses this shape in `/home/pi/.pi/agent/telegram.json`:
 {
   "concurrentTabs": {
     "enabled": true,
-    "maxTabs": 4,
+    "maxTabs": 10,
     "inactiveNotify": true,
     "workerExtensions": [
       "/home/pi/.pi/agent/extensions/cpa-openai-proxy.ts",
@@ -266,7 +279,6 @@ Recommended order:
      ```
 
 2. Add tab UX polish.
-   - `/tab rename <old> <new>`
    - `/tab mute <name>`
    - `/tab watch <name>`
    - `/tab delete <name>` as a separate destructive action from `close`

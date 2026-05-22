@@ -19,6 +19,7 @@ import {
   buildTelegramSessionReplayTurns,
   buildTelegramSessionStats,
   createTelegramSessionMenuRuntime,
+  createTelegramSessionReplayAttachmentSender,
   formatTelegramSessionReplayMessage,
   handleTelegramSessionMenuCallback,
   type TelegramSessionSnapshot,
@@ -248,6 +249,111 @@ test("Session replay groups by user turns and hides tool/thinking noise", () => 
   );
 });
 
+test("Session replay keeps image attachments from session history", () => {
+  const branch: TelegramSessionSnapshot["branch"] = [
+    {
+      type: "message",
+      id: "u-image",
+      timestamp: "2026-05-18T00:00:00Z",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text:
+              "[telegram] look at this\n\n" +
+              "[attachments] /tmp/telegram\n" +
+              "- /demo.png\n" +
+              "- /notes.txt",
+          },
+          { type: "image", url: "file:///tmp/telegram/second.jpg", mimeType: "image/jpeg" },
+        ],
+      },
+    },
+  ];
+  const snapshot: TelegramSessionSnapshot = {
+    cwd: "/repo",
+    sessionId: "session-images",
+    entries: branch,
+    branch,
+  };
+
+  const plan = buildTelegramSessionReplayPlan(snapshot, "last5");
+  assert.equal(plan.messages.length, 1);
+  assert.equal(plan.messages[0]?.text, "look at this");
+  assert.deepEqual(plan.messages[0]?.attachments, [
+    { path: "/tmp/telegram/demo.png", fileName: "demo.png" },
+    { path: "/tmp/telegram/second.jpg", fileName: "second.jpg", mimeType: "image/jpeg" },
+  ]);
+});
+
+test("Session replay attaches hidden sendPhoto tool images to next agent message", () => {
+  const photoPath =
+    "/home/pi/.pi/agent/tmp/telegram/b5c7a1cc-075a-43d7-b40f-eb88bb605b3f-photo-2390.jpg";
+  const branch: TelegramSessionSnapshot["branch"] = [
+    {
+      type: "message",
+      id: "u-photo",
+      timestamp: "2026-05-22T10:27:55Z",
+      message: { role: "user", content: "[telegram] send SDAM-146 image" },
+    },
+    {
+      type: "message",
+      id: "a-hidden-photo-tool",
+      timestamp: "2026-05-22T10:28:01Z",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "hidden reasoning" },
+          {
+            type: "toolCall",
+            id: "tc-send-photo",
+            name: "bash",
+            arguments: {
+              command:
+                'curl -s -X POST "https://api.telegram.org/botTOKEN/sendPhoto" \\\n' +
+                "  -F chat_id=123 \\\n" +
+                `  -F photo=@${photoPath} \\\n` +
+                '  -F caption="SDAM-146 第二張圖"',
+            },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      id: "tool-send-photo",
+      timestamp: "2026-05-22T10:28:03Z",
+      message: { role: "toolResult", content: [{ type: "text", text: '{"ok":true}' }] },
+    },
+    {
+      type: "message",
+      id: "a-photo",
+      timestamp: "2026-05-22T10:28:07Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "已經 send 咗去你 Telegram 啦" }],
+      },
+    },
+  ];
+  const snapshot: TelegramSessionSnapshot = {
+    cwd: "/repo",
+    sessionId: "session-hidden-send-photo",
+    entries: branch,
+    branch,
+  };
+
+  const plan = buildTelegramSessionReplayPlan(snapshot, "last5");
+  assert.deepEqual(
+    plan.messages.map((message) => message.entryId),
+    ["u-photo", "a-photo"],
+  );
+  assert.equal(plan.messages[1]?.text, "已經 send 咗去你 Telegram 啦");
+  assert.deepEqual(plan.messages[1]?.attachments, [
+    { path: photoPath, fileName: "b5c7a1cc-075a-43d7-b40f-eb88bb605b3f-photo-2390.jpg" },
+  ]);
+});
+
 test("Session replay callback uses current snapshot and sends normal messages", async () => {
   const initial = makeSnapshot();
   const current: TelegramSessionSnapshot = {
@@ -296,6 +402,83 @@ test("Session replay callback uses current snapshot and sends normal messages", 
     "answer:Replaying 2 messages.",
     "Replay msg 2026-05-18 01:00 user\ncurrent prompt",
     "Replay msg 2026-05-18 01:00 agent\ncurrent answer",
+  ]);
+});
+
+test("Session replay callback sends image attachments after their text", async () => {
+  const snapshot: TelegramSessionSnapshot = {
+    cwd: "/repo",
+    sessionId: "session-current",
+    entries: [],
+    branch: [
+      {
+        type: "message",
+        id: "u-current",
+        timestamp: "2026-05-18T01:00:00Z",
+        message: {
+          role: "user",
+          content:
+            "[telegram] current prompt\n\n" +
+            "[attachments] /tmp/telegram\n" +
+            "- /demo.png",
+        },
+      },
+    ],
+  };
+  snapshot.entries = snapshot.branch;
+  const events: string[] = [];
+  const runtime = createTelegramSessionMenuRuntime<string>({
+    getSnapshot: () => snapshot,
+    sendInteractiveMessage: async () => 77,
+    editInteractiveMessage: async () => {},
+    sendReplayMessage: async (_chatId, _replyToMessageId, text) => {
+      events.push(`text:${text}`);
+      return 78;
+    },
+    sendReplayAttachment: async (_chatId, replyToMessageId, attachment) => {
+      events.push(`image:${replyToMessageId}:${attachment.path}:${attachment.fileName}`);
+      return 79;
+    },
+    answerCallbackQuery: async (_id, text) => {
+      events.push(`answer:${text ?? ""}`);
+    },
+  });
+
+  await runtime.openSessionMenu(7, 11, "ctx");
+  await runtime.handleCallbackQuery(
+    { id: "cb-replay", data: "session:replay:last5", message: { chat: { id: 7 }, message_id: 77 } },
+    "ctx",
+  );
+
+  assert.deepEqual(events, [
+    "answer:Replaying 1 message and 1 image.",
+    "text:Replay msg 2026-05-18 01:00 user\ncurrent prompt",
+    "image:78:/tmp/telegram/demo.png:demo.png",
+  ]);
+});
+
+test("Session replay attachment sender uploads photos and reports failures", async () => {
+  const events: string[] = [];
+  const sender = createTelegramSessionReplayAttachmentSender({
+    sendMultipart: async (method, fields, fileField, filePath, fileName) => {
+      events.push(`${method}:${fields.chat_id}:${fields.reply_parameters}:${fileField}:${filePath}:${fileName}`);
+      throw new Error("missing file");
+    },
+    sendTextReply: async (chatId, replyToMessageId, text) => {
+      events.push(`fallback:${chatId}:${replyToMessageId}:${text}`);
+      return 12;
+    },
+  });
+
+  const result = await sender(7, 77, {
+    path: "/tmp/telegram/demo.png",
+    fileName: "demo.png",
+  });
+
+  assert.equal(result, 12);
+  assert.deepEqual(events, [
+    'sendPhoto:7:{"message_id":77,"allow_sending_without_reply":true}:photo:/tmp/telegram/demo.png:demo.png',
+    "fallback:7:77:Failed to replay image demo.png: missing file",
   ]);
 });
 

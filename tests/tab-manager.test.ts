@@ -4,7 +4,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -253,6 +253,69 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
 
   await manager.handleCommand("abort A", 1, 50, "ctx");
   assert.deepEqual(backends.get("A")?.aborts, ["A"]);
+});
+
+test("Tab manager renames tabs without discarding session state", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-rename-"));
+  const replies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const statePath = join(tempDir, "tabs.json");
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 10,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionRoot: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.handleCommand("rename A Alpha", 1, 11, "ctx");
+  assert.match(replies.at(-1) ?? "", /Renamed tab A to Alpha/);
+  assert.deepEqual(manager.getActiveSessionReference("ctx"), {
+    tabName: "Alpha",
+    cwd: "/repo",
+    sessionFile: "/sessions/A.jsonl",
+    sessionId: "session-A",
+    sessionName: undefined,
+  });
+  await manager.dispatchPrompt(
+    {
+      chatId: 1,
+      replyToMessageId: 12,
+      content: [{ type: "text", text: "hello renamed tab" }],
+    },
+    "ctx",
+  );
+  assert.deepEqual(backends.get("A")?.prompts, ["hello renamed tab"]);
+  assert.match(replies.at(-1) ?? "", /Started tab Alpha/);
+
+  const saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    activeTab: string;
+    tabs: Record<string, unknown>;
+  };
+  assert.equal(saved.activeTab, "Alpha");
+  assert.equal(saved.tabs.A, undefined);
+  assert.ok(saved.tabs.Alpha);
+
+  await manager.handleCommand("rename Alpha", 1, 13, "ctx");
+  assert.match(replies.at(-1) ?? "", /already named Alpha/);
+  await manager.handleCommand("rename Alpha default", 1, 14, "ctx");
+  assert.match(replies.at(-1) ?? "", /Tab default already exists/);
+  await manager.handleCommand("rename default Other", 1, 15, "ctx");
+  assert.match(replies.at(-1) ?? "", /Cannot rename default tab/);
 });
 
 test("Tab manager relays active worker thinking and tool call output", async () => {

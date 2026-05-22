@@ -138,7 +138,7 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
 test("Telegram concurrent tabs config normalizes defaults and invalid limits", () => {
   assert.deepEqual(normalizeTelegramConcurrentTabsConfig(), {
     enabled: false,
-    maxTabs: 4,
+    maxTabs: 10,
     inactiveNotify: true,
     workerExtensions: [],
   });
@@ -151,7 +151,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     }),
     {
       enabled: true,
-      maxTabs: 4,
+      maxTabs: 10,
       inactiveNotify: false,
       workerExtensions: ["/agent/extensions/provider.ts"],
     },

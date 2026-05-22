@@ -49,6 +49,11 @@ export interface TelegramSessionContentBlock {
   name?: string;
   id?: string;
   arguments?: Record<string, unknown>;
+  data?: string;
+  mimeType?: string;
+  path?: string;
+  source?: string;
+  url?: string;
 }
 
 export interface TelegramSessionMessage {
@@ -102,11 +107,18 @@ export interface TelegramSessionHistoryItem {
 export type TelegramSessionReplayMode = "last5" | "full";
 export type TelegramSessionReplayRole = "user" | "agent" | "custom";
 
+export interface TelegramSessionReplayAttachment {
+  path: string;
+  fileName: string;
+  mimeType?: string;
+}
+
 export interface TelegramSessionReplayMessage {
   entryId: string;
   timestamp?: string;
   role: TelegramSessionReplayRole;
   text: string;
+  attachments: TelegramSessionReplayAttachment[];
 }
 
 export interface TelegramSessionReplayTurn {
@@ -237,6 +249,202 @@ function contentText(content: TelegramSessionMessage["content"]): string {
     .map((block) => block.text)
     .join("\n")
     .trim();
+}
+
+function fileNameFromPath(path: string): string {
+  const normalized = path.replace(/\\/g, "/").replace(/[?#].*$/, "");
+  return normalized.split("/").filter(Boolean).pop() || "image";
+}
+
+function joinAttachmentPath(baseDir: string | undefined, itemPath: string): string {
+  const trimmed = itemPath.trim();
+  if (baseDir) {
+    return `${baseDir.replace(/[\\/]+$/, "")}/${trimmed.replace(/^[\\/]+/, "")}`;
+  }
+  if (trimmed.startsWith("/") || /^[A-Za-z]:[\\/]/.test(trimmed)) {
+    return trimmed;
+  }
+  return trimmed;
+}
+
+function isReplayImagePath(path: string): boolean {
+  const normalized = path.replace(/[?#].*$/, "").toLowerCase();
+  return (
+    normalized.endsWith(".jpg") ||
+    normalized.endsWith(".jpeg") ||
+    normalized.endsWith(".png") ||
+    normalized.endsWith(".webp") ||
+    normalized.endsWith(".gif")
+  );
+}
+
+function normalizeReplayFileUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (!value.startsWith("file://")) {
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) return undefined;
+    return value;
+  }
+  try {
+    return decodeURIComponent(value.slice("file://".length));
+  } catch {
+    return value.slice("file://".length);
+  }
+}
+
+function splitReplayShellWords(command: string): string[] {
+  const words: string[] = [];
+  const normalized = command.replace(/\\\r?\n/g, " ");
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  for (let i = 0; i < normalized.length; i += 1) {
+    const char = normalized[i];
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+        continue;
+      }
+      if (quote === '"' && char === "\\") {
+        const next = normalized[i + 1];
+        if (next !== undefined) {
+          current += next;
+          i += 1;
+        }
+        continue;
+      }
+      current += char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        words.push(current);
+        current = "";
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "\\") {
+      const next = normalized[i + 1];
+      if (next !== undefined) {
+        current += next;
+        i += 1;
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) words.push(current);
+  return words;
+}
+
+function stripCurlFormFileOptions(path: string): string {
+  const optionIndex = path.search(/;(?=(?:type|filename|headers|encoder)=)/i);
+  return (optionIndex === -1 ? path : path.slice(0, optionIndex)).trim();
+}
+
+function parseReplaySendPhotoCommand(command: string): TelegramSessionReplayAttachment[] {
+  const attachments: TelegramSessionReplayAttachment[] = [];
+  if (!command.includes("sendPhoto")) return attachments;
+  const words = splitReplayShellWords(command);
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    let formValue: string | undefined;
+    if (word === "-F" || word === "--form" || word === "--form-string") {
+      formValue = words[i + 1];
+      i += 1;
+    } else if (word.startsWith("-F") && word.length > 2) {
+      formValue = word.slice(2);
+    } else if (word.startsWith("--form=")) {
+      formValue = word.slice("--form=".length);
+    }
+    const photoPath = formValue?.match(/^photo=@(.+)$/)?.[1];
+    if (!photoPath) continue;
+    const path = stripCurlFormFileOptions(photoPath);
+    if (!path || !isReplayImagePath(path)) continue;
+    attachments.push({ path, fileName: fileNameFromPath(path) });
+  }
+  return attachments;
+}
+
+function parseReplayAttachmentSection(text: string): TelegramSessionReplayAttachment[] {
+  const attachments: TelegramSessionReplayAttachment[] = [];
+  let readingAttachments = false;
+  let attachmentDir: string | undefined;
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    const attachmentMatch = trimmed.match(/^\[attachments\](?:\s+(.+))?$/i);
+    if (attachmentMatch) {
+      readingAttachments = true;
+      attachmentDir = attachmentMatch[1]?.trim();
+      continue;
+    }
+    if (readingAttachments && /^\[[^\]]+\](?:\s+.*)?$/i.test(trimmed)) break;
+    if (!readingAttachments) continue;
+    const itemPath = trimmed.match(/^- (.+)$/)?.[1]?.trim();
+    if (!itemPath) continue;
+    const path = joinAttachmentPath(attachmentDir, itemPath);
+    if (!isReplayImagePath(path)) continue;
+    attachments.push({ path, fileName: fileNameFromPath(path) });
+  }
+  return attachments;
+}
+
+function replayAttachmentFromImageBlock(
+  block: TelegramSessionContentBlock,
+): TelegramSessionReplayAttachment | undefined {
+  if (block.type !== "image") return undefined;
+  const path =
+    block.path ??
+    normalizeReplayFileUrl(block.url) ??
+    normalizeReplayFileUrl(block.source);
+  if (!path) return undefined;
+  const isImageMime = block.mimeType?.toLowerCase().startsWith("image/") ?? false;
+  if (!isImageMime && !isReplayImagePath(path)) return undefined;
+  return { path, fileName: fileNameFromPath(path), mimeType: block.mimeType };
+}
+
+function replayAttachmentsFromContent(
+  content: TelegramSessionMessage["content"],
+): TelegramSessionReplayAttachment[] {
+  const attachments: TelegramSessionReplayAttachment[] = [];
+  const seen = new Set<string>();
+  const add = (attachment: TelegramSessionReplayAttachment) => {
+    if (seen.has(attachment.path)) return;
+    seen.add(attachment.path);
+    attachments.push(attachment);
+  };
+  if (typeof content === "string") {
+    parseReplayAttachmentSection(content).forEach(add);
+    return attachments;
+  }
+  if (!Array.isArray(content)) return attachments;
+  for (const block of content) {
+    if (block?.type === "text" && typeof block.text === "string") {
+      parseReplayAttachmentSection(block.text).forEach(add);
+      continue;
+    }
+    if (block?.type === "toolCall" && typeof block.arguments?.command === "string") {
+      parseReplaySendPhotoCommand(block.arguments.command).forEach(add);
+      continue;
+    }
+    const imageAttachment = replayAttachmentFromImageBlock(block);
+    if (imageAttachment) add(imageAttachment);
+  }
+  return attachments;
+}
+
+function appendReplayAttachments(
+  target: TelegramSessionReplayAttachment[],
+  attachments: readonly TelegramSessionReplayAttachment[],
+): void {
+  const seen = new Set(target.map((attachment) => attachment.path));
+  for (const attachment of attachments) {
+    if (seen.has(attachment.path)) continue;
+    seen.add(attachment.path);
+    target.push(attachment);
+  }
 }
 
 function countToolCalls(message: TelegramSessionMessage | undefined): number {
@@ -374,6 +582,7 @@ function replayMessageFromEntry(
         timestamp: entry.timestamp,
         role: "user",
         text: text || "(empty user message)",
+        attachments: replayAttachmentsFromContent(message.content),
       };
     }
     if (message.role === "assistant") {
@@ -384,6 +593,7 @@ function replayMessageFromEntry(
         timestamp: entry.timestamp,
         role: "agent",
         text,
+        attachments: replayAttachmentsFromContent(message.content),
       };
     }
     return undefined;
@@ -396,6 +606,7 @@ function replayMessageFromEntry(
       timestamp: entry.timestamp,
       role: "custom",
       text,
+      attachments: replayAttachmentsFromContent(entry.content),
     };
   }
   return undefined;
@@ -406,13 +617,27 @@ export function buildTelegramSessionReplayTurns(
 ): TelegramSessionReplayTurn[] {
   const turns: TelegramSessionReplayTurn[] = [];
   let current: TelegramSessionReplayTurn | undefined;
+  let pendingAssistantAttachments: TelegramSessionReplayAttachment[] = [];
   for (const entry of snapshot.branch) {
     const message = replayMessageFromEntry(entry);
-    if (!message) continue;
+    if (!message) {
+      if (entry.type === "message" && entry.message?.role === "assistant") {
+        appendReplayAttachments(
+          pendingAssistantAttachments,
+          replayAttachmentsFromContent(entry.message.content),
+        );
+      }
+      continue;
+    }
     if (message.role === "user") {
+      pendingAssistantAttachments = [];
       current = { user: message, messages: [message] };
       turns.push(current);
       continue;
+    }
+    if (message.role === "agent" && pendingAssistantAttachments.length > 0) {
+      appendReplayAttachments(message.attachments, pendingAssistantAttachments);
+      pendingAssistantAttachments = [];
     }
     if (current) current.messages.push(message);
   }
@@ -453,6 +678,20 @@ export function buildTelegramSessionReplayPlan(
     capped,
     cap: TELEGRAM_SESSION_REPLAY_FULL_MESSAGE_CAP,
   };
+}
+
+function countReplayAttachments(
+  messages: readonly TelegramSessionReplayMessage[],
+): number {
+  return messages.reduce((sum, message) => sum + message.attachments.length, 0);
+}
+
+function formatReplayAnswerText(plan: TelegramSessionReplayPlan): string {
+  const messageCount = plan.messages.length;
+  const attachmentCount = countReplayAttachments(plan.messages);
+  const messageText = `${messageCount} message${messageCount === 1 ? "" : "s"}`;
+  if (attachmentCount === 0) return `Replaying ${messageText}.`;
+  return `Replaying ${messageText} and ${attachmentCount} image${attachmentCount === 1 ? "" : "s"}.`;
 }
 
 function formatReplayTimestamp(timestamp: string | undefined): string {
@@ -811,6 +1050,64 @@ export interface TelegramSessionMenuCallbackQuery {
   message?: { chat?: { id?: number }; message_id?: number };
 }
 
+export interface TelegramSessionReplayAttachmentSenderDeps {
+  sendMultipart: (
+    method: string,
+    fields: Record<string, string>,
+    fileField: string,
+    filePath: string,
+    fileName: string,
+  ) => Promise<unknown>;
+  sendTextReply?: (
+    chatId: number,
+    replyToMessageId: number | undefined,
+    text: string,
+  ) => Promise<number | undefined>;
+}
+
+export function createTelegramSessionReplayAttachmentSender(
+  deps: TelegramSessionReplayAttachmentSenderDeps,
+): (
+  chatId: number,
+  replyToMessageId: number | undefined,
+  attachment: TelegramSessionReplayAttachment,
+) => Promise<number | undefined> {
+  return async function sendTelegramSessionReplayAttachment(
+    chatId,
+    replyToMessageId,
+    attachment,
+  ) {
+    const replyParameters =
+      replyToMessageId === undefined
+        ? undefined
+        : JSON.stringify({
+            message_id: replyToMessageId,
+            allow_sending_without_reply: true,
+          });
+    try {
+      await deps.sendMultipart(
+        "sendPhoto",
+        {
+          chat_id: String(chatId),
+          ...(replyParameters ? { reply_parameters: replyParameters } : {}),
+        },
+        "photo",
+        attachment.path,
+        attachment.fileName,
+      );
+      return undefined;
+    } catch (error) {
+      if (!deps.sendTextReply) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      return deps.sendTextReply(
+        chatId,
+        replyToMessageId,
+        `Failed to replay image ${attachment.fileName}: ${message}`,
+      );
+    }
+  };
+}
+
 export interface TelegramSessionMenuCallbackDeps {
   getState: (messageId: number | undefined) => TelegramSessionMenuState | undefined;
   setState: (state: TelegramSessionMenuState) => void;
@@ -826,6 +1123,11 @@ export interface TelegramSessionMenuCallbackDeps {
     chatId: number,
     replyToMessageId: number | undefined,
     text: string,
+  ) => Promise<number | undefined>;
+  sendReplayAttachment?: (
+    chatId: number,
+    replyToMessageId: number | undefined,
+    attachment: TelegramSessionReplayAttachment,
   ) => Promise<number | undefined>;
   answerCallbackQuery: (
     callbackQueryId: string,
@@ -937,7 +1239,7 @@ async function handleTelegramSessionMenuCallbackUnsafe(
     }
     await deps.answerCallbackQuery(
       query.id,
-      `Replaying ${plan.messages.length} message${plan.messages.length === 1 ? "" : "s"}.`,
+      formatReplayAnswerText(plan),
     );
     if (plan.capped) {
       await deps.sendReplayMessage(
@@ -947,11 +1249,16 @@ async function handleTelegramSessionMenuCallbackUnsafe(
       );
     }
     for (const message of plan.messages) {
-      await deps.sendReplayMessage(
+      const replayMessageId = await deps.sendReplayMessage(
         chatId,
         undefined,
         formatTelegramSessionReplayMessage(message),
       );
+      if (deps.sendReplayAttachment) {
+        for (const attachment of message.attachments) {
+          await deps.sendReplayAttachment(chatId, replayMessageId, attachment);
+        }
+      }
     }
     return true;
   }
@@ -1124,6 +1431,11 @@ export interface TelegramSessionMenuRuntimeDeps<TContext> {
     replyToMessageId: number | undefined,
     text: string,
   ) => Promise<number | undefined>;
+  sendReplayAttachment?: (
+    chatId: number,
+    replyToMessageId: number | undefined,
+    attachment: TelegramSessionReplayAttachment,
+  ) => Promise<number | undefined>;
   answerCallbackQuery: (
     callbackQueryId: string,
     text?: string,
@@ -1160,6 +1472,7 @@ export function createTelegramSessionMenuRuntime<TContext>(
         editSessionMessage: (chatId, messageId, text, replyMarkup) =>
           deps.editInteractiveMessage(chatId, messageId, text, "html", replyMarkup),
         sendReplayMessage: deps.sendReplayMessage,
+        sendReplayAttachment: deps.sendReplayAttachment,
         answerCallbackQuery: deps.answerCallbackQuery,
         injectDeleteCurrentSession: deps.injectDeleteCurrentSession,
       });

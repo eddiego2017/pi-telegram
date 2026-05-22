@@ -254,6 +254,11 @@ export default function (pi: Pi.ExtensionAPI) {
       getHandlers: configStore.getOutboundHandlers,
       recordRuntimeEvent,
     });
+  const sendSessionReplayAttachment =
+    MenuSession.createTelegramSessionReplayAttachmentSender({
+      sendMultipart: callMultipart,
+      sendTextReply,
+    });
   const tabManager = TabManager.createTelegramTabManager<Pi.ExtensionContext>({
     getConfig: getConcurrentTabsConfig,
     getCwd: Pi.getExtensionContextCwd,
@@ -424,6 +429,7 @@ export default function (pi: Pi.ExtensionAPI) {
     sendInteractiveMessage,
     editInteractiveMessage,
     sendReplayMessage: sendMarkdownReply,
+    sendReplayAttachment: sendSessionReplayAttachment,
     answerCallbackQuery,
     injectDeleteCurrentSession: injectDeleteCurrentSessionExec,
   });

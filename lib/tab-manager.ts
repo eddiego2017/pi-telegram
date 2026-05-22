@@ -1220,6 +1220,62 @@ export function createTelegramTabManager<TContext>(
         `Switched to tab ${name}.${latest}`,
       );
     },
+    rename: async (
+      tabState: TelegramTabsState,
+      oldName: string | undefined,
+      newName: string,
+      chatId: number,
+      replyToMessageId: number,
+    ) => {
+      const sourceName = oldName ?? tabState.activeTab;
+      if (sourceName === TELEGRAM_DEFAULT_TAB_NAME) {
+        await deps.sendTextReply(chatId, replyToMessageId, "Cannot rename default tab.");
+        return;
+      }
+      const runtime = getRuntime(tabState, sourceName);
+      if (!runtime) {
+        await deps.sendTextReply(chatId, replyToMessageId, `Unknown tab: ${sourceName}`);
+        return;
+      }
+      const validationError = validateTelegramTabName(newName);
+      if (validationError) {
+        await deps.sendTextReply(chatId, replyToMessageId, validationError);
+        return;
+      }
+      if (newName === sourceName) {
+        await deps.sendTextReply(chatId, replyToMessageId, `Tab ${sourceName} is already named ${newName}.`);
+        return;
+      }
+      if (tabState.tabs[newName]) {
+        await deps.sendTextReply(chatId, replyToMessageId, `Tab ${newName} already exists.`);
+        return;
+      }
+      const conflict = Object.keys(tabState.tabs).find(
+        (existing) =>
+          existing !== sourceName && existing.toLowerCase() === newName.toLowerCase(),
+      );
+      if (conflict) {
+        await deps.sendTextReply(
+          chatId,
+          replyToMessageId,
+          `Tab ${conflict} already exists with different case.`,
+        );
+        return;
+      }
+      delete tabState.tabs[sourceName];
+      runtime.record.name = newName;
+      runtime.record.lastUsedAt = now();
+      tabState.tabs[newName] = runtime.record;
+      if (tabState.activeTab === sourceName) tabState.activeTab = newName;
+      runtimeTabs.delete(sourceName);
+      runtimeTabs.set(newName, runtime);
+      await persist();
+      await deps.sendTextReply(
+        chatId,
+        replyToMessageId,
+        `Renamed tab ${sourceName} to ${newName}.`,
+      );
+    },
     close: async (
       tabState: TelegramTabsState,
       name: string,
@@ -1431,6 +1487,9 @@ export function createTelegramTabManager<TContext>(
           return true;
         case "switch":
           await commandHandlers.switch(tabState, command.name, chatId, replyToMessageId);
+          return true;
+        case "rename":
+          await commandHandlers.rename(tabState, command.oldName, command.newName, chatId, replyToMessageId);
           return true;
         case "close":
           await commandHandlers.close(tabState, command.name, command.force, chatId, replyToMessageId);

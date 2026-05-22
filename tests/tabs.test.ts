@@ -35,6 +35,15 @@ test("Tab command parser handles MVP command forms", () => {
   assert.deepEqual(parseTelegramTabCommand(""), { kind: "list" });
   assert.deepEqual(parseTelegramTabCommand("list"), { kind: "list" });
   assert.deepEqual(parseTelegramTabCommand("new A"), { kind: "new", name: "A" });
+  assert.deepEqual(parseTelegramTabCommand("rename B"), {
+    kind: "rename",
+    newName: "B",
+  });
+  assert.deepEqual(parseTelegramTabCommand("rename A B"), {
+    kind: "rename",
+    oldName: "A",
+    newName: "B",
+  });
   assert.deepEqual(parseTelegramTabCommand("A"), { kind: "switch", name: "A" });
   assert.deepEqual(parseTelegramTabCommand("switch A"), {
     kind: "switch",
@@ -57,6 +66,10 @@ test("Tab command parser handles MVP command forms", () => {
   assert.deepEqual(parseTelegramTabCommand("new"), {
     kind: "invalid",
     message: "Usage: /tab new <name>",
+  });
+  assert.deepEqual(parseTelegramTabCommand("rename"), {
+    kind: "invalid",
+    message: "Usage: /tab rename [old-name] <new-name>",
   });
 });
 
