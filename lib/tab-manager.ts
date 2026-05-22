@@ -112,6 +112,7 @@ interface RuntimeTab {
   backend?: TelegramTabBackend;
   unreadEvents: number;
   activeBuffer: string;
+  textStream?: TelegramTabStreamState;
   thinkingBuffers: Map<number, string>;
   thinkingStreams: Map<number, TelegramTabStreamState>;
   toolCallStreams: Map<number, TelegramTabStreamState>;
@@ -345,6 +346,10 @@ function clearTelegramTabStreamState(stream: TelegramTabStreamState): void {
 
 function resetRuntimeTurnBuffers(runtime: RuntimeTab): void {
   runtime.activeBuffer = "";
+  if (runtime.textStream) {
+    clearTelegramTabStreamState(runtime.textStream);
+    runtime.textStream = undefined;
+  }
   runtime.thinkingBuffers.clear();
   for (const stream of runtime.thinkingStreams.values()) {
     clearTelegramTabStreamState(stream);
@@ -413,6 +418,29 @@ function getRpcAssistantThinkingEnd(
 function getAgentMessageContent(message: unknown): unknown[] {
   const raw = getRecord(message)?.content;
   return Array.isArray(raw) ? raw : [];
+}
+
+function appendTelegramTabTextBlock(current: string, text: string): string {
+  if (!text) return current;
+  if (!current) return text;
+  const separator = current.endsWith("\n\n")
+    ? ""
+    : current.endsWith("\n")
+      ? "\n"
+      : "\n\n";
+  return `${current}${separator}${text}`;
+}
+
+function extractAgentBodyText(message: unknown): string {
+  let result = "";
+  for (const block of getAgentMessageContent(message)) {
+    const raw = getRecord(block);
+    if (!raw || raw.type !== "text" || typeof raw.text !== "string") {
+      continue;
+    }
+    result = appendTelegramTabTextBlock(result, raw.text);
+  }
+  return result.trim();
 }
 
 function extractAgentThinkingBlocks(
@@ -622,6 +650,10 @@ export function createTelegramTabManager<TContext>(
     }
     return stream;
   };
+  const getTextStreamState = (runtime: RuntimeTab): TelegramTabStreamState => {
+    runtime.textStream ??= createStreamState();
+    return runtime.textStream;
+  };
   const flushTabStreamMarkdown = async (
     runtime: RuntimeTab,
     stream: TelegramTabStreamState,
@@ -702,10 +734,33 @@ export function createTelegramTabManager<TContext>(
     stream: TelegramTabStreamState,
     markdown: string,
     force = false,
+    truncate = true,
   ): void => {
     if (tabState.activeTab !== tabName) return;
-    stream.markdown = truncateTelegramTabStreamMarkdown(markdown);
+    stream.markdown = truncate
+      ? truncateTelegramTabStreamMarkdown(markdown)
+      : markdown.trim();
     scheduleTabStreamMarkdownFlush(runtime, stream, force);
+  };
+  const streamActiveTabText = (
+    tabState: TelegramTabsState,
+    tabName: string,
+    runtime: RuntimeTab,
+    text: string,
+    force = false,
+  ): boolean => {
+    const trimmed = text.trim();
+    if (!trimmed || tabState.activeTab !== tabName) return false;
+    streamActiveTabMarkdown(
+      tabState,
+      tabName,
+      runtime,
+      getTextStreamState(runtime),
+      trimmed,
+      force,
+      !force,
+    );
+    return true;
   };
   const streamActiveTabThinking = (
     tabState: TelegramTabsState,
@@ -789,8 +844,16 @@ export function createTelegramTabManager<TContext>(
       void persist();
       return;
     }
+    if (event.type === "message_start") {
+      runtime.activeBuffer = "";
+      runtime.textStream = undefined;
+      return;
+    }
     const delta = extractRpcTextDelta(event);
-    if (delta) runtime.activeBuffer += delta;
+    if (delta) {
+      runtime.activeBuffer += delta;
+      streamActiveTabText(tabState, tabName, runtime, runtime.activeBuffer);
+    }
     const thinkingDelta = getRpcAssistantThinkingDelta(event);
     if (thinkingDelta) {
       const nextThinkingText = `${runtime.thinkingBuffers.get(thinkingDelta.index) ?? ""}${
@@ -829,6 +892,11 @@ export function createTelegramTabManager<TContext>(
     const assistantText = extractRpcAssistantText(event);
     if (assistantText) record.lastAssistantText = assistantText;
     if (event.type === "message_end" && isAssistantAgentMessage(event.message)) {
+      const finalBodyText = extractAgentBodyText(event.message);
+      if (runtime.textStream && finalBodyText) {
+        runtime.activeBuffer = finalBodyText;
+        streamActiveTabText(tabState, tabName, runtime, finalBodyText, true);
+      }
       for (const thinking of extractAgentThinkingBlocks(event.message)) {
         streamActiveTabThinking(
           tabState,
@@ -872,7 +940,19 @@ export function createTelegramTabManager<TContext>(
         record.lastAssistantText = runtime.activeBuffer;
       }
       const isActive = tabState.activeTab === tabName;
-      if (isActive && record.lastAssistantText && !finalAlreadySentAsToolCall) {
+      const finalBodyText = latestAssistant
+        ? extractAgentBodyText(latestAssistant)
+        : runtime.activeBuffer;
+      const finalAlreadyStreamedAsText =
+        runtime.textStream !== undefined && finalBodyText
+          ? streamActiveTabText(tabState, tabName, runtime, finalBodyText, true)
+          : false;
+      if (
+        isActive &&
+        record.lastAssistantText &&
+        !finalAlreadySentAsToolCall &&
+        !finalAlreadyStreamedAsText
+      ) {
         void sendTabMarkdownReply(
           runtime.activeChatId,
           runtime.activeReplyToMessageId,

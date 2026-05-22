@@ -393,6 +393,28 @@ test("Tab manager relays active worker thinking and tool call output", async () 
   await waitForTabStreamFlush();
 
   backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "text_delta",
+      contentIndex: 2,
+      delta: "I'll check ",
+    },
+  });
+  await waitForTabStreamFlush();
+  assert.equal(streamReplies.at(-1), "I'll check");
+
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "text_delta",
+      contentIndex: 2,
+      delta: "the working directory",
+    },
+  });
+  await waitForTabStreamFlush();
+  assert.match(streamEdits.at(-1) ?? "", /103:I'll check the working directory/);
+
+  backend.emit({
     type: "message_end",
     message: {
       role: "assistant",
@@ -408,6 +430,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       ],
     },
   });
+  await waitForTabStreamFlush();
   assert.equal(
     [...streamReplies, ...streamEdits, ...markdownReplies].filter((reply) =>
       reply.includes("I should inspect the repo."),
@@ -420,6 +443,19 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       reply.includes("🔧 `bash`"),
     ).length >= 2,
   );
+  assert.equal(
+    markdownReplies.some((reply) => reply.includes("I'll check")),
+    false,
+  );
+  assert.match(streamEdits.at(-1) ?? "", /103:I'll check the working directory\./);
+
+  backend.emit({
+    type: "message_start",
+    message: {
+      role: "assistant",
+      content: [],
+    },
+  });
 
   backend.emit({
     type: "agent_end",
