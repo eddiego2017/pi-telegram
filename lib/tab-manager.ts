@@ -94,6 +94,12 @@ export interface TelegramTabResumeSessionScope {
   currentSessionFile?: string;
 }
 
+export interface TelegramTabAbortResult {
+  tabName: string;
+  aborted: boolean;
+  message: string;
+}
+
 export interface TelegramTabManagerDeps<TContext> {
   getConfig: () => Required<TelegramConcurrentTabsConfig>;
   getCwd: (ctx: TContext) => string;
@@ -234,6 +240,7 @@ export interface TelegramTabManager<TContext> {
   newActiveSession: (
     ctx: TContext,
   ) => Promise<{ cancelled: boolean } | undefined>;
+  abortActive: (ctx: TContext) => Promise<TelegramTabAbortResult | undefined>;
   switchSession: (
     sessionPath: string,
     ctx: TContext,
@@ -1805,23 +1812,37 @@ export function createTelegramTabManager<TContext>(
         formatTelegramTabStatus(runtime.record, runtime.unreadEvents, now()),
       );
     },
+    abortRuntime: async (
+      tabState: TelegramTabsState,
+      name: string | undefined,
+    ): Promise<TelegramTabAbortResult> => {
+      const targetName = name ?? tabState.activeTab;
+      const runtime = getRuntime(tabState, targetName);
+      if (!runtime?.backend) {
+        return {
+          tabName: targetName,
+          aborted: false,
+          message: `No active worker for tab ${targetName}.`,
+        };
+      }
+      await runtime.backend.abort();
+      stopTabTyping(runtime);
+      runtime.record.status = "idle";
+      await persist();
+      return {
+        tabName: targetName,
+        aborted: true,
+        message: `Aborted tab ${targetName}.`,
+      };
+    },
     abort: async (
       tabState: TelegramTabsState,
       name: string | undefined,
       chatId: number,
       replyToMessageId: number,
     ) => {
-      const targetName = name ?? tabState.activeTab;
-      const runtime = getRuntime(tabState, targetName);
-      if (!runtime?.backend) {
-        await deps.sendTextReply(chatId, replyToMessageId, `No active worker for tab ${targetName}.`);
-        return;
-      }
-      await runtime.backend.abort();
-      stopTabTyping(runtime);
-      runtime.record.status = "idle";
-      await persist();
-      await deps.sendTextReply(chatId, replyToMessageId, `Aborted tab ${targetName}.`);
+      const result = await commandHandlers.abortRuntime(tabState, name);
+      await deps.sendTextReply(chatId, replyToMessageId, result.message);
     },
     restart: async (
       tabState: TelegramTabsState,
@@ -2030,6 +2051,11 @@ export function createTelegramTabManager<TContext>(
         await persist();
         throw error;
       }
+    },
+    abortActive: async (ctx) => {
+      if (!isEnabled()) return undefined;
+      const tabState = await ensureState(deps.getCwd(ctx));
+      return commandHandlers.abortRuntime(tabState, undefined);
     },
     switchSession: async (sessionPath, ctx, scope) => {
       if (!isEnabled() || scope?.kind !== "tab" || !scope.tabName) {

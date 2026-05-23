@@ -1420,6 +1420,95 @@ test("Command runtime routes commands through runtime ports", async () => {
   ]);
 });
 
+test("Command runtime routes abort and stop to the active tab when available", async () => {
+  const events: string[] = [];
+  const message = { chat: { id: 42 }, message_id: 99 };
+  let queuedCount = 2;
+  const handleCommand = createTelegramCommandHandler<
+    typeof message,
+    { id: string }
+  >({
+    hasAbortHandler: () => {
+      events.push("parent-has-abort");
+      return true;
+    },
+    clearPendingModelSwitch: () => {
+      events.push("clear-switch");
+    },
+    hasQueuedTelegramItems: () => queuedCount > 0,
+    clearQueuedTelegramItems: () => {
+      events.push("clear-queue");
+      const count = queuedCount;
+      queuedCount = 0;
+      return count;
+    },
+    setPreserveQueuedTurnsAsHistory: (preserve) => {
+      events.push(`preserve:${preserve}`);
+    },
+    abortCurrentTurn: () => {
+      events.push("parent-abort");
+    },
+    isIdle: () => false,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    isCompactionInProgress: () => false,
+    setCompactionInProgress: () => undefined,
+    updateStatus: () => {
+      events.push("status");
+    },
+    dispatchNextQueuedTelegramTurn: () => undefined,
+    enqueueContinueTurn: async () => undefined,
+    compact: () => undefined,
+    queueReloadRuntimeCommand: () => undefined,
+    injectNewSession: async () => true,
+    injectClone: async () => undefined,
+    abortActiveTab: async () => {
+      events.push("tab-abort");
+      return { aborted: true, message: "Aborted tab A." };
+    },
+    enqueueControlItem: () => undefined,
+    showStatus: async () => undefined,
+    openModelMenu: async () => undefined,
+    listAvailableModels: () => [],
+    isModelSwitchAllowed: () => true,
+    selectLlmModel: async () => true,
+    openThinkingMenu: async () => undefined,
+    openQueueMenu: async () => undefined,
+    openResumeMenu: async () => undefined,
+    openSessionMenu: async () => undefined,
+    openTreeMenu: async () => undefined,
+    openDumpMenu: async () => undefined,
+    getSessionName: () => undefined,
+    setSessionName: () => undefined,
+    getAllowedUserId: () => 7,
+    setAllowedUserId: () => undefined,
+    registerBotCommands: async () => undefined,
+    persistConfig: async () => undefined,
+    sendTextReply: async (_message, text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
+  assert.equal(await handleCommand("abort", "", message, { id: "ctx" }), true);
+  queuedCount = 2;
+  assert.equal(await handleCommand("stop", "", message, { id: "ctx" }), true);
+
+  assert.deepEqual(events, [
+    "tab-abort",
+    "clear-switch",
+    "preserve:true",
+    "status",
+    "reply:Aborted tab A.",
+    "tab-abort",
+    "clear-switch",
+    "clear-queue",
+    "preserve:false",
+    "status",
+    "reply:Aborted tab A. Cleared 2 queued turns.",
+  ]);
+});
+
 test("Command or prompt runtime routes commands before enqueue fallback", async () => {
   const events: string[] = [];
   const runtime = createTelegramCommandOrPromptRuntime<

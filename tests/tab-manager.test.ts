@@ -155,6 +155,7 @@ function makeResumePortTabManager(
     setActiveThinkingLevel: async () => true,
     setActiveSessionName: async () => true,
     newActiveSession: async () => undefined,
+    abortActive: async () => undefined,
     switchSession: async () => false,
     handleCommand: async () => false,
     handleCallbackQuery: async () => false,

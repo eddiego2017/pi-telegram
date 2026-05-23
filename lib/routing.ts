@@ -475,6 +475,9 @@ export function createTelegramInboundRouteRuntime<
     },
     injectNewSession: deps.injectNewSession,
     injectClone: deps.injectClone,
+    abortActiveTab: deps.tabManager
+      ? async (ctx) => deps.tabManager?.abortActive(ctx)
+      : undefined,
     getSessionName: deps.getSessionName,
     setSessionName: deps.setSessionName,
     allocateItemOrder: deps.bridgeRuntime.queue.allocateItemOrder,

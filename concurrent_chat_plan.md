@@ -12,16 +12,18 @@ under `~/.pi/agent/telegram-tabs/sessions/<tab>`. Sessions are shared by cwd,
 as they were before `/tab`; each tab only keeps a pointer to the active shared
 session file.
 
-Implementation status as of 2026-05-23: the shared cwd session pool change and
-the `/resume` session-name refresh fix are implemented locally and applied to
-the live `pi` Kubernetes deployment. The Telegram runtime was reloaded through
-tmux after validation.
+Implementation status as of 2026-05-23: the shared cwd session pool change,
+the `/resume` session-name refresh fix, and active-tab `/abort`/`/stop` routing
+are implemented locally and applied to the live `pi` Kubernetes deployment.
+The Telegram runtime was reloaded through tmux after validation.
 
 ## What Works
 
 - `/tab` opens the inline dashboard for switching tabs and confirmed abort/close.
 - `/tab new A`, `/tab A`, `/tab rename A B`, `/tab close A`, and `/tab abort`
   are parent-owned and stay responsive while workers run.
+- Bare `/abort` and `/stop` target the active tab worker when concurrent tabs
+  are enabled. `/stop` also clears the Telegram queue.
 - Normal Telegram prompts route to the active tab.
 - Inactive tabs keep running and send compact completion notices.
 - Switching tabs replays the selected tab's last 5 user turns with agent replies

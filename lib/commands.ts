@@ -604,6 +604,11 @@ export interface TelegramStopCommandDeps {
   sendTextReply: (text: string) => Promise<void>;
 }
 
+export interface TelegramAbortTargetResult {
+  aborted: boolean;
+  message: string;
+}
+
 export interface TelegramRuntimeEventRecorderPort {
   recordRuntimeEvent?: (
     category: string,
@@ -995,6 +1000,9 @@ export interface TelegramCommandRuntimeDeps<
   queueReloadRuntimeCommand: () => void | Promise<void>;
   injectNewSession: (ctx: TContext) => Promise<boolean>;
   injectClone: () => Promise<void>;
+  abortActiveTab?: (
+    ctx: TContext,
+  ) => Promise<TelegramAbortTargetResult | undefined>;
   enqueueControlItem: (
     message: TMessage,
     ctx: TContext,
@@ -1809,6 +1817,19 @@ async function handleTelegramCommandRuntime<
     ctx,
     {
       handleStop: async (nextMessage, commandCtx) => {
+        const tabAbort = await deps.abortActiveTab?.(commandCtx);
+        if (tabAbort) {
+          deps.clearPendingModelSwitch();
+          const clearedCount = deps.clearQueuedTelegramItems(commandCtx);
+          deps.setPreserveQueuedTurnsAsHistory(false);
+          const clearedSuffix =
+            clearedCount > 0
+              ? ` Cleared ${formatTelegramQueuedTurnCount(clearedCount)}.`
+              : "";
+          deps.updateStatus(commandCtx);
+          await sendReplyFor(nextMessage)(`${tabAbort.message}${clearedSuffix}`);
+          return;
+        }
         await handleTelegramStopCommand({
           hasAbortHandler: deps.hasAbortHandler,
           clearPendingModelSwitch: deps.clearPendingModelSwitch,
@@ -1821,6 +1842,14 @@ async function handleTelegramCommandRuntime<
         });
       },
       handleAbort: async (nextMessage, commandCtx) => {
+        const tabAbort = await deps.abortActiveTab?.(commandCtx);
+        if (tabAbort) {
+          deps.clearPendingModelSwitch();
+          deps.setPreserveQueuedTurnsAsHistory(true);
+          deps.updateStatus(commandCtx);
+          await sendReplyFor(nextMessage)(tabAbort.message);
+          return;
+        }
         await handleTelegramAbortCommand({
           hasAbortHandler: deps.hasAbortHandler,
           clearPendingModelSwitch: deps.clearPendingModelSwitch,

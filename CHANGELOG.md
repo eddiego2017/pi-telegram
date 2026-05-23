@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` `/abort` and `/stop` now target the active tab worker when concurrent tabs are enabled; `/stop` still clears the Telegram queue after aborting the tab.
 - `[Concurrent Tabs]` `/resume` now refreshes the active tab's session name from the resumed worker state, clearing stale tab names when the selected session is unnamed.
 - `[Concurrent Tabs]` Tab workers now use the normal shared cwd session directory instead of creating `telegram-tabs/sessions/<tab>` directories. Tabs keep only their active session pointer, so `/new` and `/resume` stay aligned with the global cwd session pool.
 - `[Concurrent Tabs]` `/resume` now keeps the normal global cwd session list when concurrent tabs are enabled, while applying the selected session to the active tab through RPC `switch_session`. If the child reports stale session state after a successful switch, the parent restarts that worker on the selected session file.
