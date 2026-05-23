@@ -24,13 +24,13 @@ test("RPC JSONL splitter handles partial chunks and CRLF", () => {
 
 test("RPC child args always include no-extensions isolation", () => {
   assert.deepEqual(
-    buildRpcChildArgs({ sessionDir: "/tmp/sessions/A" }),
-    ["--mode", "rpc", "--no-extensions", "--session-dir", "/tmp/sessions/A"],
+    buildRpcChildArgs({ sessionDir: "/tmp/sessions/shared" }),
+    ["--mode", "rpc", "--no-extensions", "--session-dir", "/tmp/sessions/shared"],
   );
   assert.deepEqual(
     buildRpcChildArgs({
-      sessionDir: "/tmp/sessions/A",
-      sessionFile: "/tmp/sessions/A/session.jsonl",
+      sessionDir: "/tmp/sessions/shared",
+      sessionFile: "/tmp/sessions/shared/session.jsonl",
       extraArgs: ["--thinking", "low"],
     }),
     [
@@ -38,10 +38,14 @@ test("RPC child args always include no-extensions isolation", () => {
       "rpc",
       "--no-extensions",
       "--session",
-      "/tmp/sessions/A/session.jsonl",
+      "/tmp/sessions/shared/session.jsonl",
       "--thinking",
       "low",
     ],
+  );
+  assert.deepEqual(
+    buildRpcChildArgs({}),
+    ["--mode", "rpc", "--no-extensions"],
   );
 });
 

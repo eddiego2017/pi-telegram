@@ -207,7 +207,7 @@ test("openTelegramResumeMenu keeps tab scope while listing global sessions", asy
     getSessionScope: () => ({
       kind: "tab",
       tabName: "A",
-      sessionDir: "/tabs/A",
+      sessionDir: "/sessions/shared",
       currentSessionFile: "/sessions/current.jsonl",
     }),
     listSessions: async (_cwd, sessionDir) => {
@@ -703,7 +703,7 @@ test("handleTelegramResumeMenuCallback resumes through captured tab scope", asyn
   state.sessionScope = {
     kind: "tab",
     tabName: "A",
-    sessionDir: "/tabs/A",
+    sessionDir: "/sessions/shared",
     currentSessionFile: "/sessions/s0.json",
   };
   const { events, deps } = makeCallbackDeps(

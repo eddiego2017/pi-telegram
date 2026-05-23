@@ -274,6 +274,10 @@ export function getExtensionContextSessionFile(
   return ctx.sessionManager.getSessionFile();
 }
 
+export function getExtensionContextSessionDir(ctx: ExtensionContext): string {
+  return ctx.sessionManager.getSessionDir();
+}
+
 export function getExtensionContextSessionName(
   ctx: ExtensionContext,
 ): string | undefined {

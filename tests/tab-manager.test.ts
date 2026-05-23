@@ -4,6 +4,7 @@
  */
 
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +33,7 @@ class FakeTabBackend implements TelegramTabBackend {
   readonly newSessions: (string | undefined)[] = [];
   readonly switchSessions: string[] = [];
   keepStateOnSwitch = false;
+  nextSwitchSessionName: string | undefined;
   disposed = false;
   readonly tabName: string;
   private listeners = new Set<(event: RpcChildBackendEvent) => void>();
@@ -121,11 +123,13 @@ class FakeTabBackend implements TelegramTabBackend {
   async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
     this.switchSessions.push(sessionPath);
     if (this.keepStateOnSwitch) return { cancelled: false };
+    const sessionName = this.nextSwitchSessionName;
+    this.nextSwitchSessionName = undefined;
     this.state = {
       ...this.state,
       sessionFile: sessionPath,
       sessionId: `resumed-${this.tabName}`,
-      sessionName: undefined,
+      sessionName,
       isStreaming: false,
     };
     return { cancelled: false };
@@ -172,8 +176,8 @@ test("Tab-aware resume ports recompute active tab scope before host fallback", a
         kind: "tab",
         tabName: "A",
         cwd: "/repo",
-        sessionDir: "/tabs/A",
-        currentSessionFile: "/tabs/A/current.jsonl",
+        sessionDir: "/sessions/shared",
+        currentSessionFile: "/sessions/current.jsonl",
       }),
       switchSession: async (sessionPath, ctx, scope) => {
         events.push(`tab:${sessionPath}:${ctx}:${scope?.tabName ?? ""}`);
@@ -185,9 +189,9 @@ test("Tab-aware resume ports recompute active tab scope before host fallback", a
     },
   });
 
-  await ports.injectResumeExec("/tabs/A/old.jsonl", "ctx");
+  await ports.injectResumeExec("/sessions/old.jsonl", "ctx");
 
-  assert.deepEqual(events, ["tab:/tabs/A/old.jsonl:ctx:A"]);
+  assert.deepEqual(events, ["tab:/sessions/old.jsonl:ctx:A"]);
 });
 
 test("Tab-aware resume ports avoid host fallback when active tab scope is missing", async () => {
@@ -202,7 +206,7 @@ test("Tab-aware resume ports avoid host fallback when active tab scope is missin
   });
 
   await assert.rejects(
-    () => ports.injectResumeExec("/tabs/A/old.jsonl", "ctx"),
+    () => ports.injectResumeExec("/sessions/old.jsonl", "ctx"),
     /No active tab session scope/,
   );
   assert.deepEqual(events, []);
@@ -240,7 +244,7 @@ test("Tab manager declines prompt dispatch when disabled", async () => {
     }),
     getCwd: () => "/repo",
     statePath: join(tempDir, "tabs.json"),
-    sessionRoot: join(tempDir, "sessions"),
+    sessionDir: join(tempDir, "sessions"),
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
       replies.push(text);
       return replies.length;
@@ -263,6 +267,7 @@ test("Tab manager declines prompt dispatch when disabled", async () => {
 
 test("Tab manager routes prompts to active workers and notifies inactive completion", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-runtime-"));
+  const sharedSessionDir = join(tempDir, "sessions");
   const replies: string[] = [];
   const backends = new Map<string, FakeTabBackend>();
   let currentTime = 1000;
@@ -278,7 +283,7 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     getCwd: () => "/repo",
     now: () => currentTime,
     statePath: join(tempDir, "tabs.json"),
-    sessionRoot: join(tempDir, "sessions"),
+    sessionDir: sharedSessionDir,
     createBackend: (options) => {
       backendOptions.push(options);
       const backend = new FakeTabBackend(options.tabName, options.sessionFile);
@@ -293,6 +298,11 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
 
   await manager.handleCommand("new A", 1, 10, "ctx");
   assert.match(replies.at(-1) ?? "", /Created and switched to tab A/);
+  assert.equal(
+    (backendOptions[0] as { sessionDir?: string }).sessionDir,
+    sharedSessionDir,
+  );
+  assert.equal(existsSync(join(sharedSessionDir, "A")), false);
   assert.deepEqual(manager.getActiveSessionReference("ctx"), {
     tabName: "A",
     cwd: "/repo",
@@ -351,19 +361,19 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
   const scope = manager.getActiveResumeSessionScope("ctx");
   assert.equal(scope?.kind, "tab");
   assert.equal(scope?.tabName, "A");
-  assert.equal(scope?.sessionDir.endsWith("/sessions/A"), true);
+  assert.equal(scope?.sessionDir, sharedSessionDir);
   assert.equal(scope?.currentSessionFile, "/sessions/A-1.jsonl");
   assert.equal(
-    await manager.switchSession("/sessions/A/resumed.jsonl", "ctx", scope),
+    await manager.switchSession("/sessions/resumed-A.jsonl", "ctx", scope),
     true,
   );
   assert.deepEqual(backends.get("A")?.switchSessions, [
-    "/sessions/A/resumed.jsonl",
+    "/sessions/resumed-A.jsonl",
   ]);
   assert.deepEqual(manager.getActiveSessionReference("ctx"), {
     tabName: "A",
     cwd: "/repo",
-    sessionFile: "/sessions/A/resumed.jsonl",
+    sessionFile: "/sessions/resumed-A.jsonl",
     sessionId: "resumed-A",
     sessionName: undefined,
     currentModel: {
@@ -451,7 +461,7 @@ test("Tab manager rebinds worker when resume RPC reports stale session state", a
     }),
     getCwd: () => "/repo",
     statePath: join(tempDir, "tabs.json"),
-    sessionRoot: join(tempDir, "sessions"),
+    sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
       backendOptions.push(options);
       const backend = new FakeTabBackend(options.tabName, options.sessionFile);
@@ -473,22 +483,76 @@ test("Tab manager rebinds worker when resume RPC reports stale session state", a
   const scope = manager.getActiveResumeSessionScope("ctx");
 
   assert.equal(
-    await manager.switchSession("/sessions/A/resumed.jsonl", "ctx", scope),
+    await manager.switchSession("/sessions/resumed-A.jsonl", "ctx", scope),
     true,
   );
 
   assert.equal(firstBackend.disposed, true);
   assert.equal(backends.length, 2);
-  assert.deepEqual(firstBackend.switchSessions, ["/sessions/A/resumed.jsonl"]);
+  assert.deepEqual(firstBackend.switchSessions, ["/sessions/resumed-A.jsonl"]);
   assert.equal(
     (backendOptions[1] as { sessionFile?: string }).sessionFile,
-    "/sessions/A/resumed.jsonl",
+    "/sessions/resumed-A.jsonl",
   );
   assert.equal(
     manager.getActiveSessionReference("ctx")?.sessionFile,
-    "/sessions/A/resumed.jsonl",
+    "/sessions/resumed-A.jsonl",
   );
   assert.match(events.join("\n"), /switch_session_rebind:/);
+});
+
+test("Tab manager refreshes session name when resuming another session", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-resume-name-"));
+  const replies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.setActiveSessionName("empty session", "ctx");
+  assert.equal(manager.getActiveSessionName("ctx"), "empty session");
+
+  const scope = manager.getActiveResumeSessionScope("ctx");
+  assert.equal(
+    await manager.switchSession("/sessions/resumed-unnamed.jsonl", "ctx", scope),
+    true,
+  );
+  assert.equal(manager.getActiveSessionName("ctx"), undefined);
+  assert.equal(
+    manager.getActiveSessionReference("ctx")?.sessionName,
+    undefined,
+  );
+
+  const backend = backends.get("A");
+  assert.ok(backend);
+  backend.nextSwitchSessionName = "named resumed session";
+  assert.equal(
+    await manager.switchSession("/sessions/resumed-named.jsonl", "ctx", scope),
+    true,
+  );
+  assert.equal(manager.getActiveSessionName("ctx"), "named resumed session");
+  assert.equal(
+    manager.getActiveSessionReference("ctx")?.sessionName,
+    "named resumed session",
+  );
 });
 
 test("Tab-aware session name ports target the active tab", async () => {
@@ -505,7 +569,7 @@ test("Tab-aware session name ports target the active tab", async () => {
     }),
     getCwd: () => "/repo",
     statePath: join(tempDir, "tabs.json"),
-    sessionRoot: join(tempDir, "sessions"),
+    sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
       const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
@@ -549,7 +613,7 @@ test("Tab manager sends last-turn replay after tab switch", async () => {
     }),
     getCwd: () => "/repo",
     statePath: join(tempDir, "tabs.json"),
-    sessionRoot: join(tempDir, "sessions"),
+    sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
       const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
@@ -592,7 +656,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
     }),
     getCwd: () => "/repo",
     statePath: join(tempDir, "tabs.json"),
-    sessionRoot: join(tempDir, "sessions"),
+    sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
       const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
@@ -698,7 +762,7 @@ test("Tab manager renames tabs without discarding session state", async () => {
     }),
     getCwd: () => "/repo",
     statePath,
-    sessionRoot: join(tempDir, "sessions"),
+    sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
       const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
@@ -761,7 +825,7 @@ test("Tab manager sends typing actions for the active running tab", async () => 
     }),
     getCwd: () => "/repo",
     statePath: join(tempDir, "tabs.json"),
-    sessionRoot: join(tempDir, "sessions"),
+    sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
       const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
@@ -821,7 +885,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
     }),
     getCwd: () => "/repo",
     statePath: join(tempDir, "tabs.json"),
-    sessionRoot: join(tempDir, "sessions"),
+    sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
       const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
@@ -1050,7 +1114,7 @@ test("Tab manager does not reuse finalized thinking or tool streams", async () =
     }),
     getCwd: () => "/repo",
     statePath: join(tempDir, "tabs.json"),
-    sessionRoot: join(tempDir, "sessions"),
+    sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
       const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);

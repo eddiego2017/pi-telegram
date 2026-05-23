@@ -26,7 +26,7 @@ export interface RpcChildSessionState {
 export interface RpcChildBackendOptions {
   tabName: string;
   cwd: string;
-  sessionDir: string;
+  sessionDir?: string;
   sessionFile?: string;
   command?: string;
   args?: string[];
@@ -92,14 +92,14 @@ function getErrorMessage(error: unknown): string {
 }
 
 export function buildRpcChildArgs(options: {
-  sessionDir: string;
+  sessionDir?: string;
   sessionFile?: string;
   extraArgs?: string[];
 }): string[] {
   const args = ["--mode", "rpc", "--no-extensions"];
   if (options.sessionFile) {
     args.push("--session", options.sessionFile);
-  } else {
+  } else if (options.sessionDir) {
     args.push("--session-dir", options.sessionDir);
   }
   args.push(...(options.extraArgs ?? []));

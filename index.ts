@@ -270,6 +270,7 @@ export default function (pi: Pi.ExtensionAPI) {
   const tabManager = TabManager.createTelegramTabManager<Pi.ExtensionContext>({
     getConfig: getConcurrentTabsConfig,
     getCwd: Pi.getExtensionContextCwd,
+    getSessionDir: Pi.getExtensionContextSessionDir,
     sendTextReply,
     sendMarkdownReply,
     sendStreamMarkdownReply: replyRuntime.sendMarkdownReply,

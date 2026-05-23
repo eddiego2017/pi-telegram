@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` `/resume` now refreshes the active tab's session name from the resumed worker state, clearing stale tab names when the selected session is unnamed.
+- `[Concurrent Tabs]` Tab workers now use the normal shared cwd session directory instead of creating `telegram-tabs/sessions/<tab>` directories. Tabs keep only their active session pointer, so `/new` and `/resume` stay aligned with the global cwd session pool.
 - `[Concurrent Tabs]` `/resume` now keeps the normal global cwd session list when concurrent tabs are enabled, while applying the selected session to the active tab through RPC `switch_session`. If the child reports stale session state after a successful switch, the parent restarts that worker on the selected session file.
 - `[Concurrent Tabs]` `/new` now targets the active tab worker via RPC `new_session` when concurrent tabs are enabled, so the selected worker session file advances with the command instead of staying on the old session. It falls back to the host tmux REPL only when no tab is active.
 
@@ -19,7 +21,7 @@
 - `[Concurrent Tabs]` `/llm [tokens...]` now targets the active tab's RPC child when `concurrentTabs.enabled` is true, preserving the existing model list/filter/single-match UX while keeping the parent session model unchanged. Busy active tabs reject model switches until they are idle.
 - `[Docs]` Updated the concurrent tabs handoff notes to record the successful Telegram smoke test for isolated `/llm` and `/model` active-tab switching.
 - `[Concurrent Tabs]` Added the opt-in `/tab` MVP. When `concurrentTabs.enabled` is true, `/tab new <name>`, `/tab <name>`, `/tab status`, `/tab abort`, `/tab close`, and `/tab restart` are handled by the parent Telegram bridge while prompts route to the active tab's isolated `pi --mode rpc --no-extensions` worker.
-- `[Concurrent Tabs]` Added durable tab registry storage in `telegram-tabs.json`, per-tab session directories under `telegram-tabs/sessions/`, inactive-tab completion notices, and text-first final reply delivery. Worker tabs intentionally do not load extensions yet, so `telegram_attach` from concurrent workers remains future work.
+- `[Concurrent Tabs]` Added durable tab registry storage in `telegram-tabs.json`, inactive-tab completion notices, and text-first final reply delivery. Worker tabs intentionally do not load extensions yet, so `telegram_attach` from concurrent workers remains future work.
 - `[Tests]` Added `tests/tabs.test.ts`, `tests/rpc-child.test.ts`, and `tests/tab-manager.test.ts` for tab parsing/state formatting, JSONL RPC helpers, no-extension worker args, and parent-side tab routing behavior.
 - `[Dump Menu]` Added Telegram-side `/dump [N]`, a transcript export menu for the current active branch. `/dump` exports all visible User/Agent text, `/dump 20` exports the latest 20 user turns, and the transcript excludes tools, thinking, system metadata, compact summaries, and Telegram reply/attachment/output blocks. Outputs are available as Telegram TXT documents or privacy-confirmed secret GitHub Gists with delete support.
 - `[Commands]` The bot command menu now lists 🧾 `/dump`, `dump` is Telegram-reserved, and `dump:` is a pi-telegram-owned callback prefix alongside `session:`/`tree:`/menu prefixes.
