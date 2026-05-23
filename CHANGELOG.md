@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `[Concurrent Tabs]` Tab workers now receive a per-tab Telegram target file for browser visual checkpoints, so background tab screenshots reply to the tab that produced them instead of following the currently active tab.
+- `[Concurrent Tabs]` Tab records now keep the latest Telegram reply target for browser visual checkpoints, so background tab screenshots reply to the tab that produced them instead of following the currently active tab.
 - `[Concurrent Tabs]` Fixed the production command-target wrapper so bare `/abort` and `/stop` actually forward to the active tab worker instead of falling back to the parent `No active turn.` path.
 - `[Concurrent Tabs]` `/abort` and `/stop` now target the active tab worker when concurrent tabs are enabled; `/stop` still clears the Telegram queue after aborting the tab.
 - `[Concurrent Tabs]` `/resume` now refreshes the active tab's session name from the resumed worker state, clearing stale tab names when the selected session is unnamed.

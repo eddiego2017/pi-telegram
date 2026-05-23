@@ -165,7 +165,6 @@ interface RuntimeTab {
   record: TelegramTabRecord;
   backend?: TelegramTabBackend;
   unreadEvents: number;
-  browserTargetPath: string;
   activeBuffer: string;
   textStream?: TelegramTabStreamState;
   thinkingBuffers: Map<number, string>;
@@ -606,14 +605,10 @@ function buildTelegramTabWorkerExtensionArgs(
   return extensions.flatMap((extensionPath) => ["--extension", extensionPath]);
 }
 
-function createRuntimeTab(
-  record: TelegramTabRecord,
-  browserTargetPath: string,
-): RuntimeTab {
+function createRuntimeTab(record: TelegramTabRecord): RuntimeTab {
   return {
     record,
     unreadEvents: 0,
-    browserTargetPath,
     activeBuffer: "",
     thinkingBuffers: new Map(),
     thinkingStreams: new Map(),
@@ -955,27 +950,6 @@ export function createTelegramTabManager<TContext>(
 
   const now = (): number => deps.now?.() ?? Date.now();
   const isEnabled = (): boolean => deps.getConfig().enabled;
-  const getBrowserTargetPath = (tabName: string): string =>
-    join(agentDir, "tmp", "telegram-tab-targets", `${tabName}.json`);
-  const createRuntime = (record: TelegramTabRecord): RuntimeTab =>
-    createRuntimeTab(record, getBrowserTargetPath(record.name));
-  const writeBrowserTarget = async (runtime: RuntimeTab): Promise<void> => {
-    const chatId = runtime.activeChatId;
-    if (chatId === undefined) return;
-    const target = {
-      version: 1,
-      tabName: runtime.record.name,
-      chatId,
-      replyToMessageId: runtime.activeReplyToMessageId,
-      updatedAt: now(),
-    };
-    await mkdir(dirname(runtime.browserTargetPath), { recursive: true });
-    await writeFile(
-      runtime.browserTargetPath,
-      `${JSON.stringify(target, null, 2)}\n`,
-      "utf8",
-    );
-  };
   const streamEditThrottleMs =
     deps.streamEditThrottleMs ?? TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS;
   const typingIntervalMs =
@@ -996,7 +970,7 @@ export function createTelegramTabManager<TContext>(
   const hydrateRuntimeTabs = (tabState: TelegramTabsState): void => {
     for (const record of Object.values(tabState.tabs)) {
       if (!runtimeTabs.has(record.name)) {
-        runtimeTabs.set(record.name, createRuntime(record));
+        runtimeTabs.set(record.name, createRuntimeTab(record));
       }
     }
   };
@@ -1024,7 +998,7 @@ export function createTelegramTabManager<TContext>(
     if (!record) return undefined;
     let runtime = runtimeTabs.get(name);
     if (!runtime) {
-      runtime = createRuntime(record);
+      runtime = createRuntimeTab(record);
       runtimeTabs.set(name, runtime);
     }
     runtime.record = record;
@@ -1491,20 +1465,12 @@ export function createTelegramTabManager<TContext>(
       sessionDir,
       sessionFile: runtime.record.sessionFile,
       args: workerArgs,
-      env: {
-        PI_TELEGRAM_TARGET_FILE: runtime.browserTargetPath,
-        PI_TELEGRAM_BROWSER_TARGET_FILE: runtime.browserTargetPath,
-      },
     }) ?? new RpcChildBackend({
       tabName: runtime.record.name,
       cwd,
       sessionDir,
       sessionFile: runtime.record.sessionFile,
       args: workerArgs,
-      env: {
-        PI_TELEGRAM_TARGET_FILE: runtime.browserTargetPath,
-        PI_TELEGRAM_BROWSER_TARGET_FILE: runtime.browserTargetPath,
-      },
     });
     runtime.backend = backend;
     runtime.unsubscribe = backend.onEvent((event) => {
@@ -1668,7 +1634,7 @@ export function createTelegramTabManager<TContext>(
       if (previousRuntime) stopTabTyping(previousRuntime);
       tabState.tabs[name] = record;
       tabState.activeTab = name;
-      const runtime: RuntimeTab = createRuntime(record);
+      const runtime: RuntimeTab = createRuntimeTab(record);
       runtimeTabs.set(name, runtime);
       await persist();
       try {
@@ -2322,13 +2288,11 @@ export function createTelegramTabManager<TContext>(
       const wasRunning = runtime.record.status === "running";
       runtime.activeChatId = turn.chatId;
       runtime.activeReplyToMessageId = turn.replyToMessageId;
+      runtime.record.telegramChatId = turn.chatId;
+      runtime.record.telegramReplyToMessageId = turn.replyToMessageId;
+      runtime.record.telegramTargetUpdatedAt = now();
       runtime.record.lastUsedAt = now();
-      await writeBrowserTarget(runtime).catch((error) => {
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: runtime.record.name,
-          action: "browser_target",
-        });
-      });
+      await persist();
       startTabTyping(tabState.activeTab, runtime);
       try {
         const backend = await ensureBackend(runtime, ctx);

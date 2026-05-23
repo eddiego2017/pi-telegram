@@ -268,6 +268,7 @@ test("Tab manager declines prompt dispatch when disabled", async () => {
 
 test("Tab manager routes prompts to active workers and notifies inactive completion", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-runtime-"));
+  const statePath = join(tempDir, "tabs.json");
   const sharedSessionDir = join(tempDir, "sessions");
   const replies: string[] = [];
   const backends = new Map<string, FakeTabBackend>();
@@ -283,7 +284,7 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     getConfig: () => config,
     getCwd: () => "/repo",
     now: () => currentTime,
-    statePath: join(tempDir, "tabs.json"),
+    statePath,
     sessionDir: sharedSessionDir,
     createBackend: (options) => {
       backendOptions.push(options);
@@ -392,22 +393,15 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     "ctx",
   );
   assert.deepEqual(backends.get("A")?.prompts, ["hello A"]);
-  const browserTargetPath = (backendOptions[0] as {
-    env?: Record<string, string | undefined>;
-  }).env?.PI_TELEGRAM_TARGET_FILE;
-  assert.ok(browserTargetPath);
-  assert.equal(
-    (backendOptions[0] as { env?: Record<string, string | undefined> }).env
-      ?.PI_TELEGRAM_BROWSER_TARGET_FILE,
-    browserTargetPath,
+  const persistedAfterPrompt = JSON.parse(await readFile(statePath, "utf8"));
+  assert.deepEqual(
+    {
+      chatId: persistedAfterPrompt.tabs.A.telegramChatId,
+      replyToMessageId: persistedAfterPrompt.tabs.A.telegramReplyToMessageId,
+      updatedAt: persistedAfterPrompt.tabs.A.telegramTargetUpdatedAt,
+    },
+    { chatId: 1, replyToMessageId: 20, updatedAt: 1000 },
   );
-  assert.deepEqual(JSON.parse(await readFile(browserTargetPath, "utf8")), {
-    version: 1,
-    tabName: "A",
-    chatId: 1,
-    replyToMessageId: 20,
-    updatedAt: 1000,
-  });
   assert.match(replies.at(-1) ?? "", /Started tab A/);
   assert.equal(await manager.canSwitchActiveModel("ctx"), false);
   assert.equal(
@@ -428,13 +422,15 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     "ctx",
   );
   assert.deepEqual(backends.get("A")?.followUps, ["second A"]);
-  assert.deepEqual(JSON.parse(await readFile(browserTargetPath, "utf8")), {
-    version: 1,
-    tabName: "A",
-    chatId: 1,
-    replyToMessageId: 21,
-    updatedAt: 1000,
-  });
+  const persistedAfterFollowUp = JSON.parse(await readFile(statePath, "utf8"));
+  assert.deepEqual(
+    {
+      chatId: persistedAfterFollowUp.tabs.A.telegramChatId,
+      replyToMessageId: persistedAfterFollowUp.tabs.A.telegramReplyToMessageId,
+      updatedAt: persistedAfterFollowUp.tabs.A.telegramTargetUpdatedAt,
+    },
+    { chatId: 1, replyToMessageId: 21, updatedAt: 1000 },
+  );
   assert.match(replies.at(-1) ?? "", /Queued follow-up in tab A/);
 
   await manager.handleCommand("new B", 1, 30, "ctx");
