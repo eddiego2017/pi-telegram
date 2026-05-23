@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` `/resume` now follows the active tab when `concurrentTabs.enabled` is true: it lists that tab's session directory, switches the selected worker session through RPC `switch_session`, and no longer silently falls back to the host `/telegram-resume-exec` path.
+- `[Docs]` Compact the concurrent tabs handoff around the current live state, active-tab command coverage, remaining work, and latest validation.
 - `[Concurrent Tabs]` `/tab` now opens a Telegram inline dashboard when interactive delivery is available. The dashboard shows active/running/unread tab state, switches tabs with buttons, confirms abort/close actions, and displays stopped workers as `stopped` instead of the internal `exited` status.
 - `[Concurrent Tabs]` Switching tabs with `/tab <name>` now automatically replays that tab's last 5 user turns, including agent replies and replayable image attachments, using the same session replay formatter as `/session`.
 - `[Concurrent Tabs]` Active tab worker runs now show native Telegram `typing` chat actions while the child process is answering, and the typing loop stops when the tab finishes, exits, errors, is aborted, or is switched away.
