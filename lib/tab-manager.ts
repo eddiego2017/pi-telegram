@@ -44,6 +44,7 @@ import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
 const TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS = 1200;
 const TELEGRAM_TAB_STREAM_MARKDOWN_LIMIT = 3600;
 const TELEGRAM_TAB_TYPING_ACTION_INTERVAL_MS = 2500;
+const TELEGRAM_TAB_DASHBOARD_STATE_TTL_MS = 10 * 60 * 1000;
 
 export interface TelegramTabPromptContent {
   type: string;
@@ -177,6 +178,16 @@ interface RuntimeTab {
   activeChatId?: number;
   activeReplyToMessageId?: number;
   unsubscribe?: () => void;
+}
+
+type TelegramTabDashboardMode = "open" | "close";
+
+interface TelegramTabDashboardState {
+  chatId: number;
+  messageId: number;
+  mode: TelegramTabDashboardMode;
+  selectedCloseTabs: string[];
+  updatedAt: number;
 }
 
 interface TelegramTabStreamState {
@@ -875,13 +886,42 @@ function formatTelegramTabDashboardModel(record: TelegramTabRecord): string {
     : "model unknown";
 }
 
+function getSortedTelegramTabRecords(state: TelegramTabsState): TelegramTabRecord[] {
+  return Object.values(state.tabs).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+function getTelegramTabCloseableNames(state: TelegramTabsState): string[] {
+  return getSortedTelegramTabRecords(state)
+    .filter((tab) => tab.name !== TELEGRAM_DEFAULT_TAB_NAME)
+    .map((tab) => tab.name);
+}
+
+function normalizeTelegramTabCloseSelection(
+  state: TelegramTabsState,
+  selectedCloseTabs: readonly string[],
+): string[] {
+  const closeable = new Set(getTelegramTabCloseableNames(state));
+  const selected = new Set<string>();
+  for (const name of selectedCloseTabs) {
+    if (closeable.has(name)) selected.add(name);
+  }
+  return [...selected];
+}
+
 function formatTelegramTabDashboardSummary(
   state: TelegramTabsState,
   unreadByTab: Record<string, number>,
   maxTabs: number,
+  mode: TelegramTabDashboardMode = "open",
+  selectedCloseTabs: readonly string[] = [],
 ): string {
-  const tabs = Object.values(state.tabs).sort((a, b) => a.createdAt - b.createdAt);
+  const tabs = getSortedTelegramTabRecords(state);
   const active = state.tabs[state.activeTab];
+  const safeSelectedCloseTabs = normalizeTelegramTabCloseSelection(
+    state,
+    selectedCloseTabs,
+  );
+  const selectedSet = new Set(safeSelectedCloseTabs);
   const unreadTabs = tabs
     .filter((tab) => (unreadByTab[tab.name] ?? 0) > 0)
     .map((tab) => `${tab.name} ${unreadByTab[tab.name]}`);
@@ -899,13 +939,35 @@ function formatTelegramTabDashboardSummary(
     lines.push(`Thinking: ${active.currentThinkingLevel}`);
   }
   lines.push(`Unread: ${unreadTabs.length > 0 ? unreadTabs.join(", ") : "none"}`);
+  if (mode === "close") {
+    const runningSelected = tabs
+      .filter((tab) =>
+        selectedSet.has(tab.name) &&
+        (tab.status === "running" || tab.status === "starting")
+      )
+      .map((tab) => tab.name);
+    lines.push("Close mode: select tabs to close.");
+    lines.push(`Selected: ${safeSelectedCloseTabs.length}`);
+    lines.push("Default tab is protected. Session files are kept.");
+    if (runningSelected.length > 0) {
+      lines.push(`Running selected: ${runningSelected.join(", ")} will be stopped.`);
+    }
+  }
   lines.push("");
   for (const tab of tabs) {
     const marker = tab.name === state.activeTab ? "●" : "○";
     const unread = unreadByTab[tab.name] ? ` · unread ${unreadByTab[tab.name]}` : "";
     const model = tab.currentModel ? ` · ${formatTelegramTabDashboardModel(tab)}` : "";
+    const closePrefix =
+      mode === "close" && tab.name !== TELEGRAM_DEFAULT_TAB_NAME
+        ? `${selectedSet.has(tab.name) ? "☑" : "☐"} `
+        : "";
+    const protectedLabel =
+      mode === "close" && tab.name === TELEGRAM_DEFAULT_TAB_NAME
+        ? " · protected"
+        : "";
     lines.push(
-      `${marker} ${tab.name} · ${formatTelegramTabStatusLabel(tab.status)}${unread}${model}`,
+      `${closePrefix}${marker} ${tab.name} · ${formatTelegramTabStatusLabel(tab.status)}${unread}${model}${protectedLabel}`,
     );
   }
   return lines.join("\n");
@@ -942,9 +1004,54 @@ function decodeTelegramTabCallbackName(name: string | undefined): string | undef
 function buildTelegramTabDashboardReplyMarkup(
   state: TelegramTabsState,
   unreadByTab: Record<string, number>,
+  mode: TelegramTabDashboardMode = "open",
+  selectedCloseTabs: readonly string[] = [],
 ): TelegramInlineKeyboardMarkup {
   const rows: TelegramInlineKeyboardMarkup["inline_keyboard"] = [];
-  const tabs = Object.values(state.tabs).sort((a, b) => a.createdAt - b.createdAt);
+  const tabs = getSortedTelegramTabRecords(state);
+  if (mode === "close") {
+    const safeSelectedCloseTabs = normalizeTelegramTabCloseSelection(
+      state,
+      selectedCloseTabs,
+    );
+    const selectedSet = new Set(safeSelectedCloseTabs);
+    if (safeSelectedCloseTabs.length > 0) {
+      rows.push([
+        {
+          text: `Close ${safeSelectedCloseTabs.length} selected`,
+          callback_data: "tab:close-selected",
+        },
+      ]);
+    }
+    const closeableNames = getTelegramTabCloseableNames(state);
+    if (closeableNames.length > 0) {
+      const controls = [
+        { text: "Select all", callback_data: "tab:close-select-all" },
+      ];
+      if (safeSelectedCloseTabs.length > 0) {
+        controls.push({ text: "Clear selection", callback_data: "tab:close-clear" });
+      }
+      rows.push(controls);
+    }
+    for (let index = 0; index < tabs.length; index += 2) {
+      const row = tabs.slice(index, index + 2).map((tab) => {
+        if (tab.name === TELEGRAM_DEFAULT_TAB_NAME) {
+          return {
+            text: `${tab.name} protected`,
+            callback_data: "tab:noop",
+          };
+        }
+        const selected = selectedSet.has(tab.name);
+        return {
+          text: `${selected ? "☑" : "☐"} ${tab.name}`,
+          callback_data: `tab:close-toggle:${encodeTelegramTabCallbackName(tab.name)}`,
+        };
+      });
+      rows.push(row);
+    }
+    rows.push([{ text: "Done", callback_data: "tab:close-done" }]);
+    return { inline_keyboard: rows };
+  }
   for (let index = 0; index < tabs.length; index += 2) {
     const row = tabs.slice(index, index + 2).map((tab) => ({
       text: formatTelegramTabButtonLabel(
@@ -959,6 +1066,9 @@ function buildTelegramTabDashboardReplyMarkup(
     }));
     rows.push(row);
   }
+  if (getTelegramTabCloseableNames(state).length > 0) {
+    rows.push([{ text: "Manage 🗑", callback_data: "tab:close-manage" }]);
+  }
   rows.push([
     {
       text: "Abort",
@@ -970,6 +1080,45 @@ function buildTelegramTabDashboardReplyMarkup(
     },
   ]);
   return { inline_keyboard: rows };
+}
+
+function buildTelegramTabMultiCloseConfirmationText(
+  state: TelegramTabsState,
+  selectedCloseTabs: readonly string[],
+): string {
+  const selected = normalizeTelegramTabCloseSelection(state, selectedCloseTabs);
+  const tabs = selected
+    .map((name) => state.tabs[name])
+    .filter((tab): tab is TelegramTabRecord => tab !== undefined);
+  const shown = tabs.slice(0, 5).map((tab) =>
+    `- ${tab.name} · ${formatTelegramTabStatusLabel(tab.status)}`
+  );
+  const more = tabs.length > shown.length
+    ? [`- ...and ${tabs.length - shown.length} more`]
+    : [];
+  const hasRunning = tabs.some((tab) =>
+    tab.status === "running" || tab.status === "starting"
+  );
+  return [
+    `Close ${tabs.length} selected tab${tabs.length === 1 ? "" : "s"}?`,
+    "",
+    ...shown,
+    ...more,
+    "",
+    "Session files are kept.",
+    ...(hasRunning ? ["Running tabs will be stopped."] : []),
+  ].join("\n");
+}
+
+function buildTelegramTabMultiCloseConfirmationReplyMarkup(): TelegramInlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [
+        { text: "No", callback_data: "tab:close-cancel" },
+        { text: "Close selected", callback_data: "tab:close-confirm" },
+      ],
+    ],
+  };
 }
 
 function buildTelegramTabConfirmReplyMarkup(
@@ -1000,6 +1149,7 @@ export function createTelegramTabManager<TContext>(
   const statePath = deps.statePath ?? getTelegramTabsStatePath(agentDir);
   const configuredSessionDir = deps.sessionDir;
   const runtimeTabs = new Map<string, RuntimeTab>();
+  const dashboardStates = new Map<number, TelegramTabDashboardState>();
   let state: TelegramTabsState | undefined;
   let persistChain: Promise<void> = Promise.resolve();
 
@@ -1009,6 +1159,22 @@ export function createTelegramTabManager<TContext>(
     deps.streamEditThrottleMs ?? TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS;
   const typingIntervalMs =
     deps.typingIntervalMs ?? TELEGRAM_TAB_TYPING_ACTION_INTERVAL_MS;
+  const pruneDashboardStates = (): void => {
+    const cutoff = now() - TELEGRAM_TAB_DASHBOARD_STATE_TTL_MS;
+    for (const [messageId, dashboardState] of dashboardStates.entries()) {
+      if (dashboardState.updatedAt < cutoff) dashboardStates.delete(messageId);
+    }
+  };
+  const getDashboardState = (
+    messageId: number,
+  ): TelegramTabDashboardState | undefined => {
+    pruneDashboardStates();
+    return dashboardStates.get(messageId);
+  };
+  const setDashboardState = (dashboardState: TelegramTabDashboardState): void => {
+    pruneDashboardStates();
+    dashboardStates.set(dashboardState.messageId, dashboardState);
+  };
   const persist = (): Promise<void> => {
     if (!state) return Promise.resolve();
     const snapshot = {
@@ -1603,7 +1769,7 @@ export function createTelegramTabManager<TContext>(
       );
       return;
     }
-    await deps.sendInteractiveMessage(
+    const messageId = await deps.sendInteractiveMessage(
       chatId,
       formatTelegramTabDashboardSummary(
         tabState,
@@ -1613,13 +1779,32 @@ export function createTelegramTabManager<TContext>(
       "plain",
       buildTelegramTabDashboardReplyMarkup(tabState, unreadByTab),
     );
+    if (messageId !== undefined) {
+      setDashboardState({
+        chatId,
+        messageId,
+        mode: "open",
+        selectedCloseTabs: [],
+        updatedAt: now(),
+      });
+    }
   };
   const editTabDashboard = async (
     tabState: TelegramTabsState,
     chatId: number,
     messageId: number,
+    options: {
+      mode?: TelegramTabDashboardMode;
+      selectedCloseTabs?: readonly string[];
+    } = {},
   ): Promise<void> => {
     const unreadByTab = getUnreadByTab();
+    const existingState = getDashboardState(messageId);
+    const mode = options.mode ?? existingState?.mode ?? "open";
+    const selectedCloseTabs = normalizeTelegramTabCloseSelection(
+      tabState,
+      options.selectedCloseTabs ?? existingState?.selectedCloseTabs ?? [],
+    );
     if (!deps.editInteractiveMessage) return;
     await deps.editInteractiveMessage(
       chatId,
@@ -1628,10 +1813,24 @@ export function createTelegramTabManager<TContext>(
         tabState,
         unreadByTab,
         deps.getConfig().maxTabs,
+        mode,
+        selectedCloseTabs,
       ),
       "plain",
-      buildTelegramTabDashboardReplyMarkup(tabState, unreadByTab),
+      buildTelegramTabDashboardReplyMarkup(
+        tabState,
+        unreadByTab,
+        mode,
+        selectedCloseTabs,
+      ),
     );
+    setDashboardState({
+      chatId,
+      messageId,
+      mode,
+      selectedCloseTabs,
+      updatedAt: now(),
+    });
   };
   const answerTabCallback = (
     callbackQueryId: string,
@@ -1640,6 +1839,32 @@ export function createTelegramTabManager<TContext>(
     deps.answerCallbackQuery
       ? deps.answerCallbackQuery(callbackQueryId, text)
       : Promise.resolve();
+  const closeRuntimeTab = async (
+    tabState: TelegramTabsState,
+    name: string,
+    force: boolean,
+  ): Promise<{ closed: boolean; message: string }> => {
+    if (name === TELEGRAM_DEFAULT_TAB_NAME) {
+      return { closed: false, message: "Cannot close default tab." };
+    }
+    const runtime = getRuntime(tabState, name);
+    if (!runtime) {
+      return { closed: false, message: `Unknown tab: ${name}` };
+    }
+    if (runtime.record.status === "running" && !force) {
+      return {
+        closed: false,
+        message: `Tab ${name} is running. Use /tab close ${name} --force to close it.`,
+      };
+    }
+    stopTabTyping(runtime);
+    await runtime.backend?.dispose();
+    runtime.unsubscribe?.();
+    runtimeTabs.delete(name);
+    delete tabState.tabs[name];
+    if (tabState.activeTab === name) tabState.activeTab = TELEGRAM_DEFAULT_TAB_NAME;
+    return { closed: true, message: `Closed tab ${name}.` };
+  };
   const commandHandlers = {
     list: async (
       tabState: TelegramTabsState,
@@ -1810,31 +2035,9 @@ export function createTelegramTabManager<TContext>(
       chatId: number,
       replyToMessageId: number,
     ) => {
-      if (name === TELEGRAM_DEFAULT_TAB_NAME) {
-        await deps.sendTextReply(chatId, replyToMessageId, "Cannot close default tab.");
-        return;
-      }
-      const runtime = getRuntime(tabState, name);
-      if (!runtime) {
-        await deps.sendTextReply(chatId, replyToMessageId, `Unknown tab: ${name}`);
-        return;
-      }
-      if (runtime.record.status === "running" && !force) {
-        await deps.sendTextReply(
-          chatId,
-          replyToMessageId,
-          `Tab ${name} is running. Use /tab close ${name} --force to close it.`,
-        );
-        return;
-      }
-      stopTabTyping(runtime);
-      await runtime.backend?.dispose();
-      runtime.unsubscribe?.();
-      runtimeTabs.delete(name);
-      delete tabState.tabs[name];
-      if (tabState.activeTab === name) tabState.activeTab = TELEGRAM_DEFAULT_TAB_NAME;
-      await persist();
-      await deps.sendTextReply(chatId, replyToMessageId, `Closed tab ${name}.`);
+      const result = await closeRuntimeTab(tabState, name, force);
+      if (result.closed) await persist();
+      await deps.sendTextReply(chatId, replyToMessageId, result.message);
     },
     status: async (
       tabState: TelegramTabsState,
@@ -2239,20 +2442,168 @@ export function createTelegramTabManager<TContext>(
         return true;
       }
       if (action === "refresh") {
-        await editTabDashboard(tabState, chatId, messageId);
+        await editTabDashboard(tabState, chatId, messageId, {
+          mode: "open",
+          selectedCloseTabs: [],
+        });
         await answerTabCallback(query.id, "Refreshed.");
+        return true;
+      }
+      if (action === "close-manage") {
+        await editTabDashboard(tabState, chatId, messageId, {
+          mode: "close",
+          selectedCloseTabs: [],
+        });
+        await answerTabCallback(query.id);
+        return true;
+      }
+      if (action === "close-done") {
+        await editTabDashboard(tabState, chatId, messageId, {
+          mode: "open",
+          selectedCloseTabs: [],
+        });
+        await answerTabCallback(query.id, "Done.");
+        return true;
+      }
+      if (action === "close-toggle") {
+        const name = decodeTelegramTabCallbackName(rawMode);
+        if (!name || !tabState.tabs[name] || name === TELEGRAM_DEFAULT_TAB_NAME) {
+          await answerTabCallback(query.id, "Tab cannot be closed.");
+          await editTabDashboard(tabState, chatId, messageId, { mode: "close" });
+          return true;
+        }
+        const dashboardState = getDashboardState(messageId);
+        const selected = new Set(
+          normalizeTelegramTabCloseSelection(
+            tabState,
+            dashboardState?.selectedCloseTabs ?? [],
+          ),
+        );
+        if (selected.has(name)) selected.delete(name);
+        else selected.add(name);
+        await editTabDashboard(tabState, chatId, messageId, {
+          mode: "close",
+          selectedCloseTabs: [...selected],
+        });
+        await answerTabCallback(
+          query.id,
+          selected.has(name) ? "Selected." : "Unselected.",
+        );
+        return true;
+      }
+      if (action === "close-select-all") {
+        const selectedCloseTabs = getTelegramTabCloseableNames(tabState);
+        await editTabDashboard(tabState, chatId, messageId, {
+          mode: "close",
+          selectedCloseTabs,
+        });
+        await answerTabCallback(
+          query.id,
+          selectedCloseTabs.length > 0 ? "All closeable tabs selected." : "No closeable tabs.",
+        );
+        return true;
+      }
+      if (action === "close-clear") {
+        await editTabDashboard(tabState, chatId, messageId, {
+          mode: "close",
+          selectedCloseTabs: [],
+        });
+        await answerTabCallback(query.id, "Selection cleared.");
+        return true;
+      }
+      if (action === "close-selected") {
+        const dashboardState = getDashboardState(messageId);
+        const selectedCloseTabs = normalizeTelegramTabCloseSelection(
+          tabState,
+          dashboardState?.selectedCloseTabs ?? [],
+        );
+        if (selectedCloseTabs.length === 0) {
+          await answerTabCallback(query.id, "No tabs selected.");
+          return true;
+        }
+        await deps.editInteractiveMessage?.(
+          chatId,
+          messageId,
+          buildTelegramTabMultiCloseConfirmationText(tabState, selectedCloseTabs),
+          "plain",
+          buildTelegramTabMultiCloseConfirmationReplyMarkup(),
+        );
+        setDashboardState({
+          chatId,
+          messageId,
+          mode: "close",
+          selectedCloseTabs,
+          updatedAt: now(),
+        });
+        await answerTabCallback(query.id);
+        return true;
+      }
+      if (action === "close-cancel") {
+        const selectedCloseTabs = normalizeTelegramTabCloseSelection(
+          tabState,
+          getDashboardState(messageId)?.selectedCloseTabs ?? [],
+        );
+        await editTabDashboard(tabState, chatId, messageId, {
+          mode: "close",
+          selectedCloseTabs,
+        });
+        await answerTabCallback(query.id, "Cancelled.");
+        return true;
+      }
+      if (action === "close-confirm") {
+        const selectedCloseTabs = normalizeTelegramTabCloseSelection(
+          tabState,
+          getDashboardState(messageId)?.selectedCloseTabs ?? [],
+        );
+        if (selectedCloseTabs.length === 0) {
+          await answerTabCallback(query.id, "No tabs selected.");
+          return true;
+        }
+        const closedNames: string[] = [];
+        const skippedMessages: string[] = [];
+        try {
+          for (const name of selectedCloseTabs) {
+            const result = await closeRuntimeTab(tabState, name, true);
+            if (result.closed) closedNames.push(name);
+            else skippedMessages.push(result.message);
+          }
+          if (closedNames.length > 0) await persist();
+        } catch (error) {
+          await answerTabCallback(
+            query.id,
+            `Close failed: ${getErrorMessage(error)}`,
+          );
+          return true;
+        }
+        await editTabDashboard(tabState, chatId, messageId, {
+          mode: "open",
+          selectedCloseTabs: [],
+        });
+        const skippedSuffix = skippedMessages.length > 0
+          ? ` ${skippedMessages.length} skipped.`
+          : "";
+        await answerTabCallback(
+          query.id,
+          `${closedNames.length} tab${closedNames.length === 1 ? "" : "s"} closed.${skippedSuffix}`,
+        );
         return true;
       }
       if (action === "switch") {
         const name = decodeTelegramTabCallbackName(rawMode);
         if (!name || !tabState.tabs[name]) {
           await answerTabCallback(query.id, "Tab no longer exists.");
-          await editTabDashboard(tabState, chatId, messageId);
+          await editTabDashboard(tabState, chatId, messageId, {
+            mode: "open",
+            selectedCloseTabs: [],
+          });
           return true;
         }
         await answerTabCallback(query.id, `Switching to ${name}.`);
         await commandHandlers.switch(tabState, name, chatId, messageId);
-        await editTabDashboard(tabState, chatId, messageId);
+        await editTabDashboard(tabState, chatId, messageId, {
+          mode: "open",
+          selectedCloseTabs: [],
+        });
         return true;
       }
       if (action === "last5") {
@@ -2289,7 +2640,10 @@ export function createTelegramTabManager<TContext>(
         );
         if (!name || !tabState.tabs[name]) {
           await answerTabCallback(query.id, "Tab no longer exists.");
-          await editTabDashboard(tabState, chatId, messageId);
+          await editTabDashboard(tabState, chatId, messageId, {
+            mode: "open",
+            selectedCloseTabs: [],
+          });
           return true;
         }
         if (mode === "do") {
@@ -2302,7 +2656,10 @@ export function createTelegramTabManager<TContext>(
           } else {
             await commandHandlers.close(tabState, name, true, chatId, messageId);
           }
-          await editTabDashboard(tabState, chatId, messageId);
+          await editTabDashboard(tabState, chatId, messageId, {
+            mode: "open",
+            selectedCloseTabs: [],
+          });
           return true;
         }
         const runtime = getRuntime(tabState, name);

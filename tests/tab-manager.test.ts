@@ -743,6 +743,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bStatus\b/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bNew\b/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bRename\b/);
+  assert.match(dashboardMarkups.at(-1) ?? "", /Manage 🗑/);
   assert.match(dashboardMarkups.at(-1) ?? "", /\bAbort\|Close\b/);
 
   await manager.handleCallbackQuery(
@@ -789,6 +790,116 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   );
   assert.equal(answers.at(-1), "Closing A.");
   assert.match(textReplies.at(-1) ?? "", /Closed tab A/);
+});
+
+test("Tab dashboard closes multiple selected tabs", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-multi-close-"));
+  const statePath = join(tempDir, "tabs.json");
+  const textReplies: string[] = [];
+  const interactiveEdits: string[] = [];
+  const editMarkups: string[] = [];
+  const answers: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 10,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      textReplies.push(text);
+      return textReplies.length;
+    },
+    sendInteractiveMessage: async () => 88,
+    editInteractiveMessage: async (_chatId, _messageId, text, mode, markup) => {
+      interactiveEdits.push(`${mode}:${text}`);
+      editMarkups.push(
+        markup.inline_keyboard
+          .flat()
+          .map((button) => `${button.text}:${button.callback_data}`)
+          .join("\n"),
+      );
+    },
+    answerCallbackQuery: async (_id, text) => {
+      answers.push(text ?? "");
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.handleCommand("new B", 1, 11, "ctx");
+  await manager.handleCommand("new C", 1, 12, "ctx");
+  await manager.handleCommand("", 1, 13, "ctx");
+
+  await manager.handleCallbackQuery(
+    {
+      id: "manage",
+      data: "tab:close-manage",
+      message: { chat: { id: 7 }, message_id: 88 },
+    },
+    "ctx",
+  );
+  assert.match(interactiveEdits.at(-1) ?? "", /Close mode: select tabs to close/);
+  assert.match(editMarkups.at(-1) ?? "", /☐ A:tab:close-toggle:A/);
+
+  await manager.handleCallbackQuery(
+    {
+      id: "select-a",
+      data: "tab:close-toggle:A",
+      message: { chat: { id: 7 }, message_id: 88 },
+    },
+    "ctx",
+  );
+  assert.equal(answers.at(-1), "Selected.");
+  await manager.handleCallbackQuery(
+    {
+      id: "select-b",
+      data: "tab:close-toggle:B",
+      message: { chat: { id: 7 }, message_id: 88 },
+    },
+    "ctx",
+  );
+  assert.match(interactiveEdits.at(-1) ?? "", /Selected: 2/);
+
+  await manager.handleCallbackQuery(
+    {
+      id: "close-selected",
+      data: "tab:close-selected",
+      message: { chat: { id: 7 }, message_id: 88 },
+    },
+    "ctx",
+  );
+  assert.match(interactiveEdits.at(-1) ?? "", /Close 2 selected tabs\?/);
+  assert.match(editMarkups.at(-1) ?? "", /Close selected:tab:close-confirm/);
+
+  await manager.handleCallbackQuery(
+    {
+      id: "confirm-close",
+      data: "tab:close-confirm",
+      message: { chat: { id: 7 }, message_id: 88 },
+    },
+    "ctx",
+  );
+  assert.equal(answers.at(-1), "2 tabs closed.");
+  assert.match(interactiveEdits.at(-1) ?? "", /Tabs 2\/10/);
+
+  const saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    activeTab: string;
+    tabs: Record<string, unknown>;
+  };
+  assert.equal(saved.activeTab, "C");
+  assert.deepEqual(Object.keys(saved.tabs).sort(), ["C", "default"]);
+  assert.equal(backends.get("A")?.disposed, true);
+  assert.equal(backends.get("B")?.disposed, true);
+  assert.equal(backends.get("C")?.disposed, false);
 });
 
 test("Tab manager renames tabs without discarding session state", async () => {

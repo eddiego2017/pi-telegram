@@ -41,6 +41,9 @@ navigating Chromium's global active page.
 ## What Works
 
 - `/tab` opens the inline dashboard for switching tabs and confirmed abort/close.
+- `/tab` dashboard `Manage 🗑` mode supports multi-select closing of
+  non-default tabs with an explicit confirmation; selected running workers are
+  stopped and session files are kept.
 - `/tab new A`, `/tab A`, `/tab rename A B`, `/tab close A`, and `/tab abort`
   are parent-owned and stay responsive while workers run.
 - Bare `/abort` and `/stop` target the active tab worker when concurrent tabs
