@@ -23,6 +23,12 @@ wrapper did not forward the active-tab abort port to the core command handler.
 That wrapper now forwards `abortActiveTab`, with a regression covering the
 actual routing path.
 
+Follow-up fix on 2026-05-23: browser skill visual checkpoint sends are direct
+Bot API `sendPhoto` calls from the worker process. Tab workers now receive a
+per-tab `PI_TELEGRAM_TARGET_FILE`, updated before each routed prompt/follow-up,
+so background-tab browser screenshots reply to that tab's prompt message instead
+of drifting to the currently active tab context.
+
 ## What Works
 
 - `/tab` opens the inline dashboard for switching tabs and confirmed abort/close.
@@ -36,6 +42,8 @@ actual routing path.
   and replayable image attachments.
 - Active tab runs stream answer text, thinking previews, tool-call previews,
   final Markdown replies, and native Telegram `typing` actions.
+- Browser visual checkpoints from tab workers reply to the prompt message for
+  the tab that produced them, including background tabs.
 - `/llm` and `/model` switch the active tab's child worker model while idle.
 - `/new` starts a fresh session inside the active tab worker through RPC
   `new_session`, creating the new file in the shared cwd session pool.
