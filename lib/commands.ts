@@ -1711,6 +1711,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     queueReloadRuntimeCommand: deps.queueReloadRuntimeCommand,
     injectNewSession: deps.injectNewSession,
     injectClone: deps.injectClone,
+    abortActiveTab: deps.abortActiveTab,
     enqueueControlItem: commandTargetRuntime.enqueueControlItem,
     showStatus: commandTargetRuntime.showStatus,
     openModelMenu: commandTargetRuntime.openModelMenu,

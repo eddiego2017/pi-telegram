@@ -17,6 +17,12 @@ the `/resume` session-name refresh fix, and active-tab `/abort`/`/stop` routing
 are implemented locally and applied to the live `pi` Kubernetes deployment.
 The Telegram runtime was reloaded through tmux after validation.
 
+Follow-up fix on 2026-05-23: live testing showed bare `/abort` and `/stop`
+still replied `No active turn.` because the production command-target runtime
+wrapper did not forward the active-tab abort port to the core command handler.
+That wrapper now forwards `abortActiveTab`, with a regression covering the
+actual routing path.
+
 ## What Works
 
 - `/tab` opens the inline dashboard for switching tabs and confirmed abort/close.

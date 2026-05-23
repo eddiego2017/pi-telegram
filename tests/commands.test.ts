@@ -1120,18 +1120,29 @@ test("Command handler target runtime binds command targets into command handling
     string
   >({
     hasAbortHandler: () => false,
-    clearPendingModelSwitch: () => {},
+    clearPendingModelSwitch: () => {
+      calls.push("clear-switch");
+    },
     hasQueuedTelegramItems: () => false,
-    clearQueuedTelegramItems: () => 0,
-    setPreserveQueuedTurnsAsHistory: () => {},
-    abortCurrentTurn: () => {},
+    clearQueuedTelegramItems: () => {
+      calls.push("clear-queue");
+      return 2;
+    },
+    setPreserveQueuedTurnsAsHistory: (preserve) => {
+      calls.push(`preserve:${preserve}`);
+    },
+    abortCurrentTurn: () => {
+      calls.push("parent-abort");
+    },
     isIdle: () => true,
     hasPendingMessages: () => false,
     hasActiveTelegramTurn: () => false,
     hasDispatchPending: () => false,
     isCompactionInProgress: () => false,
     setCompactionInProgress: () => {},
-    updateStatus: () => {},
+    updateStatus: () => {
+      calls.push("status");
+    },
     dispatchNextQueuedTelegramTurn: (ctx) => {
       calls.push(`dispatch:${ctx}`);
     },
@@ -1144,6 +1155,10 @@ test("Command handler target runtime binds command targets into command handling
     },
     injectNewSession: async () => true,
     injectClone: async () => undefined,
+    abortActiveTab: async (ctx) => {
+      calls.push(`tab-abort:${ctx}`);
+      return { aborted: true, message: "Aborted tab hk." };
+    },
     getSessionName: () => undefined,
     setSessionName: () => undefined,
     allocateItemOrder: () => 0,
@@ -1171,7 +1186,9 @@ test("Command handler target runtime binds command targets into command handling
     setAllowedUserId: () => {},
     setMyCommands: async () => {},
     persistConfig: async () => {},
-    sendTextReply: async () => {},
+    sendTextReply: async (chatId, replyToMessageId, text) => {
+      calls.push(`reply:${chatId}:${replyToMessageId}:${text}`);
+    },
   });
   assert.equal(
     await handleCommand(
@@ -1191,7 +1208,39 @@ test("Command handler target runtime binds command targets into command handling
     ),
     true,
   );
-  assert.deepEqual(calls, ["show:ctx", "tab:new A:ctx"]);
+  assert.equal(
+    await handleCommand(
+      "abort",
+      "",
+      { chat: { id: 7 }, message_id: 11 },
+      "ctx",
+    ),
+    true,
+  );
+  assert.equal(
+    await handleCommand(
+      "stop",
+      "",
+      { chat: { id: 7 }, message_id: 11 },
+      "ctx",
+    ),
+    true,
+  );
+  assert.deepEqual(calls, [
+    "show:ctx",
+    "tab:new A:ctx",
+    "tab-abort:ctx",
+    "clear-switch",
+    "preserve:true",
+    "status",
+    "reply:7:11:Aborted tab hk.",
+    "tab-abort:ctx",
+    "clear-switch",
+    "clear-queue",
+    "preserve:false",
+    "status",
+    "reply:7:11:Aborted tab hk. Cleared 2 queued turns.",
+  ]);
 });
 
 test("Command runtime routes commands through runtime ports", async () => {
