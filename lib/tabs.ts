@@ -32,6 +32,8 @@ export interface TelegramTabRecord {
   lastAgentStartAt?: number;
   lastAgentEndAt?: number;
   lastAssistantText?: string;
+  lastMessageText?: string;
+  lastMessageAt?: number;
   messageCount?: number;
   telegramChatId?: number;
   telegramReplyToMessageId?: number;

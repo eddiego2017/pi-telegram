@@ -900,7 +900,7 @@ function formatTelegramTabDashboardName(record: TelegramTabRecord): string {
 }
 
 function formatTelegramTabDashboardLastMessage(record: TelegramTabRecord): string {
-  const text = record.lastAssistantText?.replace(/\s+/g, " ").trim();
+  const text = (record.lastMessageText ?? record.lastAssistantText)?.replace(/\s+/g, " ").trim();
   return text ? truncateTelegramTabText(text, 96) : "No messages yet.";
 }
 
@@ -1596,7 +1596,11 @@ export function createTelegramTabManager<TContext>(
       );
     }
     const assistantText = extractRpcAssistantText(event);
-    if (assistantText) record.lastAssistantText = assistantText;
+    if (assistantText) {
+      record.lastAssistantText = assistantText;
+      record.lastMessageText = assistantText;
+      record.lastMessageAt = eventNow;
+    }
     if (event.type === "message_end" && isAssistantAgentMessage(event.message)) {
       const finalBodyText = extractAgentBodyText(event.message);
       if (runtime.textStream && finalBodyText) {
@@ -2336,6 +2340,8 @@ export function createTelegramTabManager<TContext>(
           delete runtime.record.sessionName;
         }
         runtime.record.lastAssistantText = undefined;
+        runtime.record.lastMessageText = undefined;
+        runtime.record.lastMessageAt = undefined;
         runtime.record.lastAgentStartAt = undefined;
         runtime.record.lastAgentEndAt = undefined;
         runtime.record.lastError = undefined;
@@ -2384,6 +2390,8 @@ export function createTelegramTabManager<TContext>(
         stopTabTyping(runtime);
         resetRuntimeTurnBuffers(runtime);
         delete runtime.record.lastAssistantText;
+        delete runtime.record.lastMessageText;
+        delete runtime.record.lastMessageAt;
         runtime.record.sessionFile = sessionPath;
         runtime.record.lastError = undefined;
         const childState = await refreshRuntimeState(runtime);
@@ -2743,12 +2751,15 @@ export function createTelegramTabManager<TContext>(
         return true;
       }
       const wasRunning = runtime.record.status === "running";
+      const promptNow = now();
       runtime.activeChatId = turn.chatId;
       runtime.activeReplyToMessageId = turn.replyToMessageId;
       runtime.record.telegramChatId = turn.chatId;
       runtime.record.telegramReplyToMessageId = turn.replyToMessageId;
-      runtime.record.telegramTargetUpdatedAt = now();
-      runtime.record.lastUsedAt = now();
+      runtime.record.telegramTargetUpdatedAt = promptNow;
+      runtime.record.lastUsedAt = promptNow;
+      runtime.record.lastMessageText = promptText;
+      runtime.record.lastMessageAt = promptNow;
       await persist();
       startTabTyping(tabState.activeTab, runtime);
       try {

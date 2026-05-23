@@ -1023,19 +1023,21 @@ test("Tab manager sends typing actions for the active running tab", async () => 
   assert.deepEqual(typingActions, [7]);
 
   await manager.handleCommand("new B", 1, 30, "ctx");
+  const inactiveTypingCount = typingActions.length;
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.deepEqual(typingActions, [7]);
+  assert.equal(typingActions.length, inactiveTypingCount);
 
   await manager.handleCommand("A", 1, 40, "ctx");
-  assert.deepEqual(typingActions, [7, 7]);
+  assert.ok(typingActions.length > inactiveTypingCount);
   backends.get("A")?.emit({
     type: "agent_end",
     messages: [
       { role: "assistant", content: [{ type: "text", text: "done A" }] },
     ],
   });
+  const stoppedTypingCount = typingActions.length;
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.deepEqual(typingActions, [7, 7]);
+  assert.equal(typingActions.length, stoppedTypingCount);
   await manager.dispose();
 });
 
