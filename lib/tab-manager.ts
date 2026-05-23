@@ -351,15 +351,25 @@ export function createTelegramTabAwareResumeMenuPorts<TContext>(
         ? deps.tabManager.getActiveResumeSessionScope(ctx)
         : undefined,
     injectResumeExec: async (sessionPath, ctx, sessionScope) => {
-      if (deps.tabManager.isEnabled()) {
-        const handled = await deps.tabManager.switchSession(
-          sessionPath,
-          ctx,
-          sessionScope,
-        );
-        if (handled) return;
+      if (!deps.tabManager.isEnabled()) {
+        await deps.injectParentResumeExec(sessionPath);
+        return;
       }
-      await deps.injectParentResumeExec(sessionPath);
+      const activeScope =
+        sessionScope?.kind === "tab" && sessionScope.tabName
+          ? sessionScope
+          : deps.tabManager.getActiveResumeSessionScope(ctx);
+      if (!activeScope) {
+        throw new Error("No active tab session scope for /resume.");
+      }
+      const handled = await deps.tabManager.switchSession(
+        sessionPath,
+        ctx,
+        activeScope,
+      );
+      if (!handled) {
+        throw new Error("Active tab did not handle /resume.");
+      }
     },
   };
 }

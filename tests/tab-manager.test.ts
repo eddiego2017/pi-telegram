@@ -10,8 +10,10 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  createTelegramTabAwareResumeMenuPorts,
   createTelegramTabManager,
   type TelegramTabBackend,
+  type TelegramTabManager,
 } from "../lib/tab-manager.ts";
 import type {
   RpcChildBackendEvent,
@@ -107,6 +109,91 @@ class FakeTabBackend implements TelegramTabBackend {
 function waitForTabStreamFlush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+function makeResumePortTabManager(
+  overrides: Partial<TelegramTabManager<string>>,
+): TelegramTabManager<string> {
+  return {
+    isEnabled: () => true,
+    getActiveModel: async () => undefined,
+    getActiveThinkingLevel: async () => undefined,
+    getActiveSessionReference: () => undefined,
+    getActiveResumeSessionScope: () => undefined,
+    canSwitchActiveModel: async () => true,
+    selectActiveModel: async () => true,
+    setActiveThinkingLevel: async () => true,
+    switchSession: async () => false,
+    handleCommand: async () => false,
+    handleCallbackQuery: async () => false,
+    dispatchPrompt: async () => false,
+    dispose: async () => undefined,
+    ...overrides,
+  };
+}
+
+test("Tab-aware resume ports recompute active tab scope before host fallback", async () => {
+  const events: string[] = [];
+  const ports = createTelegramTabAwareResumeMenuPorts<string>({
+    tabManager: makeResumePortTabManager({
+      getActiveResumeSessionScope: () => ({
+        kind: "tab",
+        tabName: "A",
+        cwd: "/repo",
+        sessionDir: "/tabs/A",
+        currentSessionFile: "/tabs/A/current.jsonl",
+      }),
+      switchSession: async (sessionPath, ctx, scope) => {
+        events.push(`tab:${sessionPath}:${ctx}:${scope?.tabName ?? ""}`);
+        return true;
+      },
+    }),
+    injectParentResumeExec: async (sessionPath) => {
+      events.push(`parent:${sessionPath}`);
+    },
+  });
+
+  await ports.injectResumeExec("/tabs/A/old.jsonl", "ctx");
+
+  assert.deepEqual(events, ["tab:/tabs/A/old.jsonl:ctx:A"]);
+});
+
+test("Tab-aware resume ports avoid host fallback when active tab scope is missing", async () => {
+  const events: string[] = [];
+  const ports = createTelegramTabAwareResumeMenuPorts<string>({
+    tabManager: makeResumePortTabManager({
+      getActiveResumeSessionScope: () => undefined,
+    }),
+    injectParentResumeExec: async (sessionPath) => {
+      events.push(`parent:${sessionPath}`);
+    },
+  });
+
+  await assert.rejects(
+    () => ports.injectResumeExec("/tabs/A/old.jsonl", "ctx"),
+    /No active tab session scope/,
+  );
+  assert.deepEqual(events, []);
+});
+
+test("Tab-aware resume ports keep host fallback when tabs are disabled", async () => {
+  const events: string[] = [];
+  const ports = createTelegramTabAwareResumeMenuPorts<string>({
+    tabManager: makeResumePortTabManager({
+      isEnabled: () => false,
+      switchSession: async () => {
+        events.push("unexpected-tab");
+        return true;
+      },
+    }),
+    injectParentResumeExec: async (sessionPath) => {
+      events.push(`parent:${sessionPath}`);
+    },
+  });
+
+  await ports.injectResumeExec("/host/old.jsonl", "ctx");
+
+  assert.deepEqual(events, ["parent:/host/old.jsonl"]);
+});
 
 test("Tab manager declines prompt dispatch when disabled", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-disabled-"));
