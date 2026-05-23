@@ -936,7 +936,7 @@ export async function openTelegramResumeMenu(
   const sessionScope = await deps.getSessionScope?.();
   const currentSessionFile =
     sessionScope?.currentSessionFile ?? await deps.getCurrentSessionFile();
-  const sessions = await deps.listSessions(cwd, sessionScope?.sessionDir);
+  const sessions = await deps.listSessions(cwd);
   const mode = deps.mode ?? "open";
   const filters = mode === "open" ? [...(deps.filters ?? [])] : [];
   const fullTextSearch = mode === "open" && filters.length > 0

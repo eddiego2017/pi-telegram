@@ -20,8 +20,8 @@ menus, delivery, and Bot API calls. Each tab owns an isolated RPC worker.
 - `/llm` and `/model` switch the active tab's child worker model while idle.
 - `/new` starts a fresh session inside the active tab worker through RPC
   `new_session`.
-- `/resume` lists the active tab's session directory and switches the selected
-  worker session through RPC `switch_session`. If the child reports stale
+- `/resume` lists the normal global cwd sessions and switches the selected
+  session into the active tab worker through RPC `switch_session`. If the child reports stale
   session state after a successful switch, the parent restarts that worker on
   the selected session file.
 - `/session` follows the active tab, including `Last 5 turns`, `Full replay`,
@@ -86,7 +86,7 @@ Guardrails:
 lib/tabs.ts          tab state, validation, command parsing, formatting
 lib/rpc-child.ts     JSONL RPC child backend and RPC command helpers
 lib/tab-manager.ts   durable tab registry and worker orchestration
-lib/menu-resume.ts   /resume menu, tab-scoped listing, callback dispatch
+lib/menu-resume.ts   /resume menu, global listing, tab-scoped callback dispatch
 lib/menu-session.ts  /session snapshot/replay/history rendering
 lib/menu-tree.ts     /tree prompt history rendering
 lib/commands.ts      command routing for /tab, /new, /name, /llm, etc.

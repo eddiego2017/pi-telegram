@@ -185,17 +185,17 @@ test("openTelegramResumeMenu includes current session as a read-only row", async
   assert.equal(sentMarkup?.inline_keyboard[0]?.[0]?.callback_data, "resume:open:0");
 });
 
-test("openTelegramResumeMenu scopes session listing to active tab sessions", async () => {
+test("openTelegramResumeMenu keeps tab scope while listing global sessions", async () => {
   const sessions = [
     {
-      path: "/tabs/A/current.jsonl",
+      path: "/sessions/current.jsonl",
       id: "current-id",
       cwd: "/cwd",
       created: new Date(0),
       modified: new Date(0),
       messageCount: 1,
-      firstMessage: "tab session",
-      allMessagesText: "tab session",
+      firstMessage: "global session",
+      allMessagesText: "global session",
     },
   ];
   let listedSessionDir: string | undefined;
@@ -208,7 +208,7 @@ test("openTelegramResumeMenu scopes session listing to active tab sessions", asy
       kind: "tab",
       tabName: "A",
       sessionDir: "/tabs/A",
-      currentSessionFile: "/tabs/A/current.jsonl",
+      currentSessionFile: "/sessions/current.jsonl",
     }),
     listSessions: async (_cwd, sessionDir) => {
       listedSessionDir = sessionDir;
@@ -220,9 +220,9 @@ test("openTelegramResumeMenu scopes session listing to active tab sessions", asy
     },
     now: () => 0,
   });
-  assert.equal(listedSessionDir, "/tabs/A");
+  assert.equal(listedSessionDir, undefined);
   assert.equal(stored?.sessionScope?.tabName, "A");
-  assert.equal(stored?.currentSessionFile, "/tabs/A/current.jsonl");
+  assert.equal(stored?.currentSessionFile, "/sessions/current.jsonl");
   assert.equal(stored?.sessions[0]?.isCurrent, true);
 });
 
