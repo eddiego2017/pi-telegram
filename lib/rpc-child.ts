@@ -254,6 +254,11 @@ export class RpcChildBackend {
     await this.send({ type: "set_thinking_level", level });
   }
 
+  async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
+    const response = await this.send({ type: "switch_session", sessionPath });
+    return getRpcResponseData<{ cancelled: boolean }>(response);
+  }
+
   private emit(event: RpcChildBackendEvent): void {
     for (const listener of this.listeners) listener(event);
   }

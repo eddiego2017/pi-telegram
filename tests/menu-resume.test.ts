@@ -185,6 +185,47 @@ test("openTelegramResumeMenu includes current session as a read-only row", async
   assert.equal(sentMarkup?.inline_keyboard[0]?.[0]?.callback_data, "resume:open:0");
 });
 
+test("openTelegramResumeMenu scopes session listing to active tab sessions", async () => {
+  const sessions = [
+    {
+      path: "/tabs/A/current.jsonl",
+      id: "current-id",
+      cwd: "/cwd",
+      created: new Date(0),
+      modified: new Date(0),
+      messageCount: 1,
+      firstMessage: "tab session",
+      allMessagesText: "tab session",
+    },
+  ];
+  let listedSessionDir: string | undefined;
+  let stored: TelegramResumeMenuState | undefined;
+  await openTelegramResumeMenu({
+    chatId: 1,
+    getCwd: () => "/cwd",
+    getCurrentSessionFile: () => "/host/current.jsonl",
+    getSessionScope: () => ({
+      kind: "tab",
+      tabName: "A",
+      sessionDir: "/tabs/A",
+      currentSessionFile: "/tabs/A/current.jsonl",
+    }),
+    listSessions: async (_cwd, sessionDir) => {
+      listedSessionDir = sessionDir;
+      return sessions;
+    },
+    sendResumeMenu: async () => 55,
+    storeState: (state) => {
+      stored = state;
+    },
+    now: () => 0,
+  });
+  assert.equal(listedSessionDir, "/tabs/A");
+  assert.equal(stored?.sessionScope?.tabName, "A");
+  assert.equal(stored?.currentSessionFile, "/tabs/A/current.jsonl");
+  assert.equal(stored?.sessions[0]?.isCurrent, true);
+});
+
 test("openTelegramResumeMenu filters before applying menu item cap", async () => {
   const sessions = Array.from({ length: TELEGRAM_RESUME_MENU_PAGE_SIZE * 10 + 1 }, (_unused, i) => ({
     path: `/sessions/s${i}.jsonl`,
@@ -501,8 +542,13 @@ function makeCallbackDeps(
       answerCallbackQuery: async (id: string, text?: string) => {
         events.push(`answer:${id}:${text ?? ""}`);
       },
-      injectResumeExec: async (path: string) => {
-        events.push(`inject:${path}`);
+      injectResumeExec: async (
+        path: string,
+        scope?: { tabName?: string },
+      ) => {
+        events.push(
+          scope?.tabName ? `inject:${path}:${scope.tabName}` : `inject:${path}`,
+        );
       },
       deleteSessionFile: async (path: string) => {
         events.push(`delete:${path}`);
@@ -649,6 +695,33 @@ test("handleTelegramResumeMenuCallback opens entry using global index", async ()
     `inject:/sessions/s${globalIndex}.json`,
     "edit:1:100:plain",
     "answer:cb4:Session switching…",
+  ]);
+});
+
+test("handleTelegramResumeMenuCallback resumes through captured tab scope", async () => {
+  const state = makeState(3, 0);
+  state.sessionScope = {
+    kind: "tab",
+    tabName: "A",
+    sessionDir: "/tabs/A",
+    currentSessionFile: "/sessions/s0.json",
+  };
+  const { events, deps } = makeCallbackDeps(
+    state,
+    () => "/host/current.jsonl",
+  );
+  await handleTelegramResumeMenuCallback(
+    {
+      id: "tab-open",
+      data: "resume:open:1",
+      message: { chat: { id: 1 }, message_id: 100 },
+    },
+    deps,
+  );
+  assert.deepEqual(events, [
+    "inject:/sessions/s1.json:A",
+    "edit:1:100:plain",
+    "answer:tab-open:Session switching…",
   ]);
 });
 

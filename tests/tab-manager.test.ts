@@ -89,6 +89,16 @@ class FakeTabBackend implements TelegramTabBackend {
     };
   }
 
+  async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
+    this.state = {
+      ...this.state,
+      sessionFile: sessionPath,
+      sessionId: `resumed-${this.tabName}`,
+      isStreaming: false,
+    };
+    return { cancelled: false };
+  }
+
   emit(event: RpcChildBackendEvent): void {
     for (const listener of this.listeners) listener(event);
   }
@@ -253,6 +263,19 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
 
   await manager.handleCommand("abort A", 1, 50, "ctx");
   assert.deepEqual(backends.get("A")?.aborts, ["A"]);
+
+  const scope = manager.getActiveResumeSessionScope("ctx");
+  assert.equal(scope?.kind, "tab");
+  assert.equal(scope?.tabName, "A");
+  assert.equal(scope?.sessionDir.endsWith("/sessions/A"), true);
+  assert.equal(
+    await manager.switchSession("/sessions/A/resumed.jsonl", "ctx", scope),
+    true,
+  );
+  assert.equal(
+    (await backends.get("A")?.getState())?.sessionFile,
+    "/sessions/A/resumed.jsonl",
+  );
 });
 
 test("Tab manager sends last-turn replay after tab switch", async () => {

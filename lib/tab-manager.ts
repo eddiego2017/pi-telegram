@@ -67,6 +67,7 @@ export interface TelegramTabBackend {
   getState: () => Promise<RpcChildSessionState>;
   setModel: (provider: string, modelId: string) => Promise<void>;
   setThinkingLevel: (level: string) => Promise<void>;
+  switchSession: (sessionPath: string) => Promise<{ cancelled: boolean }>;
 }
 
 export interface TelegramTabModelSelection {
@@ -80,6 +81,14 @@ export interface TelegramTabSessionReference {
   sessionFile?: string;
   sessionId?: string;
   sessionName?: string;
+}
+
+export interface TelegramTabResumeSessionScope {
+  kind: "tab";
+  tabName: string;
+  cwd: string;
+  sessionDir: string;
+  currentSessionFile?: string;
 }
 
 export interface TelegramTabManagerDeps<TContext> {
@@ -204,6 +213,9 @@ export interface TelegramTabManager<TContext> {
   getActiveSessionReference: (
     ctx: TContext,
   ) => TelegramTabSessionReference | undefined;
+  getActiveResumeSessionScope: (
+    ctx: TContext,
+  ) => TelegramTabResumeSessionScope | undefined;
   canSwitchActiveModel: (ctx: TContext) => Promise<boolean>;
   selectActiveModel: (
     model: TelegramTabModelSelection,
@@ -212,6 +224,11 @@ export interface TelegramTabManager<TContext> {
   setActiveThinkingLevel: (
     level: string,
     ctx: TContext,
+  ) => Promise<boolean>;
+  switchSession: (
+    sessionPath: string,
+    ctx: TContext,
+    scope?: { kind?: string; tabName?: string },
   ) => Promise<boolean>;
   handleCommand: (
     args: string,
@@ -306,6 +323,44 @@ export function createTelegramTabAwareModelMenuPorts<
       deps.tabManager.isEnabled()
         ? false
         : deps.canOfferParentInFlightModelSwitch(ctx),
+  };
+}
+
+export interface TelegramTabAwareResumeMenuPorts<TContext> {
+  getSessionScope: (
+    ctx: TContext,
+  ) => TelegramTabResumeSessionScope | undefined;
+  injectResumeExec: (
+    sessionPath: string,
+    ctx: TContext,
+    sessionScope?: { kind?: string; tabName?: string },
+  ) => Promise<void>;
+}
+
+export interface TelegramTabAwareResumeMenuPortDeps<TContext> {
+  tabManager: TelegramTabManager<TContext>;
+  injectParentResumeExec: (sessionPath: string) => Promise<void>;
+}
+
+export function createTelegramTabAwareResumeMenuPorts<TContext>(
+  deps: TelegramTabAwareResumeMenuPortDeps<TContext>,
+): TelegramTabAwareResumeMenuPorts<TContext> {
+  return {
+    getSessionScope: (ctx) =>
+      deps.tabManager.isEnabled()
+        ? deps.tabManager.getActiveResumeSessionScope(ctx)
+        : undefined,
+    injectResumeExec: async (sessionPath, ctx, sessionScope) => {
+      if (deps.tabManager.isEnabled()) {
+        const handled = await deps.tabManager.switchSession(
+          sessionPath,
+          ctx,
+          sessionScope,
+        );
+        if (handled) return;
+      }
+      await deps.injectParentResumeExec(sessionPath);
+    },
   };
 }
 
@@ -1691,6 +1746,20 @@ export function createTelegramTabManager<TContext>(
       if (!runtime) return undefined;
       return getTelegramTabSessionReference(runtime.record, deps.getCwd(ctx));
     },
+    getActiveResumeSessionScope: (ctx) => {
+      if (!isEnabled()) return undefined;
+      const tabState = ensureStateSync(deps.getCwd(ctx));
+      const runtime = getRuntime(tabState, tabState.activeTab);
+      if (!runtime) return undefined;
+      const cwd = runtime.record.cwd || deps.getCwd(ctx);
+      return {
+        kind: "tab",
+        tabName: runtime.record.name,
+        cwd,
+        sessionDir: join(sessionRoot, runtime.record.name),
+        currentSessionFile: runtime.record.sessionFile,
+      };
+    },
     canSwitchActiveModel: async (ctx) => {
       if (!isEnabled()) return false;
       const runtime = await getActiveRuntime(ctx);
@@ -1745,6 +1814,43 @@ export function createTelegramTabManager<TContext>(
         });
         await persist();
         return false;
+      }
+    },
+    switchSession: async (sessionPath, ctx, scope) => {
+      if (!isEnabled() || scope?.kind !== "tab" || !scope.tabName) {
+        return false;
+      }
+      const tabState = await ensureState(deps.getCwd(ctx));
+      const runtime = getRuntime(tabState, scope.tabName);
+      if (!runtime) {
+        throw new Error(`Unknown tab: ${scope.tabName}`);
+      }
+      await refreshRuntimeState(runtime);
+      if (!canSwitchTelegramTabModel(runtime.record)) {
+        throw new Error(
+          `Tab ${scope.tabName} is busy. Send /tab abort ${scope.tabName} first.`,
+        );
+      }
+      try {
+        const backend = await ensureBackend(runtime, deps.getCwd(ctx));
+        const result = await backend.switchSession(sessionPath);
+        if (result.cancelled) {
+          throw new Error("switchSession cancelled");
+        }
+        stopTabTyping(runtime);
+        resetRuntimeTurnBuffers(runtime);
+        delete runtime.record.lastAssistantText;
+        await refreshRuntimeState(runtime);
+        return true;
+      } catch (error) {
+        runtime.record.status = "error";
+        runtime.record.lastError = getErrorMessage(error);
+        deps.recordRuntimeEvent?.("tabs", error, {
+          tab: runtime.record.name,
+          action: "switch_session",
+        });
+        await persist();
+        throw error;
       }
     },
     handleCommand: async (args, chatId, replyToMessageId, ctx) => {

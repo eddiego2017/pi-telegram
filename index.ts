@@ -366,6 +366,11 @@ export default function (pi: Pi.ExtensionAPI) {
       canOfferParentInFlightModelSwitch:
         modelSwitchController.canOfferInFlightSwitch,
     });
+  const tabAwareResumeMenuPorts =
+    TabManager.createTelegramTabAwareResumeMenuPorts<Pi.ExtensionContext>({
+      tabManager,
+      injectParentResumeExec: injectResumeExec,
+    });
   const menuActions = Menu.createTelegramMenuActionRuntimeWithStateBuilder<
     ActivePiModel,
     Pi.ExtensionContext
@@ -429,10 +434,11 @@ export default function (pi: Pi.ExtensionAPI) {
   >({
     getCwd: Pi.getExtensionContextCwd,
     getCurrentSessionFile: Pi.getExtensionContextSessionFile,
+    getSessionScope: tabAwareResumeMenuPorts.getSessionScope,
     sendInteractiveMessage,
     editInteractiveMessage,
     answerCallbackQuery,
-    injectResumeExec,
+    injectResumeExec: tabAwareResumeMenuPorts.injectResumeExec,
   });
   const sessionMenuRuntime = MenuSession.createTelegramSessionMenuRuntime<
     Pi.ExtensionContext

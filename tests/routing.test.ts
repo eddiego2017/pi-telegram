@@ -316,12 +316,14 @@ test("Routing runtime applies model menu picks to the active tab when enabled", 
     getActiveModel: async () => modelA,
     getActiveThinkingLevel: async () => undefined,
     getActiveSessionReference: () => undefined,
+    getActiveResumeSessionScope: () => undefined,
     canSwitchActiveModel: async () => true,
     selectActiveModel: async (model) => {
       selectedModels.push(`${model.provider}/${model.id}`);
       return true;
     },
     setActiveThinkingLevel: async () => true,
+    switchSession: async () => false,
     handleCommand: async () => true,
     handleCallbackQuery: async () => false,
     dispatchPrompt: async () => false,
