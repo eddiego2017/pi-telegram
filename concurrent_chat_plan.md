@@ -27,9 +27,16 @@ Follow-up fix on 2026-05-23: browser skill visual checkpoint sends are direct
 Bot API `sendPhoto` calls from the worker process. The existing
 `telegram-tabs.json` tab record is now updated before each routed
 prompt/follow-up with the tab's latest Telegram reply target. Browser checkpoint
-scripts can read that existing registry via `PI_TELEGRAM_TAB`, so background-tab
-screenshots reply to that tab's prompt message without adding a private tab
-folder.
+scripts can read that existing registry via `PI_TELEGRAM_TAB`.
+
+Follow-up fix on 2026-05-23: the first fix only targeted Telegram delivery.
+The browser skill still used Chromium's global active page when commands omitted
+`--tab`, so a background worker could screenshot whichever noVNC tab was active.
+The browser skill now stores each worker's latest CDP target id in the same
+existing `telegram-tabs.json` tab record. Background-tab screenshots use and
+reply to the tab that produced them without adding a private tab folder. A tab
+worker's first `nav.py <url>` opens and stores its own Chrome target instead of
+navigating Chromium's global active page.
 
 ## What Works
 
@@ -44,9 +51,9 @@ folder.
   and replayable image attachments.
 - Active tab runs stream answer text, thinking previews, tool-call previews,
   final Markdown replies, and native Telegram `typing` actions.
-- Browser visual checkpoints from tab workers read the existing tab registry and
-  reply to the prompt message for the tab that produced them, including
-  background tabs.
+- Browser visual checkpoints from tab workers read the existing tab registry for
+  both Telegram reply target and browser CDP target, so they use and reply to
+  the tab that produced them, including background tabs.
 - `/llm` and `/model` switch the active tab's child worker model while idle.
 - `/new` starts a fresh session inside the active tab worker through RPC
   `new_session`, creating the new file in the shared cwd session pool.

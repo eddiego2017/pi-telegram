@@ -499,10 +499,65 @@ function readTelegramTabsStateSync(
   return normalizeTelegramTabsState(raw, cwd, now);
 }
 
+const TELEGRAM_TAB_BROWSER_TARGET_FIELDS = [
+  "browserTargetId",
+  "browserTargetUrl",
+  "browserTargetTitle",
+  "browserTargetUpdatedAt",
+] as const satisfies readonly (keyof TelegramTabRecord)[];
+
+function getBrowserTargetUpdatedAt(record: unknown): number | undefined {
+  if (typeof record !== "object" || record === null) return undefined;
+  const value = (record as Pick<TelegramTabRecord, "browserTargetUpdatedAt">)
+    .browserTargetUpdatedAt;
+  return typeof value === "number" ? value : undefined;
+}
+
+async function preserveOutOfBandTabFields(
+  statePath: string,
+  state: TelegramTabsState,
+): Promise<void> {
+  if (!existsSync(statePath)) return;
+  let existingTabs: Record<string, unknown> | undefined;
+  try {
+    const raw = JSON.parse(await readFile(statePath, "utf8")) as {
+      tabs?: unknown;
+    };
+    if (raw.tabs && typeof raw.tabs === "object") {
+      existingTabs = raw.tabs as Record<string, unknown>;
+    }
+  } catch {
+    return;
+  }
+  if (!existingTabs) return;
+  for (const [name, record] of Object.entries(state.tabs)) {
+    const existing = existingTabs[name];
+    if (typeof existing !== "object" || existing === null) continue;
+    const existingUpdatedAt = getBrowserTargetUpdatedAt(existing);
+    const recordUpdatedAt = getBrowserTargetUpdatedAt(record);
+    if (
+      existingUpdatedAt === undefined ||
+      (recordUpdatedAt !== undefined && existingUpdatedAt <= recordUpdatedAt)
+    ) {
+      continue;
+    }
+    const existingRecord = existing as TelegramTabRecord;
+    for (const field of TELEGRAM_TAB_BROWSER_TARGET_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(existingRecord, field)) {
+        (record as unknown as Record<string, unknown>)[field] =
+          existingRecord[field];
+      } else {
+        delete record[field];
+      }
+    }
+  }
+}
+
 async function writeTelegramTabsState(
   statePath: string,
   state: TelegramTabsState,
 ): Promise<void> {
+  await preserveOutOfBandTabFields(statePath, state);
   await mkdir(dirname(statePath), { recursive: true });
   const tempPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(tempPath, JSON.stringify(state, null, "\t") + "\n", {
