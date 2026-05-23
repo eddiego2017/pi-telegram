@@ -753,6 +753,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
 
   assert.deepEqual(interactiveSends, ["plain:Tabs 3/10:default|A"]);
   assert.match(dashboardTexts.at(-1) ?? "", /○ default · idle · \d+s · 0msg · unset/);
+  assert.match(dashboardTexts.at(-1) ?? "", /\n  ↳ No messages yet\./);
   assert.doesNotMatch(dashboardTexts.at(-1) ?? "", /opencode\//);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bRefresh\b/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bLast 5\b/);

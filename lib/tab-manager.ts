@@ -998,7 +998,7 @@ function formatTelegramTabDashboardSummary(
         : "";
     lines.push(
       `${closePrefix}${marker} ${formatTelegramTabDashboardMeta(tab, nowMs)}${unread}${protectedLabel}`,
-      `${marker} ${formatTelegramTabDashboardLastMessage(tab)}`,
+      `  ↳ ${formatTelegramTabDashboardLastMessage(tab)}`,
     );
   }
   return lines.join("\n");
