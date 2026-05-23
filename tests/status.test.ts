@@ -14,6 +14,7 @@ import {
   createTelegramRuntimeEventRecorder,
   createTelegramStatusHtmlBuilder,
   createTelegramStatusRuntime,
+  createTelegramTabAwareStatusHtmlBuilder,
   getTelegramStatusBarProcessingStatus,
   recordStructuredTelegramRuntimeEvent,
   recordTelegramRuntimeEvent,
@@ -369,6 +370,37 @@ test("Status HTML builder binds active model lookup", () => {
   });
   assert.match(html, /Status.*idle/s);
   assert.match(html, /Context.*0\.0%\/1\.0k/s);
+});
+
+test("Tab-aware status HTML uses active tab context usage", () => {
+  const parentModel = { provider: "openai", id: "gpt-5", contextWindow: 1000 };
+  const tabModel = {
+    provider: "openai",
+    id: "gpt-5.5",
+    contextWindow: 2000,
+  };
+  const buildStatusHtml = createTelegramTabAwareStatusHtmlBuilder({
+    getActiveReference: () => ({
+      tabName: "work",
+      cwd: "/repo",
+      currentModel: { provider: "openai", id: "gpt-5.5" },
+    }),
+    getParentActiveModel: () => parentModel,
+    findModel: () => tabModel,
+    getSnapshotFromReference: (_reference, options) => ({
+      contextUsage: {
+        percent: 25,
+        contextWindow: options.contextWindow,
+      },
+    }),
+  });
+  const html = buildStatusHtml({
+    sessionManager: { getEntries: () => [] },
+    getContextUsage: () => ({ percent: 0, contextWindow: 1000 }),
+    isIdle: () => true,
+    modelRegistry: { isUsingOAuth: () => false },
+  });
+  assert.match(html, /Context.*25\.0%\/2\.0k/s);
 });
 
 test("Status HTML builder shows compacting while compact is running", () => {

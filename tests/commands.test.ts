@@ -1142,7 +1142,7 @@ test("Command handler target runtime binds command targets into command handling
     queueReloadRuntimeCommand: () => {
       calls.push("reload");
     },
-    injectNewSession: async () => undefined,
+    injectNewSession: async () => true,
     injectClone: async () => undefined,
     getSessionName: () => undefined,
     setSessionName: () => undefined,
@@ -1247,6 +1247,7 @@ test("Command runtime routes commands through runtime ports", async () => {
     },
     injectNewSession: async () => {
       events.push("inject-new");
+      return true;
     },
     injectClone: async () => {
       events.push("inject-clone");
@@ -1630,6 +1631,7 @@ test("Command helpers guard and complete /new session flow", async () => {
 
   // Busy: not idle
   await handleTelegramNewSessionCommand({
+    ctx: "ctx",
     isIdle: () => false,
     hasPendingMessages: () => false,
     hasActiveTelegramTurn: () => false,
@@ -1638,6 +1640,7 @@ test("Command helpers guard and complete /new session flow", async () => {
     isCompactionInProgress: () => false,
     injectNewSession: async () => {
       events.push("unexpected:inject");
+      return true;
     },
     sendTextReply: async (text) => {
       events.push(`reply:${text}`);
@@ -1646,6 +1649,7 @@ test("Command helpers guard and complete /new session flow", async () => {
 
   // Busy: queue not empty
   await handleTelegramNewSessionCommand({
+    ctx: "ctx",
     isIdle: () => true,
     hasPendingMessages: () => false,
     hasActiveTelegramTurn: () => false,
@@ -1654,6 +1658,7 @@ test("Command helpers guard and complete /new session flow", async () => {
     isCompactionInProgress: () => false,
     injectNewSession: async () => {
       events.push("unexpected:inject");
+      return true;
     },
     sendTextReply: async (text) => {
       events.push(`reply:${text}`);
@@ -1662,6 +1667,7 @@ test("Command helpers guard and complete /new session flow", async () => {
 
   // Success
   await handleTelegramNewSessionCommand({
+    ctx: "ctx",
     isIdle: () => true,
     hasPendingMessages: () => false,
     hasActiveTelegramTurn: () => false,
@@ -1670,7 +1676,23 @@ test("Command helpers guard and complete /new session flow", async () => {
     isCompactionInProgress: () => false,
     injectNewSession: async () => {
       events.push("inject");
+      return true;
     },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
+  // Cancellation
+  await handleTelegramNewSessionCommand({
+    ctx: "ctx",
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectNewSession: async () => false,
     sendTextReply: async (text) => {
       events.push(`reply:${text}`);
     },
@@ -1678,6 +1700,7 @@ test("Command helpers guard and complete /new session flow", async () => {
 
   // Injection failure
   await handleTelegramNewSessionCommand({
+    ctx: "ctx",
     isIdle: () => true,
     hasPendingMessages: () => false,
     hasActiveTelegramTurn: () => false,
@@ -1701,6 +1724,7 @@ test("Command helpers guard and complete /new session flow", async () => {
     "reply:Cannot start a new session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
     "inject",
     "reply:New session started.",
+    "reply:New session cancelled.",
     "event:new_session:tmux not running",
     "reply:New session failed: tmux not running",
   ]);

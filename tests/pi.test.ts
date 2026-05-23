@@ -10,6 +10,7 @@ import {
   compactExtensionContext,
   createExtensionApiRuntimePorts,
   createScopedModelPatternPersister,
+  deriveSessionContextUsageFromEntries,
   type ExtensionContext,
   getExtensionContextCwd,
   getExtensionContextModel,
@@ -134,6 +135,44 @@ test("Pi context helpers expose model, idle, pending-message, and compact adapte
   assert.equal(isExtensionContextIdle(ctx), true);
   assert.equal(hasExtensionContextPendingMessages(ctx), false);
   assert.deepEqual(events, ["compact", "complete"]);
+});
+
+test("Pi session context usage derives from latest assistant usage", () => {
+  const entries = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        usage: {
+          input: 10,
+          output: 5,
+          cacheRead: 100,
+          cacheWrite: 0,
+          totalTokens: 115,
+        },
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        usage: {
+          input: 20,
+          output: 8,
+          cacheRead: 200,
+          cacheWrite: 2,
+          totalTokens: 230,
+        },
+      },
+    },
+  ];
+
+  assert.deepEqual(deriveSessionContextUsageFromEntries(entries, 1000), {
+    tokens: 230,
+    contextWindow: 1000,
+    percent: 23,
+  });
+  assert.equal(deriveSessionContextUsageFromEntries(entries, undefined), undefined);
 });
 
 test("Pi tmux slash-command injector wraps send-keys in nohup/sleep and quotes the command", async () => {

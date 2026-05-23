@@ -186,7 +186,7 @@ export interface TelegramInboundRouteRuntimeDeps<
     ctx: TContext,
     callbacks: { onComplete: () => void; onError: (error: unknown) => void },
   ) => void;
-  injectNewSession: () => Promise<void>;
+  injectNewSession: (ctx: TContext) => Promise<boolean>;
   injectClone: () => Promise<void>;
   getSessionName: (ctx: TContext) => string | undefined;
   setSessionName: (name: string, ctx: TContext) => void | Promise<void>;

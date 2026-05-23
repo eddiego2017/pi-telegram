@@ -635,21 +635,22 @@ export interface TelegramCompactCommandDeps extends TelegramRuntimeEventRecorder
 }
 
 /**
- * `/new` runs via a host-shell hack: we inject `/new` into the tmux pane where
- * the π REPL lives, because the SDK's `/new` is implemented in the interactive
- * editor layer (not as an extension command) and `sendUserMessage` deliberately
- * skips slash-command handling. This is a fork-local workaround; see the
- * pi-telegram README for the contract and assumptions.
+ * `/new` prefers the active tab worker when concurrent tabs are enabled; if
+ * no tab is active it falls back to the host tmux pane because the SDK's
+ * `/new` is implemented in the interactive editor layer (not as an extension
+ * command) and `sendUserMessage` deliberately skips slash-command handling.
+ * See the pi-telegram README for the contract and assumptions.
  */
-export interface TelegramNewSessionCommandDeps
+export interface TelegramNewSessionCommandDeps<TContext>
   extends TelegramRuntimeEventRecorderPort {
+  ctx: TContext;
   isIdle: () => boolean;
   hasPendingMessages: () => boolean;
   hasActiveTelegramTurn: () => boolean;
   hasDispatchPending: () => boolean;
   hasQueuedTelegramItems: () => boolean;
   isCompactionInProgress: () => boolean;
-  injectNewSession: () => Promise<void>;
+  injectNewSession: (ctx: TContext) => Promise<boolean>;
   sendTextReply: (text: string) => Promise<void>;
 }
 
@@ -992,7 +993,7 @@ export interface TelegramCommandRuntimeDeps<
     callbacks: { onComplete: () => void; onError: (error: unknown) => void },
   ) => void;
   queueReloadRuntimeCommand: () => void | Promise<void>;
-  injectNewSession: () => Promise<void>;
+  injectNewSession: (ctx: TContext) => Promise<boolean>;
   injectClone: () => Promise<void>;
   enqueueControlItem: (
     message: TMessage,
@@ -1343,8 +1344,8 @@ export async function handleTelegramReloadCommand(deps: {
   }
 }
 
-export async function handleTelegramNewSessionCommand(
-  deps: TelegramNewSessionCommandDeps,
+export async function handleTelegramNewSessionCommand<TContext>(
+  deps: TelegramNewSessionCommandDeps<TContext>,
 ): Promise<void> {
   if (
     !deps.isIdle() ||
@@ -1360,7 +1361,11 @@ export async function handleTelegramNewSessionCommand(
     return;
   }
   try {
-    await deps.injectNewSession();
+    const started = await deps.injectNewSession(deps.ctx);
+    if (!started) {
+      await deps.sendTextReply("New session cancelled.");
+      return;
+    }
     await deps.sendTextReply("New session started.");
   } catch (error) {
     deps.recordRuntimeEvent?.("new_session", error);
@@ -1850,6 +1855,7 @@ async function handleTelegramCommandRuntime<
       },
       handleNew: async (nextMessage, commandCtx) => {
         await handleTelegramNewSessionCommand({
+          ctx: commandCtx,
           isIdle: () => deps.isIdle(commandCtx),
           hasPendingMessages: () => deps.hasPendingMessages(commandCtx),
           hasActiveTelegramTurn: deps.hasActiveTelegramTurn,

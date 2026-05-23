@@ -6,7 +6,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import {
   extractRpcTextDelta,
@@ -64,10 +64,12 @@ export interface TelegramTabBackend {
   prompt: (message: string) => Promise<void>;
   followUp: (message: string) => Promise<void>;
   abort: () => Promise<void>;
+  newSession: (parentSession?: string) => Promise<{ cancelled: boolean }>;
+  switchSession: (sessionPath: string) => Promise<{ cancelled: boolean }>;
   getState: () => Promise<RpcChildSessionState>;
   setModel: (provider: string, modelId: string) => Promise<void>;
   setThinkingLevel: (level: string) => Promise<void>;
-  switchSession: (sessionPath: string) => Promise<{ cancelled: boolean }>;
+  setSessionName: (name: string) => Promise<void>;
 }
 
 export interface TelegramTabModelSelection {
@@ -81,6 +83,7 @@ export interface TelegramTabSessionReference {
   sessionFile?: string;
   sessionId?: string;
   sessionName?: string;
+  currentModel?: TelegramTabModelSelection;
 }
 
 export interface TelegramTabResumeSessionScope {
@@ -216,6 +219,7 @@ export interface TelegramTabManager<TContext> {
   getActiveResumeSessionScope: (
     ctx: TContext,
   ) => TelegramTabResumeSessionScope | undefined;
+  getActiveSessionName: (ctx: TContext) => string | undefined;
   canSwitchActiveModel: (ctx: TContext) => Promise<boolean>;
   selectActiveModel: (
     model: TelegramTabModelSelection,
@@ -225,6 +229,10 @@ export interface TelegramTabManager<TContext> {
     level: string,
     ctx: TContext,
   ) => Promise<boolean>;
+  setActiveSessionName: (name: string, ctx: TContext) => Promise<boolean>;
+  newActiveSession: (
+    ctx: TContext,
+  ) => Promise<{ cancelled: boolean } | undefined>;
   switchSession: (
     sessionPath: string,
     ctx: TContext,
@@ -282,7 +290,10 @@ export interface TelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot> {
 export interface TelegramTabAwareSessionSnapshotPortDeps<TContext, TSnapshot> {
   tabManager: TelegramTabManager<TContext>;
   getParentSnapshot: (ctx: TContext) => TSnapshot;
-  getTabSnapshot: (reference: TelegramTabSessionReference) => TSnapshot;
+  getTabSnapshot: (
+    reference: TelegramTabSessionReference,
+    ctx: TContext,
+  ) => TSnapshot;
 }
 
 export function createTelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot>(
@@ -294,7 +305,7 @@ export function createTelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot>(
     getSnapshot: (ctx) => {
       const reference = deps.tabManager.getActiveSessionReference(ctx);
       return reference
-        ? deps.getTabSnapshot(reference)
+        ? deps.getTabSnapshot(reference, ctx)
         : deps.getParentSnapshot(ctx);
     },
     canDeleteCurrent: (_snapshot, ctx) => !isActiveTabSession(ctx),
@@ -302,27 +313,60 @@ export function createTelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot>(
   };
 }
 
-export function createTelegramTabAwareModelMenuPorts<
-  TContext,
-  TModel extends TelegramTabModelSelection,
->(
-  deps: TelegramTabAwareModelMenuPortDeps<TContext, TModel>,
-): TelegramTabAwareModelMenuPorts<TContext, TModel> {
+export interface TelegramTabAwareSessionNamePorts<TContext> {
+  getSessionName: (ctx: TContext) => string | undefined;
+  setSessionName: (name: string, ctx: TContext) => void | Promise<void>;
+}
+
+export interface TelegramTabAwareSessionNamePortDeps<TContext> {
+  tabManager: TelegramTabManager<TContext>;
+  getParentSessionName: (ctx: TContext) => string | undefined;
+  setParentSessionName: (
+    name: string,
+    ctx: TContext,
+  ) => void | Promise<void>;
+}
+
+export function createTelegramTabAwareSessionNamePorts<TContext>(
+  deps: TelegramTabAwareSessionNamePortDeps<TContext>,
+): TelegramTabAwareSessionNamePorts<TContext> {
   return {
-    getActiveModel: async (ctx) => {
-      if (!deps.tabManager.isEnabled()) return deps.getParentModel(ctx);
-      const tabModel = await deps.tabManager.getActiveModel(ctx);
-      if (!tabModel) return undefined;
-      return deps.findModel(tabModel, ctx) ?? ({ ...tabModel } as TModel);
+    getSessionName: (ctx) => {
+      const reference = deps.tabManager.getActiveSessionReference(ctx);
+      return reference
+        ? reference.sessionName
+        : deps.getParentSessionName(ctx);
     },
-    canSwitchModel: (ctx) =>
-      deps.tabManager.isEnabled()
-        ? deps.tabManager.canSwitchActiveModel(ctx)
-        : deps.isParentIdle(ctx),
-    canOfferInFlightModelSwitch: (ctx) =>
-      deps.tabManager.isEnabled()
-        ? false
-        : deps.canOfferParentInFlightModelSwitch(ctx),
+    setSessionName: async (name, ctx) => {
+      const reference = deps.tabManager.getActiveSessionReference(ctx);
+      if (reference) {
+        const handled = await deps.tabManager.setActiveSessionName(name, ctx);
+        if (handled) return;
+      }
+      await deps.setParentSessionName(name, ctx);
+    },
+  };
+}
+
+export interface TelegramTabAwareNewSessionPorts<TContext> {
+  injectNewSession: (ctx: TContext) => Promise<boolean>;
+}
+
+export interface TelegramTabAwareNewSessionPortDeps<TContext> {
+  tabManager: TelegramTabManager<TContext>;
+  injectParentNewSession: () => Promise<void>;
+}
+
+export function createTelegramTabAwareNewSessionPorts<TContext>(
+  deps: TelegramTabAwareNewSessionPortDeps<TContext>,
+): TelegramTabAwareNewSessionPorts<TContext> {
+  return {
+    injectNewSession: async (ctx) => {
+      const result = await deps.tabManager.newActiveSession(ctx);
+      if (result !== undefined) return !result.cancelled;
+      await deps.injectParentNewSession();
+      return true;
+    },
   };
 }
 
@@ -372,6 +416,49 @@ export function createTelegramTabAwareResumeMenuPorts<TContext>(
       }
     },
   };
+}
+
+export function createTelegramTabAwareModelMenuPorts<
+  TContext,
+  TModel extends TelegramTabModelSelection,
+>(
+  deps: TelegramTabAwareModelMenuPortDeps<TContext, TModel>,
+): TelegramTabAwareModelMenuPorts<TContext, TModel> {
+  return {
+    getActiveModel: async (ctx) => {
+      if (!deps.tabManager.isEnabled()) return deps.getParentModel(ctx);
+      const tabModel = await deps.tabManager.getActiveModel(ctx);
+      if (!tabModel) return undefined;
+      return deps.findModel(tabModel, ctx) ?? ({ ...tabModel } as TModel);
+    },
+    canSwitchModel: (ctx) =>
+      deps.tabManager.isEnabled()
+        ? deps.tabManager.canSwitchActiveModel(ctx)
+        : deps.isParentIdle(ctx),
+    canOfferInFlightModelSwitch: (ctx) =>
+      deps.tabManager.isEnabled()
+        ? false
+        : deps.canOfferParentInFlightModelSwitch(ctx),
+  };
+}
+
+export function createTelegramTabReferenceContextWindowGetter<
+  TContext,
+  TModel extends { contextWindow?: number },
+>(deps: {
+  getParentModel: (ctx: TContext) => TModel | undefined;
+  findModel: (
+    identity: TelegramTabModelSelection,
+    ctx: TContext,
+  ) => TModel | undefined;
+}): (
+  reference: TelegramTabSessionReference,
+  ctx: TContext,
+) => number | undefined {
+  return (reference, ctx) =>
+    reference.currentModel
+      ? deps.findModel(reference.currentModel, ctx)?.contextWindow
+      : deps.getParentModel(ctx)?.contextWindow;
 }
 
 export function createTelegramTabManagerShutdownHook<TContext>(
@@ -458,6 +545,19 @@ function applyRpcStateToRecord(
   }
 }
 
+function isSameTelegramTabSessionFile(
+  left: string | undefined,
+  right: string | undefined,
+): boolean {
+  if (!left || !right) return false;
+  return resolve(left) === resolve(right);
+}
+
+function normalizeTelegramTabSessionName(name: string): string | undefined {
+  const trimmed = name.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function canSwitchTelegramTabModel(record: TelegramTabRecord): boolean {
   return record.status !== "running" && record.status !== "starting";
 }
@@ -466,13 +566,15 @@ function getTelegramTabSessionReference(
   record: TelegramTabRecord,
   fallbackCwd?: string,
 ): TelegramTabSessionReference {
-  return {
+  const reference: TelegramTabSessionReference = {
     tabName: record.name,
     cwd: record.cwd || fallbackCwd || "",
     sessionFile: record.sessionFile,
     sessionId: record.sessionId,
     sessionName: record.sessionName,
   };
+  if (record.currentModel) reference.currentModel = record.currentModel;
+  return reference;
 }
 
 function parseTelegramTabModelSelection(
@@ -1376,16 +1478,28 @@ export function createTelegramTabManager<TContext>(
       throw error;
     }
   };
-  const refreshRuntimeState = async (runtime: RuntimeTab): Promise<void> => {
-    if (!runtime.backend) return;
-    await runtime.backend
-      .getState()
-      .then((childState) => applyRpcStateToRecord(runtime.record, childState))
-      .catch((error) => {
-        runtime.record.status = "error";
-        runtime.record.lastError = getErrorMessage(error);
-      });
+  const disposeRuntimeBackend = async (runtime: RuntimeTab): Promise<void> => {
+    stopTabTyping(runtime);
+    const backend = runtime.backend;
+    runtime.backend = undefined;
+    runtime.unsubscribe?.();
+    runtime.unsubscribe = undefined;
+    await backend?.dispose();
+  };
+  const refreshRuntimeState = async (
+    runtime: RuntimeTab,
+  ): Promise<RpcChildSessionState | undefined> => {
+    if (!runtime.backend) return undefined;
+    let childState: RpcChildSessionState | undefined;
+    try {
+      childState = await runtime.backend.getState();
+      applyRpcStateToRecord(runtime.record, childState);
+    } catch (error) {
+      runtime.record.status = "error";
+      runtime.record.lastError = getErrorMessage(error);
+    }
     await persist();
+    return childState;
   };
   const getActiveRuntime = async (ctx: TContext): Promise<RuntimeTab | undefined> => {
     const tabState = await ensureState(deps.getCwd(ctx));
@@ -1770,6 +1884,12 @@ export function createTelegramTabManager<TContext>(
         currentSessionFile: runtime.record.sessionFile,
       };
     },
+    getActiveSessionName: (ctx) => {
+      if (!isEnabled()) return undefined;
+      const tabState = ensureStateSync(deps.getCwd(ctx));
+      const runtime = getRuntime(tabState, tabState.activeTab);
+      return runtime?.record.sessionName;
+    },
     canSwitchActiveModel: async (ctx) => {
       if (!isEnabled()) return false;
       const runtime = await getActiveRuntime(ctx);
@@ -1826,6 +1946,85 @@ export function createTelegramTabManager<TContext>(
         return false;
       }
     },
+    setActiveSessionName: async (name, ctx) => {
+      if (!isEnabled()) return false;
+      const runtime = await getActiveRuntime(ctx);
+      if (!runtime) return false;
+      const normalizedName = normalizeTelegramTabSessionName(name);
+      if (normalizedName === undefined) {
+        delete runtime.record.sessionName;
+      } else {
+        runtime.record.sessionName = normalizedName;
+      }
+      await persist();
+      try {
+        const backend = await ensureBackend(runtime, deps.getCwd(ctx));
+        await backend.setSessionName(name);
+        const childState = await backend.getState();
+        applyRpcStateToRecord(runtime.record, childState);
+        if (
+          normalizedName === undefined &&
+          childState.sessionName === undefined
+        ) {
+          delete runtime.record.sessionName;
+        }
+        await persist();
+      } catch (error) {
+        deps.recordRuntimeEvent?.("tabs", error, {
+          tab: runtime.record.name,
+          action: "set_session_name",
+        });
+      }
+      return true;
+    },
+    newActiveSession: async (ctx) => {
+      if (!isEnabled()) return undefined;
+      const runtime = await getActiveRuntime(ctx);
+      if (!runtime) return undefined;
+      await refreshRuntimeState(runtime);
+      if (
+        runtime.record.status === "running" ||
+        runtime.record.status === "starting"
+      ) {
+        throw new Error(
+          `Tab ${runtime.record.name} is busy. Wait for it to go idle or send /stop first.`,
+        );
+      }
+      try {
+        const backend = await ensureBackend(runtime, deps.getCwd(ctx));
+        const result = await backend.newSession();
+        if (result.cancelled) return { cancelled: true };
+        const childState = await backend.getState();
+        applyRpcStateToRecord(runtime.record, childState);
+        const sessionName =
+          typeof childState.sessionName === "string"
+            ? childState.sessionName.trim()
+            : undefined;
+        if (sessionName) {
+          runtime.record.sessionName = sessionName;
+        } else {
+          delete runtime.record.sessionName;
+        }
+        runtime.record.lastAssistantText = undefined;
+        runtime.record.lastAgentStartAt = undefined;
+        runtime.record.lastAgentEndAt = undefined;
+        runtime.record.lastError = undefined;
+        runtime.record.status = childState.isStreaming === true ? "running" : "idle";
+        runtime.record.lastUsedAt = now();
+        resetRuntimeTurnBuffers(runtime);
+        await persist();
+        return { cancelled: false };
+      } catch (error) {
+        runtime.record.status = "error";
+        runtime.record.lastError = getErrorMessage(error);
+        deps.recordRuntimeEvent?.("tabs", error, {
+          tab: runtime.record.name,
+          action: "new_session",
+        });
+        await persist();
+        throw error;
+      }
+    },
     switchSession: async (sessionPath, ctx, scope) => {
       if (!isEnabled() || scope?.kind !== "tab" || !scope.tabName) {
         return false;
@@ -1850,7 +2049,37 @@ export function createTelegramTabManager<TContext>(
         stopTabTyping(runtime);
         resetRuntimeTurnBuffers(runtime);
         delete runtime.record.lastAssistantText;
-        await refreshRuntimeState(runtime);
+        runtime.record.sessionFile = sessionPath;
+        runtime.record.lastError = undefined;
+        const childState = await refreshRuntimeState(runtime);
+        if (!isSameTelegramTabSessionFile(childState?.sessionFile, sessionPath)) {
+          const reported = childState?.sessionFile ?? "(none)";
+          deps.recordRuntimeEvent?.(
+            "tabs",
+            new Error(
+              `RPC worker reported ${reported} after switch_session ${sessionPath}; restarting worker on target session.`,
+            ),
+            {
+              tab: runtime.record.name,
+              action: "switch_session_rebind",
+            },
+          );
+          await disposeRuntimeBackend(runtime);
+          runtime.record.sessionFile = sessionPath;
+          runtime.record.status = "starting";
+          runtime.record.lastError = undefined;
+          delete runtime.record.sessionId;
+          delete runtime.record.sessionName;
+          await persist();
+          await ensureBackend(runtime, deps.getCwd(ctx));
+          if (!isSameTelegramTabSessionFile(runtime.record.sessionFile, sessionPath)) {
+            throw new Error(
+              `Tab ${scope.tabName} did not bind to resumed session ${sessionPath}.`,
+            );
+          }
+        }
+        runtime.record.lastUsedAt = now();
+        await persist();
         return true;
       } catch (error) {
         runtime.record.status = "error";

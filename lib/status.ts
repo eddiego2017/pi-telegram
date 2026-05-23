@@ -313,6 +313,84 @@ export function createTelegramStatusHtmlBuilder<TContext>(deps: {
     );
 }
 
+interface TelegramTabStatusReference {
+  currentModel?: { provider: string; id: string };
+}
+
+interface TelegramTabStatusSessionSnapshot {
+  contextUsage?: TelegramContextUsage;
+}
+
+function getTelegramTabStatusActiveModel<
+  TContext,
+  TModel extends TelegramStatusActiveModel,
+  TReference extends TelegramTabStatusReference,
+>(deps: {
+  reference?: TReference;
+  ctx: TContext;
+  getParentActiveModel: (ctx: TContext) => TModel | undefined;
+  findModel: (
+    identity: { provider: string; id: string },
+    ctx: TContext,
+  ) => TModel | undefined;
+}): TModel | undefined {
+  if (!deps.reference?.currentModel) {
+    return deps.getParentActiveModel(deps.ctx);
+  }
+  return (
+    deps.findModel(deps.reference.currentModel, deps.ctx) ??
+    deps.getParentActiveModel(deps.ctx)
+  );
+}
+
+function getTelegramTabStatusContextWindow(
+  reference: TelegramTabStatusReference,
+  activeModel: TelegramStatusActiveModel | undefined,
+): number | undefined {
+  return reference.currentModel ? activeModel?.contextWindow : activeModel?.contextWindow;
+}
+
+export function createTelegramTabAwareStatusHtmlBuilder<
+  TContext,
+  TModel extends TelegramStatusActiveModel,
+  TReference extends TelegramTabStatusReference,
+>(deps: {
+  getActiveReference: (ctx: TContext) => TReference | undefined;
+  getParentActiveModel: (ctx: TContext) => TModel | undefined;
+  findModel: (
+    identity: { provider: string; id: string },
+    ctx: TContext,
+  ) => TModel | undefined;
+  getSnapshotFromReference: (
+    reference: TReference,
+    options: { contextWindow?: number },
+  ) => TelegramTabStatusSessionSnapshot;
+  isCompactionInProgress?: () => boolean;
+}): (ctx: TContext & TelegramStatusContext) => string {
+  return (ctx) => {
+    const reference = deps.getActiveReference(ctx);
+    const activeModel = getTelegramTabStatusActiveModel({
+      reference,
+      ctx,
+      getParentActiveModel: deps.getParentActiveModel,
+      findModel: deps.findModel,
+    });
+    const contextUsage = reference
+      ? deps.getSnapshotFromReference(reference, {
+          contextWindow: getTelegramTabStatusContextWindow(reference, activeModel),
+        }).contextUsage
+      : ctx.getContextUsage();
+    return buildStatusHtml(
+      {
+        ...ctx,
+        getContextUsage: () => contextUsage,
+        isCompactionInProgress: deps.isCompactionInProgress,
+      },
+      activeModel,
+    );
+  };
+}
+
 export function createTelegramStatusRuntime<
   TContext extends TelegramStatusRuntimeContext,
 >(deps: TelegramStatusRuntimeDeps<TContext>): TelegramStatusRuntime<TContext> {

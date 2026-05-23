@@ -20,6 +20,7 @@ import {
 
 import {
   formatTelegramContextUsageFooter,
+  type TelegramContextUsageSnapshot,
   type TelegramPromptCacheUsageSnapshot,
 } from "./context-usage.ts";
 
@@ -63,6 +64,11 @@ export interface PiSessionSnapshotReference {
   sessionFile?: string;
   sessionId?: string;
   sessionName?: string;
+  currentModel?: { provider: string; id: string };
+}
+
+export interface PiSessionSnapshotReferenceOptions {
+  contextWindow?: number;
 }
 
 export function createExtensionApiRuntimePorts(
@@ -287,8 +293,57 @@ export function getExtensionContextSessionSnapshot(ctx: ExtensionContext) {
   };
 }
 
+function getFiniteUsageNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, value)
+    : undefined;
+}
+
+function getLatestAssistantUsageTokens(entries: readonly unknown[]): number | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (typeof entry !== "object" || entry === null) continue;
+    if (Reflect.get(entry, "type") !== "message") continue;
+    const message = Reflect.get(entry, "message");
+    if (typeof message !== "object" || message === null) continue;
+    if (Reflect.get(message, "role") !== "assistant") continue;
+    const usage = Reflect.get(message, "usage");
+    if (typeof usage !== "object" || usage === null) continue;
+    const totalTokens = getFiniteUsageNumber(
+      Reflect.get(usage, "totalTokens"),
+    );
+    if (totalTokens !== undefined && totalTokens > 0) return totalTokens;
+    const parts = ["input", "output", "cacheRead", "cacheWrite"].map((key) =>
+      getFiniteUsageNumber(Reflect.get(usage, key)) ?? 0,
+    );
+    const sum = parts.reduce((total, value) => total + value, 0);
+    if (sum > 0) return sum;
+  }
+  return null;
+}
+
+export function deriveSessionContextUsageFromEntries(
+  entries: readonly unknown[],
+  contextWindow: number | undefined,
+): TelegramContextUsageSnapshot | undefined {
+  if (
+    typeof contextWindow !== "number" ||
+    !Number.isFinite(contextWindow) ||
+    contextWindow <= 0
+  ) {
+    return undefined;
+  }
+  const tokens = getLatestAssistantUsageTokens(entries) ?? 0;
+  return {
+    tokens,
+    contextWindow,
+    percent: (tokens / contextWindow) * 100,
+  };
+}
+
 export function getSessionSnapshotFromReference(
   reference: PiSessionSnapshotReference,
+  options: PiSessionSnapshotReferenceOptions = {},
 ) {
   if (reference.sessionFile) {
     try {
@@ -297,14 +352,23 @@ export function getSessionSnapshotFromReference(
         undefined,
         reference.cwd,
       );
+      const entries = sessionManager.getEntries();
+      const branch = sessionManager.getBranch();
       return {
         cwd: sessionManager.getCwd(),
         sessionId: sessionManager.getSessionId(),
         sessionFile: sessionManager.getSessionFile(),
-        sessionName: sessionManager.getSessionName(),
+        sessionName:
+          reference.sessionName !== undefined
+            ? reference.sessionName
+            : sessionManager.getSessionName(),
         leafId: sessionManager.getLeafId(),
-        entries: sessionManager.getEntries(),
-        branch: sessionManager.getBranch(),
+        entries,
+        branch,
+        contextUsage: deriveSessionContextUsageFromEntries(
+          branch.length > 0 ? branch : entries,
+          options.contextWindow,
+        ),
       };
     } catch {
       // Fall through to a minimal snapshot so tab-owned menus do not drift
@@ -319,7 +383,29 @@ export function getSessionSnapshotFromReference(
     leafId: null,
     entries: [],
     branch: [],
+    contextUsage: deriveSessionContextUsageFromEntries(
+      [],
+      options.contextWindow,
+    ),
   };
+}
+
+export function createSessionSnapshotFromReferenceGetter<
+  TContext,
+  TReference extends PiSessionSnapshotReference = PiSessionSnapshotReference,
+>(deps: {
+  getContextWindow: (
+    reference: TReference,
+    ctx: TContext,
+  ) => number | undefined;
+}): (
+  reference: TReference,
+  ctx: TContext,
+) => ReturnType<typeof getSessionSnapshotFromReference> {
+  return (reference, ctx) =>
+    getSessionSnapshotFromReference(reference, {
+      contextWindow: deps.getContextWindow(reference, ctx),
+    });
 }
 
 type WritableSessionInfoManager = ExtensionContext["sessionManager"] & {

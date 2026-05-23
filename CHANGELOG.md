@@ -2,8 +2,10 @@
 
 ## Unreleased
 
-- `[Concurrent Tabs]` `/resume` now follows the active tab when `concurrentTabs.enabled` is true: it lists that tab's session directory, switches the selected worker session through RPC `switch_session`, and no longer silently falls back to the host `/telegram-resume-exec` path.
-- `[Docs]` Compact the concurrent tabs handoff around the current live state, active-tab command coverage, remaining work, and latest validation.
+- `[Concurrent Tabs]` `/resume` now follows the active tab again when concurrent tabs are enabled: the menu lists the active worker's session directory, applies the selected session through RPC `switch_session`, and restarts the worker on the target session if the RPC child reports stale session state after a successful switch.
+- `[Concurrent Tabs]` `/new` now targets the active tab worker via RPC `new_session` when concurrent tabs are enabled, so the selected worker session file advances with the command instead of staying on the old session. It falls back to the host tmux REPL only when no tab is active.
+
+- `[Concurrent Tabs]` Tab-owned `/session` and `/start` status now derive context usage from the active tab's worker session file and model context window, avoiding `Ctx: unknown` and parent-session `0.0%` context rows when a tab has assistant usage.
 - `[Concurrent Tabs]` `/tab` now opens a Telegram inline dashboard when interactive delivery is available. The dashboard shows active/running/unread tab state, switches tabs with buttons, confirms abort/close actions, and displays stopped workers as `stopped` instead of the internal `exited` status.
 - `[Concurrent Tabs]` Switching tabs with `/tab <name>` now automatically replays that tab's last 5 user turns, including agent replies and replayable image attachments, using the same session replay formatter as `/session`.
 - `[Concurrent Tabs]` Active tab worker runs now show native Telegram `typing` chat actions while the child process is answering, and the typing loop stops when the tab finishes, exits, errors, is aborted, or is switched away.

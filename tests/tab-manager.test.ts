@@ -11,6 +11,7 @@ import test from "node:test";
 
 import {
   createTelegramTabAwareResumeMenuPorts,
+  createTelegramTabAwareSessionNamePorts,
   createTelegramTabManager,
   type TelegramTabBackend,
   type TelegramTabManager,
@@ -27,15 +28,19 @@ class FakeTabBackend implements TelegramTabBackend {
   readonly aborts: string[] = [];
   readonly modelSelections: string[] = [];
   readonly thinkingSelections: string[] = [];
+  readonly sessionNames: string[] = [];
+  readonly newSessions: (string | undefined)[] = [];
+  readonly switchSessions: string[] = [];
+  keepStateOnSwitch = false;
   disposed = false;
   readonly tabName: string;
   private listeners = new Set<(event: RpcChildBackendEvent) => void>();
   private state: RpcChildSessionState;
 
-  constructor(tabName: string) {
+  constructor(tabName: string, sessionFile?: string) {
     this.tabName = tabName;
     this.state = {
-      sessionFile: `/sessions/${tabName}.jsonl`,
+      sessionFile: sessionFile ?? `/sessions/${tabName}.jsonl`,
       sessionId: `session-${tabName}`,
       isStreaming: false,
     };
@@ -91,11 +96,36 @@ class FakeTabBackend implements TelegramTabBackend {
     };
   }
 
+  async setSessionName(name: string): Promise<void> {
+    this.sessionNames.push(name);
+    const trimmed = name.trim();
+    this.state = {
+      ...this.state,
+      sessionName: trimmed || undefined,
+    };
+  }
+
+  async newSession(parentSession?: string): Promise<{ cancelled: boolean }> {
+    this.newSessions.push(parentSession);
+    const version = this.newSessions.length;
+    this.state = {
+      ...this.state,
+      sessionFile: `/sessions/${this.tabName}-${version}.jsonl`,
+      sessionId: `session-${this.tabName}-${version}`,
+      sessionName: undefined,
+      isStreaming: false,
+    };
+    return { cancelled: false };
+  }
+
   async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
+    this.switchSessions.push(sessionPath);
+    if (this.keepStateOnSwitch) return { cancelled: false };
     this.state = {
       ...this.state,
       sessionFile: sessionPath,
       sessionId: `resumed-${this.tabName}`,
+      sessionName: undefined,
       isStreaming: false,
     };
     return { cancelled: false };
@@ -104,10 +134,6 @@ class FakeTabBackend implements TelegramTabBackend {
   emit(event: RpcChildBackendEvent): void {
     for (const listener of this.listeners) listener(event);
   }
-}
-
-function waitForTabStreamFlush(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function makeResumePortTabManager(
@@ -119,9 +145,12 @@ function makeResumePortTabManager(
     getActiveThinkingLevel: async () => undefined,
     getActiveSessionReference: () => undefined,
     getActiveResumeSessionScope: () => undefined,
+    getActiveSessionName: () => undefined,
     canSwitchActiveModel: async () => true,
     selectActiveModel: async () => true,
     setActiveThinkingLevel: async () => true,
+    setActiveSessionName: async () => true,
+    newActiveSession: async () => undefined,
     switchSession: async () => false,
     handleCommand: async () => false,
     handleCallbackQuery: async () => false,
@@ -129,6 +158,10 @@ function makeResumePortTabManager(
     dispose: async () => undefined,
     ...overrides,
   };
+}
+
+function waitForTabStreamFlush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 test("Tab-aware resume ports recompute active tab scope before host fallback", async () => {
@@ -248,7 +281,7 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     sessionRoot: join(tempDir, "sessions"),
     createBackend: (options) => {
       backendOptions.push(options);
-      const backend = new FakeTabBackend(options.tabName);
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
       return backend;
     },
@@ -284,9 +317,60 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     provider: "openai",
     id: "gpt-5.5",
   });
+  assert.deepEqual(manager.getActiveSessionReference("ctx")?.currentModel, {
+    provider: "openai",
+    id: "gpt-5.5",
+  });
   assert.equal(await manager.setActiveThinkingLevel("high", "ctx"), true);
   assert.equal(await manager.getActiveThinkingLevel("ctx"), "high");
   assert.deepEqual(backends.get("A")?.thinkingSelections, ["high"]);
+  assert.equal(manager.getActiveSessionName("ctx"), undefined);
+  assert.equal(await manager.setActiveSessionName("mobile debug", "ctx"), true);
+  assert.equal(manager.getActiveSessionName("ctx"), "mobile debug");
+  assert.equal(
+    manager.getActiveSessionReference("ctx")?.sessionName,
+    "mobile debug",
+  );
+  assert.equal(await manager.setActiveSessionName("", "ctx"), true);
+  assert.equal(manager.getActiveSessionName("ctx"), undefined);
+  assert.deepEqual(backends.get("A")?.sessionNames, ["mobile debug", ""]);
+  assert.deepEqual(await manager.newActiveSession("ctx"), { cancelled: false });
+  assert.equal(manager.getActiveSessionName("ctx"), undefined);
+  assert.deepEqual(backends.get("A")?.newSessions, [undefined]);
+  assert.deepEqual(manager.getActiveSessionReference("ctx"), {
+    tabName: "A",
+    cwd: "/repo",
+    sessionFile: "/sessions/A-1.jsonl",
+    sessionId: "session-A-1",
+    sessionName: undefined,
+    currentModel: {
+      provider: "openai",
+      id: "gpt-5.5",
+    },
+  });
+  const scope = manager.getActiveResumeSessionScope("ctx");
+  assert.equal(scope?.kind, "tab");
+  assert.equal(scope?.tabName, "A");
+  assert.equal(scope?.sessionDir.endsWith("/sessions/A"), true);
+  assert.equal(scope?.currentSessionFile, "/sessions/A-1.jsonl");
+  assert.equal(
+    await manager.switchSession("/sessions/A/resumed.jsonl", "ctx", scope),
+    true,
+  );
+  assert.deepEqual(backends.get("A")?.switchSessions, [
+    "/sessions/A/resumed.jsonl",
+  ]);
+  assert.deepEqual(manager.getActiveSessionReference("ctx"), {
+    tabName: "A",
+    cwd: "/repo",
+    sessionFile: "/sessions/A/resumed.jsonl",
+    sessionId: "resumed-A",
+    sessionName: undefined,
+    currentModel: {
+      provider: "openai",
+      id: "gpt-5.5",
+    },
+  });
 
   await manager.dispatchPrompt(
     {
@@ -350,19 +434,105 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
 
   await manager.handleCommand("abort A", 1, 50, "ctx");
   assert.deepEqual(backends.get("A")?.aborts, ["A"]);
+});
 
+test("Tab manager rebinds worker when resume RPC reports stale session state", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-resume-rebind-"));
+  const replies: string[] = [];
+  const backends: FakeTabBackend[] = [];
+  const backendOptions: unknown[] = [];
+  const events: string[] = [];
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 10,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionRoot: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      backendOptions.push(options);
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.push(backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+    recordRuntimeEvent: (_category, error, details) => {
+      events.push(`${details?.action ?? ""}:${error instanceof Error ? error.message : String(error)}`);
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  const firstBackend = backends[0]!;
+  firstBackend.keepStateOnSwitch = true;
   const scope = manager.getActiveResumeSessionScope("ctx");
-  assert.equal(scope?.kind, "tab");
-  assert.equal(scope?.tabName, "A");
-  assert.equal(scope?.sessionDir.endsWith("/sessions/A"), true);
+
   assert.equal(
     await manager.switchSession("/sessions/A/resumed.jsonl", "ctx", scope),
     true,
   );
+
+  assert.equal(firstBackend.disposed, true);
+  assert.equal(backends.length, 2);
+  assert.deepEqual(firstBackend.switchSessions, ["/sessions/A/resumed.jsonl"]);
   assert.equal(
-    (await backends.get("A")?.getState())?.sessionFile,
+    (backendOptions[1] as { sessionFile?: string }).sessionFile,
     "/sessions/A/resumed.jsonl",
   );
+  assert.equal(
+    manager.getActiveSessionReference("ctx")?.sessionFile,
+    "/sessions/A/resumed.jsonl",
+  );
+  assert.match(events.join("\n"), /switch_session_rebind:/);
+});
+
+test("Tab-aware session name ports target the active tab", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-name-"));
+  const replies: string[] = [];
+  const parentSets: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionRoot: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+  const ports = createTelegramTabAwareSessionNamePorts({
+    tabManager: manager,
+    getParentSessionName: () => "parent",
+    setParentSessionName: (name) => {
+      parentSets.push(name);
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  assert.equal(ports.getSessionName("ctx"), undefined);
+  await ports.setSessionName("hello", "ctx");
+  assert.equal(ports.getSessionName("ctx"), "hello");
+  assert.deepEqual(backends.get("A")?.sessionNames, ["hello"]);
+  await ports.setSessionName("", "ctx");
+  assert.equal(ports.getSessionName("ctx"), undefined);
+  assert.deepEqual(backends.get("A")?.sessionNames, ["hello", ""]);
+  assert.deepEqual(parentSets, []);
 });
 
 test("Tab manager sends last-turn replay after tab switch", async () => {
@@ -381,7 +551,7 @@ test("Tab manager sends last-turn replay after tab switch", async () => {
     statePath: join(tempDir, "tabs.json"),
     sessionRoot: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName);
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
       return backend;
     },
@@ -424,7 +594,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
     statePath: join(tempDir, "tabs.json"),
     sessionRoot: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName);
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
       return backend;
     },
@@ -530,7 +700,7 @@ test("Tab manager renames tabs without discarding session state", async () => {
     statePath,
     sessionRoot: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName);
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
       return backend;
     },
@@ -593,7 +763,7 @@ test("Tab manager sends typing actions for the active running tab", async () => 
     statePath: join(tempDir, "tabs.json"),
     sessionRoot: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName);
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
       return backend;
     },
@@ -653,7 +823,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
     statePath: join(tempDir, "tabs.json"),
     sessionRoot: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName);
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
       return backend;
     },
@@ -882,7 +1052,7 @@ test("Tab manager does not reuse finalized thinking or tool streams", async () =
     statePath: join(tempDir, "tabs.json"),
     sessionRoot: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName);
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
       backends.set(options.tabName, backend);
       return backend;
     },

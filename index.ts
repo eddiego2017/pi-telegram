@@ -95,7 +95,7 @@ export default function (pi: Pi.ExtensionAPI) {
   const isIdle = Pi.isExtensionContextIdle;
   const hasPendingMessages = Pi.hasExtensionContextPendingMessages;
   const compact = Pi.compactExtensionContext;
-  const injectNewSession = Pi.createTmuxSlashCommandInjector({
+  const injectParentNewSession = Pi.createTmuxSlashCommandInjector({
     exec: piRuntime.exec,
     target: "pi:0",
     command: "/new",
@@ -284,11 +284,42 @@ export default function (pi: Pi.ExtensionAPI) {
     sendTypingAction,
     recordRuntimeEvent,
   });
+  const getTabReferenceContextWindow =
+    TabManager.createTelegramTabReferenceContextWindowGetter<
+      Pi.ExtensionContext,
+      ActivePiModel
+    >({
+      getParentModel: currentModelRuntime.get,
+      findModel: Pi.findExtensionContextAvailableModel,
+    });
+  const getTabSessionSnapshot =
+    Pi.createSessionSnapshotFromReferenceGetter<
+      Pi.ExtensionContext,
+      TabManager.TelegramTabSessionReference
+    >({
+      getContextWindow: getTabReferenceContextWindow,
+    });
   const tabAwareSessionSnapshotPorts =
     TabManager.createTelegramTabAwareSessionSnapshotPorts({
       tabManager,
       getParentSnapshot: Pi.getExtensionContextSessionSnapshot,
-      getTabSnapshot: Pi.getSessionSnapshotFromReference,
+      getTabSnapshot: getTabSessionSnapshot,
+    });
+  const tabAwareSessionNamePorts =
+    TabManager.createTelegramTabAwareSessionNamePorts({
+      tabManager,
+      getParentSessionName: Pi.getExtensionContextSessionName,
+      setParentSessionName: Pi.setExtensionContextSessionName,
+    });
+  const tabAwareNewSessionPorts =
+    TabManager.createTelegramTabAwareNewSessionPorts({
+      tabManager,
+      injectParentNewSession,
+    });
+  const tabAwareResumeMenuPorts =
+    TabManager.createTelegramTabAwareResumeMenuPorts<Pi.ExtensionContext>({
+      tabManager,
+      injectParentResumeExec: injectResumeExec,
     });
   const dispatchNextQueuedTelegramTurn =
     Queue.createTelegramQueueDispatchRuntime<Pi.ExtensionContext>({
@@ -366,10 +397,21 @@ export default function (pi: Pi.ExtensionAPI) {
       canOfferParentInFlightModelSwitch:
         modelSwitchController.canOfferInFlightSwitch,
     });
-  const tabAwareResumeMenuPorts =
-    TabManager.createTelegramTabAwareResumeMenuPorts<Pi.ExtensionContext>({
-      tabManager,
-      injectParentResumeExec: injectResumeExec,
+  const buildStatusHtml = Status.createTelegramTabAwareStatusHtmlBuilder<
+    Pi.ExtensionContext,
+    ActivePiModel,
+    TabManager.TelegramTabSessionReference
+  >({
+    getActiveReference: tabManager.getActiveSessionReference,
+    getParentActiveModel: currentModelRuntime.get,
+    findModel: Pi.findExtensionContextAvailableModel,
+    getSnapshotFromReference: Pi.getSessionSnapshotFromReference,
+    isCompactionInProgress: lifecycle.isCompactionInProgress,
+  });
+  const buildAppStatusHtml =
+    Commands.createTelegramAppMenuHtmlBuilder<Pi.ExtensionContext>({
+      buildStatusHtml,
+      getPromptTemplateCommands,
     });
   const menuActions = Menu.createTelegramMenuActionRuntimeWithStateBuilder<
     ActivePiModel,
@@ -380,13 +422,7 @@ export default function (pi: Pi.ExtensionAPI) {
     getActiveModel: tabAwareModelMenuPorts.getActiveModel,
     getThinkingLevel,
     getQueueItemCount,
-    buildStatusHtml: Commands.createTelegramAppMenuHtmlBuilder({
-      buildStatusHtml: Status.createTelegramStatusHtmlBuilder({
-        getActiveModel: currentModelRuntime.get,
-        isCompactionInProgress: lifecycle.isCompactionInProgress,
-      }),
-      getPromptTemplateCommands,
-    }),
+    buildStatusHtml: buildAppStatusHtml,
     storeModelMenuState: modelMenuRuntime.storeState,
     isIdle: tabAwareModelMenuPorts.canSwitchModel,
     canOfferInFlightModelSwitch:
@@ -576,10 +612,10 @@ export default function (pi: Pi.ExtensionAPI) {
     isIdle,
     hasPendingMessages,
     compact,
-    injectNewSession,
+    injectNewSession: tabAwareNewSessionPorts.injectNewSession,
     injectClone,
-    getSessionName: Pi.getExtensionContextSessionName,
-    setSessionName: Pi.setExtensionContextSessionName,
+    getSessionName: tabAwareSessionNamePorts.getSessionName,
+    setSessionName: tabAwareSessionNamePorts.setSessionName,
     recordRuntimeEvent,
   });
   const pollingRuntime = Polling.createTelegramPollingControllerRuntime<

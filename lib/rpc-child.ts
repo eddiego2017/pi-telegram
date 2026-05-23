@@ -240,6 +240,21 @@ export class RpcChildBackend {
     await this.send({ type: "abort" });
   }
 
+  async newSession(parentSession?: string): Promise<{ cancelled: boolean }> {
+    const response = await this.send({ type: "new_session", parentSession });
+    return getRpcResponseData<{ cancelled: boolean }>(response);
+  }
+
+  async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
+    const response = await this.send({ type: "switch_session", sessionPath });
+    const result = getRpcResponseData<{ cancelled: boolean }>(response);
+    if (!result.cancelled) {
+      this.options.sessionFile = sessionPath;
+      if (this.lastState) this.lastState.sessionFile = sessionPath;
+    }
+    return result;
+  }
+
   async getState(): Promise<RpcChildSessionState> {
     const response = await this.send({ type: "get_state" });
     this.lastState = getRpcResponseData<RpcChildSessionState>(response);
@@ -254,9 +269,8 @@ export class RpcChildBackend {
     await this.send({ type: "set_thinking_level", level });
   }
 
-  async switchSession(sessionPath: string): Promise<{ cancelled: boolean }> {
-    const response = await this.send({ type: "switch_session", sessionPath });
-    return getRpcResponseData<{ cancelled: boolean }>(response);
+  async setSessionName(name: string): Promise<void> {
+    await this.send({ type: "set_session_name", name });
   }
 
   private emit(event: RpcChildBackendEvent): void {
