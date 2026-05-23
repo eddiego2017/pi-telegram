@@ -44,6 +44,7 @@ class FakeTabBackend implements TelegramTabBackend {
     this.state = {
       sessionFile: sessionFile ?? `/sessions/${tabName}.jsonl`,
       sessionId: `session-${tabName}`,
+      messageCount: 0,
       isStreaming: false,
     };
   }
@@ -65,12 +66,20 @@ class FakeTabBackend implements TelegramTabBackend {
 
   async prompt(message: string): Promise<void> {
     this.prompts.push(message);
-    this.state = { ...this.state, isStreaming: true };
+    this.state = {
+      ...this.state,
+      messageCount: (this.state.messageCount ?? 0) + 1,
+      isStreaming: true,
+    };
   }
 
   async followUp(message: string): Promise<void> {
     this.followUps.push(message);
-    this.state = { ...this.state, isStreaming: true };
+    this.state = {
+      ...this.state,
+      messageCount: (this.state.messageCount ?? 0) + 1,
+      isStreaming: true,
+    };
   }
 
   async abort(): Promise<void> {
@@ -115,6 +124,7 @@ class FakeTabBackend implements TelegramTabBackend {
       sessionFile: `/sessions/${this.tabName}-${version}.jsonl`,
       sessionId: `session-${this.tabName}-${version}`,
       sessionName: undefined,
+      messageCount: 0,
       isStreaming: false,
     };
     return { cancelled: false };
@@ -130,6 +140,7 @@ class FakeTabBackend implements TelegramTabBackend {
       sessionFile: sessionPath,
       sessionId: `resumed-${this.tabName}`,
       sessionName,
+      messageCount: 0,
       isStreaming: false,
     };
     return { cancelled: false };
@@ -686,6 +697,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   const textReplies: string[] = [];
   const interactiveSends: string[] = [];
   const interactiveEdits: string[] = [];
+  const dashboardTexts: string[] = [];
   const dashboardMarkups: string[] = [];
   const answers: string[] = [];
   const replays: string[] = [];
@@ -710,6 +722,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
       return textReplies.length;
     },
     sendInteractiveMessage: async (_chatId, text, mode, markup) => {
+      dashboardTexts.push(text);
       dashboardMarkups.push(
         markup.inline_keyboard
           .map((row) => row.map((button) => button.text).join("|"))
@@ -721,6 +734,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
       return 77;
     },
     editInteractiveMessage: async (_chatId, _messageId, text, mode, markup) => {
+      dashboardTexts.push(text);
       interactiveEdits.push(
         `${mode}:${text.split("\n")[0]}:${markup.inline_keyboard[0]?.map((button) => button.text).join("|")}`,
       );
@@ -738,6 +752,8 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   await manager.handleCommand("", 1, 12, "ctx");
 
   assert.deepEqual(interactiveSends, ["plain:Tabs 3/10:default|A"]);
+  assert.match(dashboardTexts.at(-1) ?? "", /○ default · idle · \d+s · 0msg · unset/);
+  assert.doesNotMatch(dashboardTexts.at(-1) ?? "", /opencode\//);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bRefresh\b/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bLast 5\b/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bStatus\b/);

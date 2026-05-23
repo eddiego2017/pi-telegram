@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` `/tab` dashboard rows now show tab age, worker message count, session name, and latest reply preview instead of provider/model ids.
 - `[Concurrent Tabs]` `/tab` dashboard now has a `Manage 🗑` close mode for selecting multiple non-default tabs, confirming the batch close, and stopping any selected running workers while keeping their session files.
 - `[Concurrent Tabs]` Tab records now keep the latest Telegram reply target and browser CDP target for browser visual checkpoints, so background tab screenshots use the tab that produced them instead of following the currently active tab; a tab worker's first `nav.py <url>` opens its own Chrome target.
 - `[Concurrent Tabs]` Fixed the production command-target wrapper so bare `/abort` and `/stop` actually forward to the active tab worker instead of falling back to the parent `No active turn.` path.

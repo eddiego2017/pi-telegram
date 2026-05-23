@@ -41,6 +41,8 @@ navigating Chromium's global active page.
 ## What Works
 
 - `/tab` opens the inline dashboard for switching tabs and confirmed abort/close.
+  Tab rows show tab age, worker message count, session name, and latest reply
+  preview instead of provider/model ids.
 - `/tab` dashboard `Manage 🗑` mode supports multi-select closing of
   non-default tabs with an explicit confirmation; selected running workers are
   stopped and session files are kept.

@@ -607,6 +607,9 @@ function applyRpcStateToRecord(
   }
   if (state.sessionFile) record.sessionFile = state.sessionFile;
   if (state.sessionId) record.sessionId = state.sessionId;
+  if (typeof state.messageCount === "number") {
+    record.messageCount = Math.max(0, state.messageCount);
+  }
   const sessionName =
     typeof state.sessionName === "string"
       ? state.sessionName.trim()
@@ -880,14 +883,40 @@ function formatTelegramTabThinkingMarkdown(text: string): string {
   return `💡 Thinking\n${quoted}`;
 }
 
-function formatTelegramTabDashboardModel(record: TelegramTabRecord): string {
-  return record.currentModel
-    ? `${record.currentModel.provider}/${record.currentModel.id}`
-    : "model unknown";
-}
-
 function getSortedTelegramTabRecords(state: TelegramTabsState): TelegramTabRecord[] {
   return Object.values(state.tabs).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+function formatTelegramTabDashboardAge(ms: number): string {
+  if (ms < 60_000) return `${Math.max(0, Math.floor(ms / 1000))}s`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
+  return `${Math.floor(ms / 86_400_000)}d`;
+}
+
+function formatTelegramTabDashboardName(record: TelegramTabRecord): string {
+  const name = record.sessionName?.trim();
+  return name ? truncateTelegramTabText(name.replace(/\s+/g, " "), 36) : "unset";
+}
+
+function formatTelegramTabDashboardLastMessage(record: TelegramTabRecord): string {
+  const text = record.lastAssistantText?.replace(/\s+/g, " ").trim();
+  return text ? truncateTelegramTabText(text, 96) : "No messages yet.";
+}
+
+function formatTelegramTabDashboardMeta(
+  record: TelegramTabRecord,
+  nowMs: number,
+): string {
+  const age = formatTelegramTabDashboardAge(nowMs - record.createdAt);
+  const messageCount = Math.max(0, record.messageCount ?? 0);
+  return [
+    record.name,
+    formatTelegramTabStatusLabel(record.status),
+    age,
+    `${messageCount}msg`,
+    formatTelegramTabDashboardName(record),
+  ].join(" · ");
 }
 
 function getTelegramTabCloseableNames(state: TelegramTabsState): string[] {
@@ -912,6 +941,7 @@ function formatTelegramTabDashboardSummary(
   state: TelegramTabsState,
   unreadByTab: Record<string, number>,
   maxTabs: number,
+  nowMs: number,
   mode: TelegramTabDashboardMode = "open",
   selectedCloseTabs: readonly string[] = [],
 ): string {
@@ -931,7 +961,8 @@ function formatTelegramTabDashboardSummary(
       ? [
           `Active: ${active.name}`,
           formatTelegramTabStatusLabel(active.status),
-          formatTelegramTabDashboardModel(active),
+          `${Math.max(0, active.messageCount ?? 0)}msg`,
+          formatTelegramTabDashboardName(active),
         ].join(" · ")
       : `Active: ${state.activeTab}`,
   ];
@@ -957,7 +988,6 @@ function formatTelegramTabDashboardSummary(
   for (const tab of tabs) {
     const marker = tab.name === state.activeTab ? "●" : "○";
     const unread = unreadByTab[tab.name] ? ` · unread ${unreadByTab[tab.name]}` : "";
-    const model = tab.currentModel ? ` · ${formatTelegramTabDashboardModel(tab)}` : "";
     const closePrefix =
       mode === "close" && tab.name !== TELEGRAM_DEFAULT_TAB_NAME
         ? `${selectedSet.has(tab.name) ? "☑" : "☐"} `
@@ -967,7 +997,8 @@ function formatTelegramTabDashboardSummary(
         ? " · protected"
         : "";
     lines.push(
-      `${closePrefix}${marker} ${tab.name} · ${formatTelegramTabStatusLabel(tab.status)}${unread}${model}${protectedLabel}`,
+      `${closePrefix}${marker} ${formatTelegramTabDashboardMeta(tab, nowMs)}${unread}${protectedLabel}`,
+      `${marker} ${formatTelegramTabDashboardLastMessage(tab)}`,
     );
   }
   return lines.join("\n");
@@ -1735,6 +1766,16 @@ export function createTelegramTabManager<TContext>(
     await persist();
     return childState;
   };
+  const refreshDashboardTabRecords = async (
+    tabState: TelegramTabsState,
+  ): Promise<void> => {
+    await Promise.all(
+      Object.keys(tabState.tabs).map(async (name) => {
+        const runtime = getRuntime(tabState, name);
+        if (runtime?.backend) await refreshRuntimeState(runtime);
+      }),
+    );
+  };
   const getActiveRuntime = async (ctx: TContext): Promise<RuntimeTab | undefined> => {
     const tabState = await ensureState(deps.getCwd(ctx));
     return getRuntime(tabState, tabState.activeTab);
@@ -1760,6 +1801,7 @@ export function createTelegramTabManager<TContext>(
     chatId: number,
     replyToMessageId: number,
   ): Promise<void> => {
+    await refreshDashboardTabRecords(tabState);
     const unreadByTab = getUnreadByTab();
     if (!deps.sendInteractiveMessage) {
       await deps.sendTextReply(
@@ -1775,6 +1817,7 @@ export function createTelegramTabManager<TContext>(
         tabState,
         unreadByTab,
         deps.getConfig().maxTabs,
+        now(),
       ),
       "plain",
       buildTelegramTabDashboardReplyMarkup(tabState, unreadByTab),
@@ -1798,6 +1841,7 @@ export function createTelegramTabManager<TContext>(
       selectedCloseTabs?: readonly string[];
     } = {},
   ): Promise<void> => {
+    await refreshDashboardTabRecords(tabState);
     const unreadByTab = getUnreadByTab();
     const existingState = getDashboardState(messageId);
     const mode = options.mode ?? existingState?.mode ?? "open";
@@ -1813,6 +1857,7 @@ export function createTelegramTabManager<TContext>(
         tabState,
         unreadByTab,
         deps.getConfig().maxTabs,
+        now(),
         mode,
         selectedCloseTabs,
       ),
