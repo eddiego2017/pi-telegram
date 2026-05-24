@@ -57,6 +57,9 @@ type PendingRpcRequest = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+const DEFAULT_RPC_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_RPC_COMPACT_TIMEOUT_MS = 10 * 60_000;
+
 export function createJsonlLineSplitter(
   onLine: (line: string) => void,
 ): (chunk: Buffer | string) => void {
@@ -240,6 +243,13 @@ export class RpcChildBackend {
     await this.send({ type: "abort" });
   }
 
+  async compact(): Promise<void> {
+    await this.send(
+      { type: "compact" },
+      this.options.requestTimeoutMs ?? DEFAULT_RPC_COMPACT_TIMEOUT_MS,
+    );
+  }
+
   async newSession(parentSession?: string): Promise<{ cancelled: boolean }> {
     const response = await this.send({ type: "new_session", parentSession });
     return getRpcResponseData<{ cancelled: boolean }>(response);
@@ -297,7 +307,10 @@ export class RpcChildBackend {
     this.emit(parsed as RpcChildBackendEvent);
   }
 
-  private async send(command: Record<string, unknown>): Promise<RpcChildResponse> {
+  private async send(
+    command: Record<string, unknown>,
+    timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_RPC_REQUEST_TIMEOUT_MS,
+  ): Promise<RpcChildResponse> {
     if (!this.process?.stdin || this.process.exitCode !== null) {
       throw new Error("RPC child is not running");
     }
@@ -311,7 +324,7 @@ export class RpcChildBackend {
             `Timeout waiting for RPC response to ${String(command.type)}. ${this.stderr}`,
           ),
         );
-      }, this.options.requestTimeoutMs ?? 30_000);
+      }, timeoutMs);
       this.pendingRequests.set(id, { resolve, reject, timer });
       this.process?.stdin.write(payload, (error) => {
         if (!error) return;

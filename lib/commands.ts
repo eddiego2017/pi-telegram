@@ -997,6 +997,10 @@ export interface TelegramCommandRuntimeDeps<
     ctx: TContext,
     callbacks: { onComplete: () => void; onError: (error: unknown) => void },
   ) => void;
+  compactActiveTab?: (
+    ctx: TContext,
+    callbacks: { onComplete: () => void; onError: (error: unknown) => void },
+  ) => boolean;
   queueReloadRuntimeCommand: () => void | Promise<void>;
   injectNewSession: (ctx: TContext) => Promise<boolean>;
   injectClone: () => Promise<void>;
@@ -1015,6 +1019,9 @@ export interface TelegramCommandRuntimeDeps<
   listAvailableModels: (
     ctx: TContext,
   ) => readonly TelegramAvailableLlmModel[];
+  getActiveLlmModel?: (
+    ctx: TContext,
+  ) => TelegramAvailableLlmModel | undefined | Promise<TelegramAvailableLlmModel | undefined>;
   isModelSwitchAllowed: (ctx: TContext) => boolean | Promise<boolean>;
   selectLlmModel: (
     model: TelegramAvailableLlmModel,
@@ -1478,11 +1485,22 @@ export interface TelegramAvailableLlmModel {
   id: string;
 }
 
+function telegramLlmModelsMatch(
+  a: TelegramAvailableLlmModel | undefined,
+  b: TelegramAvailableLlmModel | undefined,
+): boolean {
+  return !!a && !!b && a.provider === b.provider && a.id === b.id;
+}
+
 export function formatTelegramLlmListReply(
   models: readonly TelegramAvailableLlmModel[],
+  activeModel?: TelegramAvailableLlmModel,
 ): string {
   if (models.length === 0) return "No available LLM models.";
-  const lines = models.map((model) => `• ${model.provider}/${model.id}`);
+  const lines = models.map((model) => {
+    const activePrefix = telegramLlmModelsMatch(model, activeModel) ? "🟢 " : "";
+    return `• ${activePrefix}${model.provider}/${model.id}`;
+  });
   return ["Available LLM models:", ...lines].join("\n");
 }
 
@@ -1511,6 +1529,9 @@ export async function handleTelegramLlmCommand<TContext>(deps: {
   listAvailableModels: (
     ctx: TContext,
   ) => readonly TelegramAvailableLlmModel[];
+  getActiveLlmModel?: (
+    ctx: TContext,
+  ) => TelegramAvailableLlmModel | undefined | Promise<TelegramAvailableLlmModel | undefined>;
   isModelSwitchAllowed: (ctx: TContext) => boolean | Promise<boolean>;
   selectLlmModel: (
     model: TelegramAvailableLlmModel,
@@ -1521,9 +1542,10 @@ export async function handleTelegramLlmCommand<TContext>(deps: {
   try {
     const tokens = parseTelegramLlmFilterTokens(deps.args);
     const models = deps.listAvailableModels(deps.ctx);
+    const activeModel = await deps.getActiveLlmModel?.(deps.ctx);
     const matches = filterTelegramLlmModels(models, tokens);
     if (tokens.length === 0) {
-      await deps.sendTextReply(formatTelegramLlmListReply(models));
+      await deps.sendTextReply(formatTelegramLlmListReply(models, activeModel));
       return;
     }
     if (matches.length === 0) {
@@ -1531,7 +1553,7 @@ export async function handleTelegramLlmCommand<TContext>(deps: {
       return;
     }
     if (matches.length > 1) {
-      await deps.sendTextReply(formatTelegramLlmListReply(matches));
+      await deps.sendTextReply(formatTelegramLlmListReply(matches, activeModel));
       return;
     }
     const target = matches[0];
@@ -1708,6 +1730,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     stopTypingLoop: deps.stopTypingLoop,
     enqueueContinueTurn: deps.enqueueContinueTurn,
     compact: deps.compact,
+    compactActiveTab: deps.compactActiveTab,
     queueReloadRuntimeCommand: deps.queueReloadRuntimeCommand,
     injectNewSession: deps.injectNewSession,
     injectClone: deps.injectClone,
@@ -1716,6 +1739,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     showStatus: commandTargetRuntime.showStatus,
     openModelMenu: commandTargetRuntime.openModelMenu,
     listAvailableModels: deps.listAvailableModels,
+    getActiveLlmModel: deps.getActiveLlmModel,
     isModelSwitchAllowed: deps.isModelSwitchAllowed,
     selectLlmModel: deps.selectLlmModel,
     openThinkingMenu: deps.openThinkingMenu,
@@ -1960,7 +1984,10 @@ async function handleTelegramCommandRuntime<
                     dispatch(),
                   )
               : undefined,
-          compact: (callbacks) => deps.compact(commandCtx, callbacks),
+          compact: (callbacks) => {
+            if (deps.compactActiveTab?.(commandCtx, callbacks)) return;
+            deps.compact(commandCtx, callbacks);
+          },
           startTypingLoop: deps.startTypingLoop
             ? () => deps.startTypingLoop?.(commandCtx, nextMessage.chat.id)
             : undefined,
@@ -1991,6 +2018,7 @@ async function handleTelegramCommandRuntime<
           ctx: commandCtx,
           args,
           listAvailableModels: deps.listAvailableModels,
+          getActiveLlmModel: deps.getActiveLlmModel,
           isModelSwitchAllowed: deps.isModelSwitchAllowed,
           selectLlmModel: deps.selectLlmModel,
           sendTextReply: sendReplyFor(nextMessage),

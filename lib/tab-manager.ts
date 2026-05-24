@@ -65,6 +65,7 @@ export interface TelegramTabBackend {
   prompt: (message: string) => Promise<void>;
   followUp: (message: string) => Promise<void>;
   abort: () => Promise<void>;
+  compact: () => Promise<void>;
   newSession: (parentSession?: string) => Promise<{ cancelled: boolean }>;
   switchSession: (sessionPath: string) => Promise<{ cancelled: boolean }>;
   getState: () => Promise<RpcChildSessionState>;
@@ -259,6 +260,10 @@ export interface TelegramTabManager<TContext> {
     ctx: TContext,
   ) => Promise<boolean>;
   setActiveSessionName: (name: string, ctx: TContext) => Promise<boolean>;
+  compactActive: (
+    ctx: TContext,
+    callbacks: { onComplete: () => void; onError: (error: unknown) => void },
+  ) => boolean;
   newActiveSession: (
     ctx: TContext,
   ) => Promise<{ cancelled: boolean } | undefined>;
@@ -385,6 +390,32 @@ export function createTelegramTabAwareSessionNamePorts<TContext>(
         if (handled) return;
       }
       await deps.setParentSessionName(name, ctx);
+    },
+  };
+}
+
+export interface TelegramTabAwareCompactPorts<TContext> {
+  compact: (
+    ctx: TContext,
+    callbacks: { onComplete: () => void; onError: (error: unknown) => void },
+  ) => void;
+}
+
+export interface TelegramTabAwareCompactPortDeps<TContext> {
+  tabManager: TelegramTabManager<TContext>;
+  compactParent: (
+    ctx: TContext,
+    callbacks: { onComplete: () => void; onError: (error: unknown) => void },
+  ) => void;
+}
+
+export function createTelegramTabAwareCompactPorts<TContext>(
+  deps: TelegramTabAwareCompactPortDeps<TContext>,
+): TelegramTabAwareCompactPorts<TContext> {
+  return {
+    compact: (ctx, callbacks) => {
+      const handled = deps.tabManager.compactActive(ctx, callbacks);
+      if (!handled) deps.compactParent(ctx, callbacks);
     },
   };
 }
@@ -709,7 +740,7 @@ function applyRpcStateToRecord(
   } else {
     delete record.sessionName;
   }
-  if (state.isStreaming === true) {
+  if (state.isStreaming === true || state.isCompacting === true) {
     record.status = "running";
   } else if (record.status === "starting" || record.status === "running") {
     record.status = "idle";
@@ -2395,6 +2426,49 @@ export function createTelegramTabManager<TContext>(
           action: "set_session_name",
         });
       }
+      return true;
+    },
+    compactActive: (ctx, callbacks) => {
+      if (!isEnabled()) return false;
+      const tabState = ensureStateSync(deps.getCwd(ctx));
+      const runtime = getRuntime(tabState, tabState.activeTab);
+      if (!runtime) return false;
+      if (
+        runtime.record.status === "running" ||
+        runtime.record.status === "starting"
+      ) {
+        throw new Error(
+          `Tab ${runtime.record.name} is busy. Wait for it to go idle or send /stop first.`,
+        );
+      }
+      void (async () => {
+        try {
+          runtime.record.status = "starting";
+          runtime.record.lastError = undefined;
+          runtime.record.lastUsedAt = now();
+          await persist();
+          const backend = await ensureBackend(runtime, ctx);
+          await backend.compact();
+          const childState = await backend.getState();
+          applyRpcStateToRecord(runtime.record, childState);
+          runtime.record.status =
+            childState.isStreaming === true || childState.isCompacting === true
+              ? "running"
+              : "idle";
+          runtime.record.lastUsedAt = now();
+          await persist();
+          callbacks.onComplete();
+        } catch (error) {
+          runtime.record.status = "error";
+          runtime.record.lastError = getErrorMessage(error);
+          deps.recordRuntimeEvent?.("tabs", error, {
+            tab: runtime.record.name,
+            action: "compact",
+          });
+          await persist();
+          callbacks.onError(error);
+        }
+      })();
       return true;
     },
     newActiveSession: async (ctx) => {

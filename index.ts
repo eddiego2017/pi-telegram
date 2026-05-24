@@ -313,6 +313,11 @@ export default function (pi: Pi.ExtensionAPI) {
       getParentSessionName: Pi.getExtensionContextSessionName,
       setParentSessionName: Pi.setExtensionContextSessionName,
     });
+  const tabAwareCompactPorts =
+    TabManager.createTelegramTabAwareCompactPorts({
+      tabManager,
+      compactParent: compact,
+    });
   const tabAwareNewSessionPorts =
     TabManager.createTelegramTabAwareNewSessionPorts({
       tabManager,
@@ -635,7 +640,7 @@ export default function (pi: Pi.ExtensionAPI) {
     sendUserMessage,
     isIdle,
     hasPendingMessages,
-    compact,
+    compact: tabAwareCompactPorts.compact,
     injectNewSession: tabAwareNewSessionPorts.injectNewSession,
     injectClone,
     getSessionName: tabAwareSessionNamePorts.getSessionName,

@@ -1558,6 +1558,84 @@ test("Command runtime routes abort and stop to the active tab when available", a
   ]);
 });
 
+test("Command runtime routes compact to the active tab when available", async () => {
+  const events: string[] = [];
+  const message = { chat: { id: 42 }, message_id: 99 };
+  let compactComplete: (() => void) | undefined;
+  const handleCommand = createTelegramCommandHandler<
+    typeof message,
+    { id: string }
+  >({
+    hasAbortHandler: () => false,
+    clearPendingModelSwitch: () => undefined,
+    hasQueuedTelegramItems: () => false,
+    clearQueuedTelegramItems: () => 0,
+    setPreserveQueuedTurnsAsHistory: () => undefined,
+    abortCurrentTurn: () => undefined,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    isCompactionInProgress: () => false,
+    setCompactionInProgress: (inProgress) => {
+      events.push(`compact:${inProgress}`);
+    },
+    updateStatus: () => {
+      events.push("status");
+    },
+    dispatchNextQueuedTelegramTurn: () => {
+      events.push("dispatch");
+    },
+    enqueueContinueTurn: async () => undefined,
+    compact: () => {
+      events.push("parent-compact");
+    },
+    compactActiveTab: (_ctx, callbacks) => {
+      events.push("tab-compact");
+      compactComplete = callbacks.onComplete;
+      return true;
+    },
+    queueReloadRuntimeCommand: () => undefined,
+    injectNewSession: async () => true,
+    injectClone: async () => undefined,
+    enqueueControlItem: () => undefined,
+    showStatus: async () => undefined,
+    openModelMenu: async () => undefined,
+    listAvailableModels: () => [],
+    isModelSwitchAllowed: () => true,
+    selectLlmModel: async () => true,
+    openThinkingMenu: async () => undefined,
+    openQueueMenu: async () => undefined,
+    openResumeMenu: async () => undefined,
+    openSessionMenu: async () => undefined,
+    openTreeMenu: async () => undefined,
+    openDumpMenu: async () => undefined,
+    getSessionName: () => undefined,
+    setSessionName: () => undefined,
+    getAllowedUserId: () => 7,
+    setAllowedUserId: () => undefined,
+    registerBotCommands: async () => undefined,
+    persistConfig: async () => undefined,
+    sendTextReply: async (_message, text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
+  assert.equal(await handleCommand("compact", "", message, { id: "ctx" }), true);
+  compactComplete?.();
+
+  assert.deepEqual(events, [
+    "compact:true",
+    "status",
+    "tab-compact",
+    "reply:Compaction started.",
+    "compact:false",
+    "status",
+    "dispatch",
+    "reply:Compaction completed.",
+  ]);
+});
+
 test("Command or prompt runtime routes commands before enqueue fallback", async () => {
   const events: string[] = [];
   const runtime = createTelegramCommandOrPromptRuntime<
@@ -2020,6 +2098,16 @@ test("/llm command lists available models", async () => {
     ]),
     "Available LLM models:\n• anthropic/claude-sonnet-4-5\n• openai/gpt-5",
   );
+  assert.equal(
+    formatTelegramLlmListReply(
+      [
+        { provider: "anthropic", id: "claude-sonnet-4-5" },
+        { provider: "openai", id: "gpt-5" },
+      ],
+      { provider: "openai", id: "gpt-5" },
+    ),
+    "Available LLM models:\n• anthropic/claude-sonnet-4-5\n• 🟢 openai/gpt-5",
+  );
 
   const sampleModels = [
     { provider: "deepseek", id: "deepseek-v4-flash" },
@@ -2030,6 +2118,7 @@ test("/llm command lists available models", async () => {
   const runLlm = async (
     args: string,
     overrides: {
+      getActiveLlmModel?: (ctx: Ctx) => { provider: string; id: string } | undefined;
       isModelSwitchAllowed?: (ctx: Ctx) => boolean | Promise<boolean>;
       selectLlmModel?: (model: { provider: string; id: string }) => boolean;
     } = {},
@@ -2039,6 +2128,7 @@ test("/llm command lists available models", async () => {
       ctx: { tag: "ctx" },
       args,
       listAvailableModels: () => sampleModels,
+      getActiveLlmModel: overrides.getActiveLlmModel,
       isModelSwitchAllowed: overrides.isModelSwitchAllowed ?? (() => true),
       selectLlmModel: async (model) =>
         overrides.selectLlmModel ? overrides.selectLlmModel(model) : true,
@@ -2061,9 +2151,14 @@ test("/llm command lists available models", async () => {
   assert.deepEqual(await runLlm(""), [
     "Available LLM models:\n• deepseek/deepseek-v4-flash\n• deepseek/deepseek-v4-pro\n• anthropic/claude-opus-4-7",
   ]);
-  assert.deepEqual(await runLlm("v4"), [
-    "Available LLM models:\n• deepseek/deepseek-v4-flash\n• deepseek/deepseek-v4-pro",
-  ]);
+  assert.deepEqual(
+    await runLlm("v4", {
+      getActiveLlmModel: () => ({ provider: "deepseek", id: "deepseek-v4-pro" }),
+    }),
+    [
+      "Available LLM models:\n• deepseek/deepseek-v4-flash\n• 🟢 deepseek/deepseek-v4-pro",
+    ],
+  );
   assert.deepEqual(await runLlm("v4 flash"), [
     "Model switched to deepseek/deepseek-v4-flash",
   ]);

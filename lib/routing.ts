@@ -465,6 +465,9 @@ export function createTelegramInboundRouteRuntime<
     stopTypingLoop: deps.stopTypingLoop,
     enqueueContinueTurn,
     compact: deps.compact,
+    compactActiveTab: deps.tabManager
+      ? (ctx, callbacks) => deps.tabManager?.compactActive(ctx, callbacks) ?? false
+      : undefined,
     queueReloadRuntimeCommand: () => {
       if (!deps.sendUserMessage) {
         throw new Error("sendUserMessage is unavailable");
@@ -486,6 +489,7 @@ export function createTelegramInboundRouteRuntime<
     showStatus: deps.menuActions.sendStatusMessage,
     openModelMenu: deps.menuActions.openModelMenu,
     listAvailableModels: deps.listAvailableModels,
+    getActiveLlmModel: getActiveMenuModel,
     isModelSwitchAllowed: (ctx) =>
       deps.tabManager?.isEnabled()
         ? deps.tabManager.canSwitchActiveModel(ctx)

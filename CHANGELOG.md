@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `[Commands]` `/llm` list and multi-match replies now mark the active LLM with `🟢`, including the active tab worker model when concurrent tabs are enabled.
+- `[Concurrent Tabs]` Routed Telegram `/compact` through the active tab worker before falling back to the parent π session. Impact: compacting tab-backed conversations now compresses the tab's actual session instead of the idle parent TUI session.
+- `[Concurrent Tabs]` Increased the worker RPC timeout for `/compact` so long LLM summaries do not get reported as failed while the child is still compacting.
 - `[Concurrent Tabs]` Removed browser visual-checkpoint delivery state from tab records. `telegram-tabs.json` no longer stores Telegram reply targets or browser CDP targets for browser skill screenshots.
 - `[Concurrent Tabs]` Active-tab `/session` now shows `Delete this session` for persisted worker sessions. Confirming it creates a replacement session in the active tab worker first, then deletes the previous shared session JSONL without falling back to the parent tmux session.
 - `[Concurrent Tabs]` Worker-tab `/tree` branch detail now keeps the existing branch actions visible. `Switch to this branch` jumps the active tab worker by appending the same-session cursor, while `Rename branch` and `Delete branch` write label/delete metadata to the shared session JSONL without creating a tab-private session folder.

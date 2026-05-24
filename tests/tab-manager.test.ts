@@ -30,6 +30,7 @@ class FakeTabBackend implements TelegramTabBackend {
   readonly prompts: string[] = [];
   readonly followUps: string[] = [];
   readonly aborts: string[] = [];
+  readonly compactions: string[] = [];
   readonly modelSelections: string[] = [];
   readonly thinkingSelections: string[] = [];
   readonly sessionNames: string[] = [];
@@ -88,6 +89,15 @@ class FakeTabBackend implements TelegramTabBackend {
   async abort(): Promise<void> {
     this.aborts.push(this.tabName);
     this.state = { ...this.state, isStreaming: false };
+  }
+
+  async compact(): Promise<void> {
+    this.compactions.push(this.tabName);
+    this.state = {
+      ...this.state,
+      messageCount: (this.state.messageCount ?? 0) + 1,
+      isStreaming: false,
+    };
   }
 
   async getState(): Promise<RpcChildSessionState> {
@@ -168,6 +178,7 @@ function makeResumePortTabManager(
     selectActiveModel: async () => true,
     setActiveThinkingLevel: async () => true,
     setActiveSessionName: async () => true,
+    compactActive: () => false,
     newActiveSession: async () => undefined,
     deleteActiveSession: async () => undefined,
     abortActive: async () => undefined,
@@ -433,6 +444,55 @@ test("Tab manager deletes the active tab session after creating a replacement", 
     sessionId: "session-A-1",
     sessionName: undefined,
   });
+});
+
+test("Tab manager compacts the active tab worker", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-compact-"));
+  const replies: string[] = [];
+  const events: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  const compactDone = new Promise<void>((resolve) => {
+    assert.equal(
+      manager.compactActive("ctx", {
+        onComplete: () => {
+          events.push("complete");
+          resolve();
+        },
+        onError: (error) => {
+          events.push(`error:${String(error)}`);
+          resolve();
+        },
+      }),
+      true,
+    );
+  });
+  await compactDone;
+
+  assert.deepEqual(backends.get("A")?.compactions, ["A"]);
+  assert.deepEqual(events, ["complete"]);
+  assert.equal(manager.getActiveSessionReference("ctx")?.sessionId, "session-A");
 });
 
 test("Tab manager routes prompts to active workers and notifies inactive completion", async () => {
