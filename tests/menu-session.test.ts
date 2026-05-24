@@ -614,8 +614,8 @@ test("Session delete callback confirms and injects current session path", async 
   assert.deepEqual(events, [
     "answer:cb-delete:",
     "edit:7:99:html:<b>⚠️ Delete current session?</b>:2",
-    "answer:cb-confirm:Delete queued.",
     "inject:/tmp/session.jsonl",
+    "answer:cb-confirm:Delete queued.",
   ]);
 });
 

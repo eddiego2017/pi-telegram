@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` Active-tab `/session` now shows `Delete this session` for persisted worker sessions. Confirming it creates a replacement session in the active tab worker first, then deletes the previous shared session JSONL without falling back to the parent tmux session.
 - `[Concurrent Tabs]` Worker-tab `/tree` branch detail now keeps the existing branch actions visible. `Switch to this branch` jumps the active tab worker by appending the same-session cursor, while `Rename branch` and `Delete branch` write label/delete metadata to the shared session JSONL without creating a tab-private session folder.
 - `[Concurrent Tabs]` Worker-tab `/tree` prompt detail now shows `Create branch from this prompt`. The action appends a hidden branch cursor to the same session file, restarts the active worker on that cursor, and opens `/tree` directly to `Branches` when the active path is otherwise empty; parent-style rewind remains read-only for worker tabs.
 - `[Concurrent Tabs]` Removed the `Abort` button from the `/tab` inline dashboard while keeping `/tab abort [name]`, `/abort`, and `/stop` command routing intact.

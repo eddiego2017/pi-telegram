@@ -70,7 +70,10 @@ navigating Chromium's global active page.
   the resumed worker state, and stale tab names are cleared when the selected
   session is unnamed.
 - `/session` follows the active tab, including `Last 5 turns`, `Full replay`,
-  history pagination, context usage, and replayable image attachments.
+  history pagination, context usage, replayable image attachments, and
+  `Delete this session` for persisted tab sessions. Tab-session delete creates
+  a replacement worker session first, then removes the previous shared session
+  JSONL; it does not route through the parent tmux session.
 - `/tree` follows the active tab. Prompt detail can create a branch by
   appending a hidden cursor in the same session file and restarting the active
   RPC worker on that cursor. Branch detail keeps `Switch to this branch`,

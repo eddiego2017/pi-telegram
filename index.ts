@@ -318,6 +318,11 @@ export default function (pi: Pi.ExtensionAPI) {
       tabManager,
       injectParentNewSession,
     });
+  const tabAwareSessionDeletePorts =
+    TabManager.createTelegramTabAwareSessionDeletePorts({
+      tabManager,
+      injectParentDeleteCurrentSession: injectDeleteCurrentSessionExec,
+    });
   const tabAwareResumeMenuPorts =
     TabManager.createTelegramTabAwareResumeMenuPorts<Pi.ExtensionContext>({
       tabManager,
@@ -488,7 +493,7 @@ export default function (pi: Pi.ExtensionAPI) {
     sendReplayMessage: sendMarkdownReply,
     sendReplayAttachment: sendSessionReplayAttachment,
     answerCallbackQuery,
-    injectDeleteCurrentSession: injectDeleteCurrentSessionExec,
+    injectDeleteCurrentSession: tabAwareSessionDeletePorts.injectDeleteCurrentSession,
   });
   const canNavigateTree = MenuTree.createTelegramTreeNavigationGate<
     Pi.ExtensionContext

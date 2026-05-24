@@ -1268,8 +1268,15 @@ async function handleTelegramSessionMenuCallbackUnsafe(
       await deps.answerCallbackQuery(query.id, "Delete is not configured.");
       return true;
     }
+    try {
+      await deps.injectDeleteCurrentSession(snapshot.sessionFile);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const text = message.length > 160 ? message.slice(0, 159) + "…" : message;
+      await deps.answerCallbackQuery(query.id, `Delete failed: ${text}`);
+      return true;
+    }
     await deps.answerCallbackQuery(query.id, "Delete queued.");
-    await deps.injectDeleteCurrentSession(snapshot.sessionFile);
     return true;
   }
 
@@ -1483,7 +1490,10 @@ export interface TelegramSessionMenuRuntimeDeps<TContext> {
     callbackQueryId: string,
     text?: string,
   ) => Promise<void>;
-  injectDeleteCurrentSession?: (expectedSessionPath: string) => Promise<void>;
+  injectDeleteCurrentSession?: (
+    expectedSessionPath: string,
+    ctx: TContext,
+  ) => Promise<void>;
   store?: TelegramSessionMenuStore;
 }
 
@@ -1517,7 +1527,12 @@ export function createTelegramSessionMenuRuntime<TContext>(
         sendReplayMessage: deps.sendReplayMessage,
         sendReplayAttachment: deps.sendReplayAttachment,
         answerCallbackQuery: deps.answerCallbackQuery,
-        injectDeleteCurrentSession: deps.injectDeleteCurrentSession,
+        injectDeleteCurrentSession: deps.injectDeleteCurrentSession
+          ? (expectedSessionPath) => deps.injectDeleteCurrentSession?.(
+              expectedSessionPath,
+              ctx,
+            ) ?? Promise.resolve()
+          : undefined,
       });
     },
   };

@@ -11,9 +11,11 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  createTelegramTabAwareSessionDeletePorts,
   createTelegramTabAwareTreeMenuPorts,
   createTelegramTabAwareResumeMenuPorts,
   createTelegramTabAwareSessionNamePorts,
+  createTelegramTabAwareSessionSnapshotPorts,
   createTelegramTabManager,
   type TelegramTabBackend,
   type TelegramTabManager,
@@ -167,6 +169,7 @@ function makeResumePortTabManager(
     setActiveThinkingLevel: async () => true,
     setActiveSessionName: async () => true,
     newActiveSession: async () => undefined,
+    deleteActiveSession: async () => undefined,
     abortActive: async () => undefined,
     switchSession: async () => false,
     createActiveTreeBranch: async () => undefined,
@@ -244,6 +247,56 @@ test("Tab-aware resume ports keep host fallback when tabs are disabled", async (
   await ports.injectResumeExec("/host/old.jsonl", "ctx");
 
   assert.deepEqual(events, ["parent:/host/old.jsonl"]);
+});
+
+test("Tab-aware session snapshot ports allow persisted active-tab deletion", () => {
+  const ports = createTelegramTabAwareSessionSnapshotPorts({
+    tabManager: makeResumePortTabManager({
+      getActiveSessionReference: () => ({
+        tabName: "A",
+        cwd: "/repo",
+        sessionFile: "/sessions/A.jsonl",
+      }),
+    }),
+    getParentSnapshot: () => ({ sessionFile: "/sessions/parent.jsonl" }),
+    getTabSnapshot: () => ({ sessionFile: "/sessions/A.jsonl" }),
+  });
+
+  assert.deepEqual(ports.getSnapshot("ctx"), { sessionFile: "/sessions/A.jsonl" });
+  assert.equal(ports.canDeleteCurrent({ sessionFile: "/sessions/A.jsonl" }, "ctx"), true);
+  assert.equal(ports.canDeleteCurrent({}, "ctx"), false);
+  assert.equal(ports.isReadOnly({}, "ctx"), true);
+});
+
+test("Tab-aware session delete ports route active tabs before parent fallback", async () => {
+  const events: string[] = [];
+  const activePorts = createTelegramTabAwareSessionDeletePorts<string>({
+    tabManager: makeResumePortTabManager({
+      deleteActiveSession: async (path, ctx) => {
+        events.push(`tab:${path}:${ctx}`);
+        return true;
+      },
+    }),
+    injectParentDeleteCurrentSession: async (path) => {
+      events.push(`parent:${path}`);
+    },
+  });
+  await activePorts.injectDeleteCurrentSession("/sessions/A.jsonl", "ctx");
+
+  const fallbackPorts = createTelegramTabAwareSessionDeletePorts<string>({
+    tabManager: makeResumePortTabManager({
+      deleteActiveSession: async () => undefined,
+    }),
+    injectParentDeleteCurrentSession: async (path) => {
+      events.push(`parent:${path}`);
+    },
+  });
+  await fallbackPorts.injectDeleteCurrentSession("/sessions/parent.jsonl", "ctx");
+
+  assert.deepEqual(events, [
+    "tab:/sessions/A.jsonl:ctx",
+    "parent:/sessions/parent.jsonl",
+  ]);
 });
 
 test("Tab-aware tree ports expose active-tab branch without parent tree exec", async () => {
@@ -328,6 +381,58 @@ test("Tab manager declines prompt dispatch when disabled", async () => {
   );
   assert.equal(await manager.handleCommand("", 1, 2, "ctx"), true);
   assert.match(replies[0] ?? "", /Concurrent tabs are disabled/);
+});
+
+test("Tab manager deletes the active tab session after creating a replacement", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-delete-session-"));
+  const statePath = join(tempDir, "tabs.json");
+  const replies: string[] = [];
+  const deletedSessions: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+    deleteSessionFile: async (sessionPath) => {
+      deletedSessions.push(sessionPath);
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  assert.deepEqual(manager.getActiveSessionReference("ctx"), {
+    tabName: "A",
+    cwd: "/repo",
+    sessionFile: "/sessions/A.jsonl",
+    sessionId: "session-A",
+    sessionName: undefined,
+  });
+
+  assert.equal(await manager.deleteActiveSession("/sessions/A.jsonl", "ctx"), true);
+
+  assert.deepEqual(backends.get("A")?.newSessions, ["/sessions/A.jsonl"]);
+  assert.deepEqual(deletedSessions, ["/sessions/A.jsonl"]);
+  assert.deepEqual(manager.getActiveSessionReference("ctx"), {
+    tabName: "A",
+    cwd: "/repo",
+    sessionFile: "/sessions/A-1.jsonl",
+    sessionId: "session-A-1",
+    sessionName: undefined,
+  });
 });
 
 test("Tab manager routes prompts to active workers and notifies inactive completion", async () => {

@@ -5,7 +5,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import {
@@ -170,6 +170,7 @@ export interface TelegramTabManagerDeps<TContext> {
     reference: TelegramTabSessionReference,
     entryId: string,
   ) => Promise<TelegramTabTreeBranchResult> | TelegramTabTreeBranchResult;
+  deleteSessionFile?: (sessionPath: string) => Promise<void>;
 }
 
 interface RuntimeTab {
@@ -261,6 +262,10 @@ export interface TelegramTabManager<TContext> {
   newActiveSession: (
     ctx: TContext,
   ) => Promise<{ cancelled: boolean } | undefined>;
+  deleteActiveSession: (
+    expectedSessionPath: string,
+    ctx: TContext,
+  ) => Promise<boolean | undefined>;
   abortActive: (ctx: TContext) => Promise<TelegramTabAbortResult | undefined>;
   switchSession: (
     sessionPath: string,
@@ -334,6 +339,9 @@ export function createTelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot>(
 ): TelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot> {
   const isActiveTabSession = (ctx: TContext): boolean =>
     deps.tabManager.getActiveSessionReference(ctx) !== undefined;
+  const hasSessionFile = (snapshot: unknown): boolean =>
+    typeof (snapshot as { sessionFile?: unknown }).sessionFile === "string" &&
+    ((snapshot as { sessionFile?: string }).sessionFile?.length ?? 0) > 0;
   return {
     getSnapshot: (ctx) => {
       const reference = deps.tabManager.getActiveSessionReference(ctx);
@@ -341,7 +349,7 @@ export function createTelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot>(
         ? deps.getTabSnapshot(reference, ctx)
         : deps.getParentSnapshot(ctx);
     },
-    canDeleteCurrent: (_snapshot, ctx) => !isActiveTabSession(ctx),
+    canDeleteCurrent: (snapshot, _ctx) => hasSessionFile(snapshot),
     isReadOnly: (_snapshot, ctx) => isActiveTabSession(ctx),
   };
 }
@@ -399,6 +407,33 @@ export function createTelegramTabAwareNewSessionPorts<TContext>(
       if (result !== undefined) return !result.cancelled;
       await deps.injectParentNewSession();
       return true;
+    },
+  };
+}
+
+export interface TelegramTabAwareSessionDeletePorts<TContext> {
+  injectDeleteCurrentSession: (
+    expectedSessionPath: string,
+    ctx: TContext,
+  ) => Promise<void>;
+}
+
+export interface TelegramTabAwareSessionDeletePortDeps<TContext> {
+  tabManager: TelegramTabManager<TContext>;
+  injectParentDeleteCurrentSession: (expectedSessionPath: string) => Promise<void>;
+}
+
+export function createTelegramTabAwareSessionDeletePorts<TContext>(
+  deps: TelegramTabAwareSessionDeletePortDeps<TContext>,
+): TelegramTabAwareSessionDeletePorts<TContext> {
+  return {
+    injectDeleteCurrentSession: async (expectedSessionPath, ctx) => {
+      const handled = await deps.tabManager.deleteActiveSession(
+        expectedSessionPath,
+        ctx,
+      );
+      if (handled) return;
+      await deps.injectParentDeleteCurrentSession(expectedSessionPath);
     },
   };
 }
@@ -2466,6 +2501,82 @@ export function createTelegramTabManager<TContext>(
         await persist();
         throw error;
       }
+    },
+    deleteActiveSession: async (expectedSessionPath, ctx) => {
+      if (!isEnabled()) return undefined;
+      const tabState = await ensureState(deps.getCwd(ctx));
+      const runtime = getRuntime(tabState, tabState.activeTab);
+      if (!runtime) return undefined;
+      await refreshRuntimeState(runtime);
+      if (!canSwitchTelegramTabModel(runtime.record)) {
+        throw new Error(
+          `Tab ${runtime.record.name} is busy. Send /stop first.`,
+        );
+      }
+      const sessionPath = runtime.record.sessionFile;
+      if (!sessionPath) {
+        throw new Error("current session is not persisted");
+      }
+      if (
+        expectedSessionPath &&
+        !isSameTelegramTabSessionFile(expectedSessionPath, sessionPath)
+      ) {
+        throw new Error("current session changed before deletion");
+      }
+      const otherTab = Object.values(tabState.tabs).find(
+        (record) =>
+          record.name !== runtime.record.name &&
+          isSameTelegramTabSessionFile(record.sessionFile, sessionPath),
+      );
+      if (otherTab) {
+        throw new Error(
+          `Session is also open in tab ${otherTab.name}. Switch or close that tab first.`,
+        );
+      }
+      try {
+        const backend = await ensureBackend(runtime, ctx);
+        const result = await backend.newSession(sessionPath);
+        if (result.cancelled) {
+          throw new Error("newSession cancelled");
+        }
+        const childState = await backend.getState();
+        applyRpcStateToRecord(runtime.record, childState);
+        if (
+          !runtime.record.sessionFile ||
+          isSameTelegramTabSessionFile(runtime.record.sessionFile, sessionPath)
+        ) {
+          throw new Error("new session did not replace current session");
+        }
+        runtime.record.lastAssistantText = undefined;
+        runtime.record.lastMessageText = undefined;
+        runtime.record.lastMessageAt = undefined;
+        runtime.record.lastAgentStartAt = undefined;
+        runtime.record.lastAgentEndAt = undefined;
+        runtime.record.lastError = undefined;
+        runtime.record.status = childState.isStreaming === true ? "running" : "idle";
+        runtime.record.lastUsedAt = now();
+        resetRuntimeTurnBuffers(runtime);
+        await persist();
+      } catch (error) {
+        runtime.record.status = "error";
+        runtime.record.lastError = getErrorMessage(error);
+        deps.recordRuntimeEvent?.("tabs", error, {
+          tab: runtime.record.name,
+          action: "delete_session",
+        });
+        await persist();
+        throw error;
+      }
+      try {
+        await (deps.deleteSessionFile ?? unlink)(sessionPath);
+      } catch (error) {
+        deps.recordRuntimeEvent?.("tabs", error, {
+          tab: runtime.record.name,
+          action: "delete_session_file",
+        });
+        throw error;
+      }
+      return true;
     },
     abortActive: async (ctx) => {
       if (!isEnabled()) return undefined;
