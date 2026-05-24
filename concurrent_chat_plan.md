@@ -38,6 +38,11 @@ reply to the tab that produced them without adding a private tab folder. A tab
 worker's first `nav.py <url>` opens and stores its own Chrome target instead of
 navigating Chromium's global active page.
 
+Follow-up UI cleanup on 2026-05-23: `/tree` inline keyboards now strip abort
+controls so the tree surface only presents history, branch, export, and rewind
+actions. `/abort` and `/stop` remain available as normal commands and tab
+controls.
+
 ## What Works
 
 - `/tab` opens the inline dashboard for switching tabs and confirmed abort/close.

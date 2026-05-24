@@ -17,6 +17,7 @@ import {
   createTelegramTreeOutcomeNotifier,
   handleTelegramTreeMenuCallback,
   handleTelegramTreeMenuTextMessage,
+  removeTelegramTreeAbortButtons,
   TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE,
   type TelegramTreeSnapshot,
 } from "../lib/menu-tree.ts";
@@ -87,6 +88,25 @@ test("Tree menu entries show active-branch user prompts only", () => {
   assert.match(buildTelegramTreeDetailText(entries[0]!), /first prompt/);
   assert.equal(getTelegramTreeEntryEditorText(snapshot.entries[0]), "[telegram] first prompt");
   assert.equal(getTelegramTreeEntryEditorText(snapshot.entries[1]), undefined);
+});
+
+test("Tree reply markup strips abort buttons", () => {
+  assert.deepEqual(
+    removeTelegramTreeAbortButtons({
+      inline_keyboard: [
+        [
+          { text: "Abort", callback_data: "tree:abort" },
+          { text: "Keep", callback_data: "tree:entry:0" },
+        ],
+        [{ text: "⏹️ Abort π", callback_data: "tree:noop" }],
+        [{ text: "Open SVG", url: "https://example.test/tree.svg" }],
+      ],
+    }).inline_keyboard,
+    [
+      [{ text: "Keep", callback_data: "tree:entry:0" }],
+      [{ text: "Open SVG", url: "https://example.test/tree.svg" }],
+    ],
+  );
 });
 
 test("Tree menu branch list shows inactive branch leaves", () => {
