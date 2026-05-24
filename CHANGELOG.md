@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- `[Concurrent Tabs]` Worker-tab `/tree` prompt detail now shows `Create branch from this prompt`. The action appends a hidden branch cursor to the same session file, restarts the active worker on that cursor, and opens `/tree` directly to `Branches` when the active path is otherwise empty; parent-style rewind/switch and branch metadata mutation remain parent-only.
+- `[Concurrent Tabs]` Worker-tab `/tree` branch detail now keeps the existing branch actions visible. `Switch to this branch` jumps the active tab worker by appending the same-session cursor, while `Rename branch` and `Delete branch` write label/delete metadata to the shared session JSONL without creating a tab-private session folder.
+- `[Concurrent Tabs]` Worker-tab `/tree` prompt detail now shows `Create branch from this prompt`. The action appends a hidden branch cursor to the same session file, restarts the active worker on that cursor, and opens `/tree` directly to `Branches` when the active path is otherwise empty; parent-style rewind remains read-only for worker tabs.
 - `[Concurrent Tabs]` Removed the `Abort` button from the `/tab` inline dashboard while keeping `/tab abort [name]`, `/abort`, and `/stop` command routing intact.
 - `[Concurrent Tabs]` `/tab` dashboard rows now show tab age, worker message count, session name, and latest message preview instead of provider/model ids.
 - `[Concurrent Tabs]` `/tab` dashboard now has a `Manage 🗑` close mode for selecting multiple non-default tabs, confirming the batch close, and stopping any selected running workers while keeping their session files.

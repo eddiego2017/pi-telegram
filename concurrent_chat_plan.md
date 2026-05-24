@@ -73,8 +73,10 @@ navigating Chromium's global active page.
   history pagination, context usage, and replayable image attachments.
 - `/tree` follows the active tab. Prompt detail can create a branch by
   appending a hidden cursor in the same session file and restarting the active
-  RPC worker on that cursor; parent-style rewind/switch and branch metadata
-  mutation stay read-only for worker tabs.
+  RPC worker on that cursor. Branch detail keeps `Switch to this branch`,
+  `Rename branch`, and `Delete branch` available for worker tabs by appending
+  same-session cursor/metadata entries; parent-style rewind stays read-only for
+  worker tabs.
 - Tabs persist across host `pi` restarts.
 - Default tab limit is 10.
 
@@ -283,8 +285,9 @@ Latest full sequential result: 647 pass, 0 fail.
 
 - Worker tabs still do not load full Telegram extensions, so child-local
   `telegram_attach` remains future work.
-- Worker-tab `/tree` still keeps in-file rewind/switch and branch metadata
-  mutation read-only until those operations have child-safe RPC support.
+- Worker-tab `/tree` still keeps in-file prompt rewind read-only. Branch
+  switch, rename, and delete are implemented with same-session file cursors and
+  metadata, without tab-private session directories.
 
 ## Completed Implementation Plan
 

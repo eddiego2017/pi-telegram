@@ -482,6 +482,130 @@ test("Tree menu read-only mode can create active-tab branch", async () => {
   ]);
 });
 
+test("Tree menu read-only branch detail can switch and mutate when enabled", async () => {
+  const oldUser = {
+    type: "message",
+    id: "u-old",
+    parentId: "a1",
+    timestamp: "2026-01-01T00:00:04.000Z",
+    message: { role: "user", content: [{ type: "text", text: "old branch prompt" }] },
+  };
+  const oldAssistant = {
+    type: "message",
+    id: "a-old",
+    parentId: "u-old",
+    timestamp: "2026-01-01T00:00:05.000Z",
+    message: { role: "assistant", content: [{ type: "text", text: "old answer" }] },
+  };
+  const snapshot = createSnapshot();
+  snapshot.entries.push(oldUser, oldAssistant);
+  const entries = buildTelegramTreeMenuEntries(snapshot, "branches");
+  const store = createTelegramTreeMenuStore();
+  store.set({
+    chatId: 7,
+    messageId: 99,
+    entries,
+    page: 0,
+    view: "list",
+    filter: "branches",
+    updatedAt: Date.now(),
+  });
+  const events: string[] = [];
+  const baseDeps = {
+    getState: store.get,
+    setState: store.set,
+    getSnapshot: () => snapshot,
+    isReadOnly: () => true,
+    canMutateBranches: () => true,
+    forkTreeEntry: async (entryId: string) => {
+      events.push(`switch:${entryId}`);
+      return { cancelled: false };
+    },
+    injectTreeExec: async () => {
+      events.push("inject");
+    },
+    deleteBranch: async (entryId: string) => {
+      events.push(`delete:${entryId}`);
+      snapshot.entries.push({
+        type: "custom",
+        id: "delete-old",
+        parentId: "u2",
+        customType: TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE,
+        data: { leafId: entryId, deleted: true },
+        timestamp: "2026-01-01T00:00:06.000Z",
+      });
+    },
+    canNavigate: () => true,
+  };
+  const handledEntry = await handleTelegramTreeMenuCallback(
+    {
+      id: "cb-entry",
+      data: "tree:entry:0",
+      message: { chat: { id: 7 }, message_id: 99 },
+    },
+    {
+      ...baseDeps,
+      editTreeMessage: async (_chatId, _messageId, _text, markup) => {
+        events.push(
+          markup.inline_keyboard
+            .flat()
+            .map((button) => button.text)
+            .join("|"),
+        );
+      },
+      answerCallbackQuery: async (_id, text) => {
+        events.push(`answer:${text ?? ""}`);
+      },
+    },
+  );
+  const handledSwitch = await handleTelegramTreeMenuCallback(
+    {
+      id: "cb-switch",
+      data: "tree:switch:0",
+      message: { chat: { id: 7 }, message_id: 99 },
+    },
+    {
+      ...baseDeps,
+      editTreeMessage: async (_chatId, _messageId, text) => {
+        events.push(`edit:${text.includes("Switching to branch leaf")}`);
+      },
+      answerCallbackQuery: async (_id, text) => {
+        events.push(`answer:${text ?? ""}`);
+      },
+    },
+  );
+  const handledDelete = await handleTelegramTreeMenuCallback(
+    {
+      id: "cb-delete",
+      data: "tree:delete-confirm:0",
+      message: { chat: { id: 7 }, message_id: 99 },
+    },
+    {
+      ...baseDeps,
+      editTreeMessage: async (_chatId, _messageId, text) => {
+        events.push(`delete-edit:${text.includes("No visible entries")}`);
+      },
+      answerCallbackQuery: async (_id, text) => {
+        events.push(`answer:${text ?? ""}`);
+      },
+    },
+  );
+
+  assert.equal(handledEntry, true);
+  assert.equal(handledSwitch, true);
+  assert.equal(handledDelete, true);
+  assert.deepEqual(events, [
+    "⬅️ Back to tree|🌿 Switch to this branch|✏️ Rename branch|🗑 Delete branch",
+    "answer:",
+    "switch:a-old",
+    "edit:true",
+    "answer:Switched.",
+    "delete:a-old",
+    "delete-edit:true",
+    "answer:Branch deleted.",
+  ]);
+});
+
 test("Tree SVG export callback renders and sends file", async () => {
   const snapshot = createSnapshot();
   const entries = buildTelegramTreeMenuEntries(snapshot);

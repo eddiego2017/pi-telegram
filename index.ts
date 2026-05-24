@@ -509,6 +509,15 @@ export default function (pi: Pi.ExtensionAPI) {
       tabManager,
       injectParentTreeExec: injectTreeExec,
     });
+  const tabAwareTreeBranchMutators =
+    TabManager.createTelegramTabAwareTreeBranchMutators({
+      tabManager,
+      setParentBranchName: treeBranchMutators.setBranchName,
+      deleteParentBranch: treeBranchMutators.deleteBranch,
+      setTabBranchName: Pi.setTelegramSessionFileBranchName,
+      deleteTabBranch: Pi.deleteTelegramSessionFileBranch,
+      branchMetadataCustomType: MenuTree.TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE,
+    });
   const treeMenuRuntime = MenuTree.buildTelegramTreeMenuRuntime<
     Pi.ExtensionContext
   >({
@@ -519,6 +528,7 @@ export default function (pi: Pi.ExtensionAPI) {
     answerCallbackQuery,
     injectTreeExec: tabAwareTreeMenuPorts.injectTreeExec,
     canForkTree: tabAwareTreeMenuPorts.canForkTree,
+    canMutateBranches: tabAwareTreeMenuPorts.canForkTree,
     forkTreeEntry: tabAwareTreeMenuPorts.forkTreeEntry,
     canNavigate: canNavigateTree,
     renderTreeExport: TreeExport.renderTelegramTreeExportFiles,
@@ -526,8 +536,8 @@ export default function (pi: Pi.ExtensionAPI) {
     publishTreeGist: TreeExport.publishTelegramTreeSvgGist,
     deleteTreeGist: TreeExport.deleteTelegramTreeGist,
     sendTextReply,
-    setBranchName: treeBranchMutators.setBranchName,
-    deleteBranch: treeBranchMutators.deleteBranch,
+    setBranchName: tabAwareTreeBranchMutators.setBranchName,
+    deleteBranch: tabAwareTreeBranchMutators.deleteBranch,
   });
   const dumpMenuRuntime = MenuDump.createTelegramDumpMenuRuntime<
     Pi.ExtensionContext

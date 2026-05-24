@@ -16,7 +16,9 @@ import {
   createExtensionApiRuntimePorts,
   createTelegramSessionFileTreeBranchCursor,
   createScopedModelPatternPersister,
+  deleteTelegramSessionFileBranch,
   deriveSessionContextUsageFromEntries,
+  setTelegramSessionFileBranchName,
   type ExtensionContext,
   getExtensionContextCwd,
   getExtensionContextModel,
@@ -24,6 +26,7 @@ import {
   isExtensionContextIdle,
   TELEGRAM_TREE_BRANCH_CURSOR_CUSTOM_TYPE,
 } from "../lib/pi.ts";
+import { TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE } from "../lib/menu-tree.ts";
 
 type PiRuntimeApiHarness = Parameters<
   typeof createExtensionApiRuntimePorts
@@ -126,6 +129,82 @@ test("Pi tree branch cursor rewinds a session file without forking it", async ()
   assert.equal(marker.parentId, null);
   assert.equal(marker.data?.targetId, userId);
   assert.equal(marker.data?.branchFromId, null);
+});
+
+test("Pi session-file branch metadata helpers preserve active leaf cursor", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tree-branch-metadata-"));
+  const manager = SessionManager.create("/repo", tempDir);
+  const sessionFile = manager.getSessionFile();
+  if (!sessionFile) throw new Error("missing test session file");
+  manager.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: "first prompt" }],
+  } as never);
+  const firstAssistantId = manager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "first answer" }],
+  } as never);
+  manager.branch(firstAssistantId);
+  manager.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: "old branch prompt" }],
+  } as never);
+  const inactiveBranchLeafId = manager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "old answer" }],
+  } as never);
+  manager.branch(firstAssistantId);
+  manager.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: "current prompt" }],
+  } as never);
+  const activeLeafId = manager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "current answer" }],
+  } as never);
+
+  const reference = { cwd: "/repo", sessionFile };
+  setTelegramSessionFileBranchName(reference, inactiveBranchLeafId, "old path");
+  let reopened = SessionManager.open(sessionFile, undefined, "/repo");
+  assert.equal(reopened.getLabel(inactiveBranchLeafId), "old path");
+  let leaf = reopened.getLeafEntry() as {
+    customType?: string;
+    parentId?: string | null;
+    data?: { preserveLeafId?: string; reason?: string };
+  };
+  assert.equal(leaf.customType, TELEGRAM_TREE_BRANCH_CURSOR_CUSTOM_TYPE);
+  assert.equal(leaf.parentId, activeLeafId);
+  assert.equal(leaf.data?.preserveLeafId, activeLeafId);
+  assert.equal(leaf.data?.reason, "branch-rename");
+
+  deleteTelegramSessionFileBranch(
+    reference,
+    inactiveBranchLeafId,
+    TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE,
+  );
+  reopened = SessionManager.open(sessionFile, undefined, "/repo");
+  leaf = reopened.getLeafEntry() as {
+    customType?: string;
+    parentId?: string | null;
+    data?: { preserveLeafId?: string; reason?: string };
+  };
+  assert.equal(leaf.customType, TELEGRAM_TREE_BRANCH_CURSOR_CUSTOM_TYPE);
+  assert.equal(leaf.data?.reason, "branch-delete");
+  assert.equal(leaf.data?.preserveLeafId, leaf.parentId);
+  const deleteEntry = reopened.getEntries().find((entry) => {
+    const raw = entry as {
+      type?: string;
+      customType?: string;
+      data?: { leafId?: string; deleted?: boolean };
+    };
+    return (
+      raw.type === "custom" &&
+      raw.customType === TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE &&
+      raw.data?.leafId === inactiveBranchLeafId &&
+      raw.data.deleted === true
+    );
+  });
+  assert.ok(deleteEntry);
 });
 
 test("Pi scoped model persister invalidates cached inputs without clearing live menus", async () => {

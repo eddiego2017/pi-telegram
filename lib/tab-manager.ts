@@ -492,6 +492,61 @@ export function createTelegramTabAwareTreeMenuPorts<TContext>(
   };
 }
 
+export interface TelegramTabAwareTreeBranchMutators<TContext> {
+  setBranchName: (
+    entryId: string,
+    name: string | undefined,
+    ctx: TContext,
+  ) => Promise<void> | void;
+  deleteBranch: (entryId: string, ctx: TContext) => Promise<void> | void;
+}
+
+export interface TelegramTabAwareTreeBranchMutatorDeps<TContext> {
+  tabManager: Pick<TelegramTabManager<TContext>, "getActiveSessionReference">;
+  setParentBranchName: (
+    entryId: string,
+    name: string | undefined,
+    ctx: TContext,
+  ) => Promise<void> | void;
+  deleteParentBranch: (entryId: string, ctx: TContext) => Promise<void> | void;
+  setTabBranchName: (
+    reference: TelegramTabSessionReference,
+    entryId: string,
+    name: string | undefined,
+  ) => Promise<void> | void;
+  deleteTabBranch: (
+    reference: TelegramTabSessionReference,
+    entryId: string,
+    customType: string,
+  ) => Promise<void> | void;
+  branchMetadataCustomType: string;
+}
+
+export function createTelegramTabAwareTreeBranchMutators<TContext>(
+  deps: TelegramTabAwareTreeBranchMutatorDeps<TContext>,
+): TelegramTabAwareTreeBranchMutators<TContext> {
+  return {
+    setBranchName: function setBranchName(entryId, name, ctx) {
+      const reference = deps.tabManager.getActiveSessionReference(ctx);
+      if (reference) {
+        return deps.setTabBranchName(reference, entryId, name);
+      }
+      return deps.setParentBranchName(entryId, name, ctx);
+    },
+    deleteBranch: function deleteBranch(entryId, ctx) {
+      const reference = deps.tabManager.getActiveSessionReference(ctx);
+      if (reference) {
+        return deps.deleteTabBranch(
+          reference,
+          entryId,
+          deps.branchMetadataCustomType,
+        );
+      }
+      return deps.deleteParentBranch(entryId, ctx);
+    },
+  };
+}
+
 export function createTelegramTabAwareModelMenuPorts<
   TContext,
   TModel extends TelegramTabModelSelection,

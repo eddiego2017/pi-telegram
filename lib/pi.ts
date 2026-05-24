@@ -191,6 +191,59 @@ export function createTelegramSessionFileTreeBranchCursor(
   };
 }
 
+function appendLeafPreservingCursor(
+  sessionManager: SessionManager,
+  leafId: string | null,
+  reason: string,
+): void {
+  if (leafId) sessionManager.branch(leafId);
+  else sessionManager.resetLeaf();
+  sessionManager.appendCustomEntry(TELEGRAM_TREE_BRANCH_CURSOR_CUSTOM_TYPE, {
+    preserveLeafId: leafId,
+    reason,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export function setTelegramSessionFileBranchName(
+  reference: PiSessionSnapshotReference,
+  entryId: string,
+  name: string | undefined,
+): void {
+  if (!reference.sessionFile) {
+    throw new Error("Active tab has no session file.");
+  }
+  const sessionManager = SessionManager.open(
+    reference.sessionFile,
+    undefined,
+    reference.cwd,
+  );
+  const leafId = sessionManager.getLeafId();
+  sessionManager.appendLabelChange(entryId, name);
+  appendLeafPreservingCursor(sessionManager, leafId, "branch-rename");
+}
+
+export function deleteTelegramSessionFileBranch(
+  reference: PiSessionSnapshotReference,
+  entryId: string,
+  customType: string,
+): void {
+  if (!reference.sessionFile) {
+    throw new Error("Active tab has no session file.");
+  }
+  const sessionManager = SessionManager.open(
+    reference.sessionFile,
+    undefined,
+    reference.cwd,
+  );
+  if (!sessionManager.getEntry(entryId)) {
+    throw new Error(`Entry ${entryId} not found.`);
+  }
+  const leafId = sessionManager.getLeafId();
+  sessionManager.appendCustomEntry(customType, { leafId: entryId, deleted: true });
+  appendLeafPreservingCursor(sessionManager, leafId, "branch-delete");
+}
+
 export function createSettingsManager(cwd: string): PiSettingsManager {
   return SettingsManager.create(cwd);
 }
