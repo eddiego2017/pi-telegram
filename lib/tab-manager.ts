@@ -16,6 +16,7 @@ import {
   type RpcChildSessionState,
 } from "./rpc-child.ts";
 import {
+  extractLatestAssistantMessageText,
   formatAgentToolCallBlock,
   getAgentMessageText,
   isAssistantAgentMessage,
@@ -24,16 +25,20 @@ import {
 } from "./replies.ts";
 import {
   createDefaultTelegramTabsState,
+  filterTelegramTabRecords,
   findTelegramTabNameCaseConflict,
+  formatTelegramTabFilterSummary,
   formatTelegramTabList,
   formatTelegramTabStatus,
   formatTelegramTabStatusLabel,
   formatTelegramTabUsage,
+  normalizeTelegramTabName,
   normalizeTelegramTabsState,
   parseTelegramTabCommand,
   TELEGRAM_DEFAULT_TAB_NAME,
   truncateTelegramTabText,
   validateTelegramTabName,
+  type TelegramTabFilterTraceItem,
   type TelegramTabRecord,
   type TelegramTabsState,
 } from "./tabs.ts";
@@ -179,6 +184,8 @@ interface RuntimeTab {
   backend?: TelegramTabBackend;
   unreadEvents: number;
   activeBuffer: string;
+  activeAssistantText?: string;
+  activeErrorDelivered?: boolean;
   textStream?: TelegramTabStreamState;
   thinkingBuffers: Map<number, string>;
   thinkingStreams: Map<number, TelegramTabStreamState>;
@@ -817,6 +824,8 @@ function clearTelegramTabStreamState(stream: TelegramTabStreamState): void {
 
 function resetRuntimeTurnBuffers(runtime: RuntimeTab): void {
   runtime.activeBuffer = "";
+  runtime.activeAssistantText = undefined;
+  runtime.activeErrorDelivered = false;
   if (runtime.textStream) {
     clearTelegramTabStreamState(runtime.textStream);
     runtime.textStream = undefined;
@@ -995,6 +1004,20 @@ function extractRpcAssistantText(event: RpcChildBackendEvent): string {
   return latestAssistant ? getAgentMessageText(latestAssistant) : "";
 }
 
+function extractRpcAssistantError(event: RpcChildBackendEvent): string | undefined {
+  if (event.type !== "agent_end") return undefined;
+  const assistant = extractLatestAssistantMessageText(
+    Array.isArray(event.messages) ? event.messages : [],
+  );
+  if (assistant.stopReason !== "error" && !assistant.errorMessage) {
+    return undefined;
+  }
+  return (
+    assistant.errorMessage ||
+    "Telegram tab failed while processing the request."
+  );
+}
+
 function formatTelegramTabThinkingMarkdown(text: string): string {
   const quoted = text
     .trim()
@@ -1065,19 +1088,27 @@ function formatTelegramTabDashboardSummary(
   nowMs: number,
   mode: TelegramTabDashboardMode = "open",
   selectedCloseTabs: readonly string[] = [],
+  visibleTabs?: readonly TelegramTabRecord[],
+  filterTrace: readonly TelegramTabFilterTraceItem[] = [],
 ): string {
-  const tabs = getSortedTelegramTabRecords(state);
+  const allTabs = getSortedTelegramTabRecords(state);
+  const tabs = mode === "open" && visibleTabs ? [...visibleTabs] : allTabs;
   const active = state.tabs[state.activeTab];
   const safeSelectedCloseTabs = normalizeTelegramTabCloseSelection(
     state,
     selectedCloseTabs,
   );
   const selectedSet = new Set(safeSelectedCloseTabs);
-  const unreadTabs = tabs
+  const unreadTabs = allTabs
     .filter((tab) => (unreadByTab[tab.name] ?? 0) > 0)
     .map((tab) => `${tab.name} ${unreadByTab[tab.name]}`);
+  const filterSummary = mode === "open"
+    ? formatTelegramTabFilterSummary(filterTrace)
+    : undefined;
   const lines = [
-    `Tabs ${tabs.length}/${maxTabs}`,
+    filterSummary
+      ? `Tabs ${tabs.length}/${allTabs.length} filtered (${allTabs.length}/${maxTabs} total)`
+      : `Tabs ${allTabs.length}/${maxTabs}`,
     active
       ? [
           `Active: ${active.name}`,
@@ -1090,6 +1121,7 @@ function formatTelegramTabDashboardSummary(
   if (active?.currentThinkingLevel) {
     lines.push(`Thinking: ${active.currentThinkingLevel}`);
   }
+  if (filterSummary) lines.push(filterSummary);
   lines.push(`Unread: ${unreadTabs.length > 0 ? unreadTabs.join(", ") : "none"}`);
   if (mode === "close") {
     const runningSelected = tabs
@@ -1106,6 +1138,9 @@ function formatTelegramTabDashboardSummary(
     }
   }
   lines.push("");
+  if (tabs.length === 0) {
+    lines.push("No tabs match filters.");
+  }
   for (const tab of tabs) {
     const marker = tab.name === state.activeTab ? "●" : "○";
     const unread = unreadByTab[tab.name] ? ` · unread ${unreadByTab[tab.name]}` : "";
@@ -1141,13 +1176,13 @@ function formatTelegramTabButtonLabel(
 }
 
 function encodeTelegramTabCallbackName(name: string): string {
-  return encodeURIComponent(name);
+  return encodeURIComponent(name).replace(/%20/g, "+");
 }
 
 function decodeTelegramTabCallbackName(name: string | undefined): string | undefined {
   if (!name) return undefined;
   try {
-    return decodeURIComponent(name);
+    return decodeURIComponent(name.replace(/\+/g, "%20"));
   } catch {
     return undefined;
   }
@@ -1158,9 +1193,12 @@ function buildTelegramTabDashboardReplyMarkup(
   unreadByTab: Record<string, number>,
   mode: TelegramTabDashboardMode = "open",
   selectedCloseTabs: readonly string[] = [],
+  visibleTabs?: readonly TelegramTabRecord[],
 ): TelegramInlineKeyboardMarkup {
   const rows: TelegramInlineKeyboardMarkup["inline_keyboard"] = [];
-  const tabs = getSortedTelegramTabRecords(state);
+  const tabs = mode === "open" && visibleTabs
+    ? [...visibleTabs]
+    : getSortedTelegramTabRecords(state);
   if (mode === "close") {
     const safeSelectedCloseTabs = normalizeTelegramTabCloseSelection(
       state,
@@ -1217,6 +1255,9 @@ function buildTelegramTabDashboardReplyMarkup(
           : `tab:switch:${encodeTelegramTabCallbackName(tab.name)}`,
     }));
     rows.push(row);
+  }
+  if (visibleTabs) {
+    rows.push([{ text: "All tabs", callback_data: "tab:refresh" }]);
   }
   if (getTelegramTabCloseableNames(state).length > 0) {
     rows.push([{ text: "Manage 🗑", callback_data: "tab:close-manage" }]);
@@ -1714,6 +1755,7 @@ export function createTelegramTabManager<TContext>(
     }
     const assistantText = extractRpcAssistantText(event);
     if (assistantText) {
+      runtime.activeAssistantText = assistantText;
       record.lastAssistantText = assistantText;
       record.lastMessageText = assistantText;
       record.lastMessageAt = eventNow;
@@ -1762,9 +1804,38 @@ export function createTelegramTabManager<TContext>(
             latestAssistant,
           )
         : false;
-      record.status = "idle";
       record.lastAgentEndAt = eventNow;
-      if (!record.lastAssistantText && runtime.activeBuffer) {
+      const assistantError = extractRpcAssistantError(event);
+      if (assistantError) {
+        record.status = "error";
+        record.lastError = assistantError;
+        const isActive = tabState.activeTab === tabName;
+        if (!runtime.activeErrorDelivered) {
+          runtime.activeErrorDelivered = true;
+          if (isActive) {
+            void sendTabReply(
+              runtime.activeChatId,
+              runtime.activeReplyToMessageId,
+              `Tab ${tabName} failed: ${assistantError}`,
+            );
+          } else {
+            runtime.unreadEvents += 1;
+            if (deps.getConfig().inactiveNotify) {
+              void sendTabReply(
+                runtime.activeChatId,
+                runtime.activeReplyToMessageId,
+                `Tab ${tabName} failed: ${assistantError}`,
+              );
+            }
+          }
+        }
+        void persist();
+        return;
+      }
+      record.status = "idle";
+      record.lastError = undefined;
+      if (!runtime.activeAssistantText && runtime.activeBuffer) {
+        runtime.activeAssistantText = runtime.activeBuffer;
         record.lastAssistantText = runtime.activeBuffer;
       }
       const isActive = tabState.activeTab === tabName;
@@ -1777,14 +1848,14 @@ export function createTelegramTabManager<TContext>(
           : false;
       if (
         isActive &&
-        record.lastAssistantText &&
+        runtime.activeAssistantText &&
         !finalAlreadySentAsToolCall &&
         !finalAlreadyStreamedAsText
       ) {
         void sendTabMarkdownReply(
           runtime.activeChatId,
           runtime.activeReplyToMessageId,
-          record.lastAssistantText,
+          runtime.activeAssistantText,
         );
       } else if (!isActive) {
         runtime.unreadEvents += 1;
@@ -1921,14 +1992,25 @@ export function createTelegramTabManager<TContext>(
     tabState: TelegramTabsState,
     chatId: number,
     replyToMessageId: number,
+    filters: readonly string[] = [],
   ): Promise<void> => {
     await refreshDashboardTabRecords(tabState);
     const unreadByTab = getUnreadByTab();
+    const filterResult = filterTelegramTabRecords(
+      getSortedTelegramTabRecords(tabState),
+      filters,
+    );
+    const visibleTabs = filterResult.trace.length > 0
+      ? filterResult.tabs
+      : undefined;
     if (!deps.sendInteractiveMessage) {
       await deps.sendTextReply(
         chatId,
         replyToMessageId,
-        formatTelegramTabList(tabState, unreadByTab, now()),
+        formatTelegramTabList(tabState, unreadByTab, now(), {
+          tabs: visibleTabs,
+          filterTrace: filterResult.trace,
+        }),
       );
       return;
     }
@@ -1939,9 +2021,13 @@ export function createTelegramTabManager<TContext>(
         unreadByTab,
         deps.getConfig().maxTabs,
         now(),
+        "open",
+        [],
+        visibleTabs,
+        filterResult.trace,
       ),
       "plain",
-      buildTelegramTabDashboardReplyMarkup(tabState, unreadByTab),
+      buildTelegramTabDashboardReplyMarkup(tabState, unreadByTab, "open", [], visibleTabs),
     );
     if (messageId !== undefined) {
       setDashboardState({
@@ -2039,6 +2125,20 @@ export function createTelegramTabManager<TContext>(
     ) => {
       await sendTabDashboard(tabState, chatId, replyToMessageId);
     },
+    query: async (
+      tabState: TelegramTabsState,
+      query: string,
+      filters: readonly string[],
+      chatId: number,
+      replyToMessageId: number,
+    ) => {
+      const name = normalizeTelegramTabName(query);
+      if (getRuntime(tabState, name)) {
+        await commandHandlers.switch(tabState, name, chatId, replyToMessageId);
+        return;
+      }
+      await sendTabDashboard(tabState, chatId, replyToMessageId, filters);
+    },
     new: async (
       tabState: TelegramTabsState,
       name: string,
@@ -2046,6 +2146,7 @@ export function createTelegramTabManager<TContext>(
       replyToMessageId: number,
       ctx: TContext,
     ) => {
+      name = normalizeTelegramTabName(name);
       const validationError = validateTelegramTabName(name);
       if (validationError) {
         await deps.sendTextReply(chatId, replyToMessageId, validationError);
@@ -2145,7 +2246,8 @@ export function createTelegramTabManager<TContext>(
       chatId: number,
       replyToMessageId: number,
     ) => {
-      const sourceName = oldName ?? tabState.activeTab;
+      newName = normalizeTelegramTabName(newName);
+      const sourceName = oldName ? normalizeTelegramTabName(oldName) : tabState.activeTab;
       if (sourceName === TELEGRAM_DEFAULT_TAB_NAME) {
         await deps.sendTextReply(chatId, replyToMessageId, "Cannot rename default tab.");
         return;
@@ -2196,12 +2298,13 @@ export function createTelegramTabManager<TContext>(
     },
     close: async (
       tabState: TelegramTabsState,
-      name: string,
+      name: string | undefined,
       force: boolean,
       chatId: number,
       replyToMessageId: number,
     ) => {
-      const result = await closeRuntimeTab(tabState, name, force);
+      const targetName = name ?? tabState.activeTab;
+      const result = await closeRuntimeTab(tabState, targetName, force);
       if (result.closed) await persist();
       await deps.sendTextReply(chatId, replyToMessageId, result.message);
     },
@@ -2726,6 +2829,9 @@ export function createTelegramTabManager<TContext>(
           return true;
         case "new":
           await commandHandlers.new(tabState, command.name, chatId, replyToMessageId, ctx);
+          return true;
+        case "query":
+          await commandHandlers.query(tabState, command.query, command.filters, chatId, replyToMessageId);
           return true;
         case "switch":
           await commandHandlers.switch(tabState, command.name, chatId, replyToMessageId);

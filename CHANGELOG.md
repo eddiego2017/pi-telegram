@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` `/tab close` now closes the current active non-default tab directly; `/tab close <name>` remains available for named tabs.
 - `[Commands]` `/llm` list and multi-match replies now mark the active LLM with `🟢`, including the active tab worker model when concurrent tabs are enabled.
 - `[Concurrent Tabs]` Routed Telegram `/compact` through the active tab worker before falling back to the parent π session. Impact: compacting tab-backed conversations now compresses the tab's actual session instead of the idle parent TUI session.
 - `[Concurrent Tabs]` Increased the worker RPC timeout for `/compact` so long LLM summaries do not get reported as failed while the child is still compacting.

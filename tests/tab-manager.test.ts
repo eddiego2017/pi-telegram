@@ -394,6 +394,41 @@ test("Tab manager declines prompt dispatch when disabled", async () => {
   assert.match(replies[0] ?? "", /Concurrent tabs are disabled/);
 });
 
+test("Tab manager creates spaced tab names and filters implicit tab queries", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-spaced-filter-"));
+  const replies: string[] = [];
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 5,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleCommand("new eve online marketing", 1, 10, "ctx");
+  assert.match(replies.at(-1) ?? "", /Created and switched to tab eve online marketing/);
+  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "eve online marketing");
+
+  await manager.handleCommand("new eve mining", 1, 11, "ctx");
+  await manager.handleCommand("eve online marketing", 1, 12, "ctx");
+  assert.match(replies.at(-1) ?? "", /Switched to tab eve online marketing/);
+
+  await manager.handleCommand("eve on", 1, 13, "ctx");
+  assert.match(replies.at(-1) ?? "", /Tabs \(1\/3\):/);
+  assert.match(replies.at(-1) ?? "", /Filters: eve 3→2, on 2→1/);
+  assert.match(replies.at(-1) ?? "", /eve online marketing/);
+  assert.doesNotMatch(replies.at(-1) ?? "", /eve mining/);
+});
+
 test("Tab manager deletes the active tab session after creating a replacement", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-delete-session-"));
   const statePath = join(tempDir, "tabs.json");
@@ -707,6 +742,82 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
   assert.deepEqual(backends.get("A")?.aborts, ["A"]);
 });
 
+test("Tab manager reports worker API errors instead of replaying stale text", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-error-"));
+  const textReplies: string[] = [];
+  const markdownReplies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      textReplies.push(text);
+      return textReplies.length;
+    },
+    sendMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+      markdownReplies.push(markdown);
+      return markdownReplies.length;
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.dispatchPrompt(
+    {
+      chatId: 1,
+      replyToMessageId: 20,
+      content: [{ type: "text", text: "[telegram] first question" }],
+    },
+    "ctx",
+  );
+  backends.get("A")?.emit({ type: "agent_start" });
+  backends.get("A")?.emit({
+    type: "agent_end",
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "old answer" }] },
+    ],
+  });
+  assert.deepEqual(markdownReplies, ["old answer"]);
+
+  await manager.dispatchPrompt(
+    {
+      chatId: 1,
+      replyToMessageId: 21,
+      content: [{ type: "text", text: "[telegram] failing question" }],
+    },
+    "ctx",
+  );
+  backends.get("A")?.emit({ type: "agent_start" });
+  backends.get("A")?.emit({
+    type: "agent_end",
+    messages: [
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "503 auth_unavailable: no auth available",
+      },
+    ],
+  });
+
+  assert.deepEqual(markdownReplies, ["old answer"]);
+  assert.equal(
+    textReplies.at(-1),
+    "Tab A failed: 503 auth_unavailable: no auth available",
+  );
+});
+
 test("Tab manager rebinds worker when resume RPC reports stale session state", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-resume-rebind-"));
   const replies: string[] = [];
@@ -897,6 +1008,35 @@ test("Tab manager sends last-turn replay after tab switch", async () => {
 
   assert.match(replies.at(-1) ?? "", /Switched to tab A/);
   assert.deepEqual(replays, ["A:/sessions/A.jsonl:7:30"]);
+});
+
+test("Tab manager closes the active tab with bare close command", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-active-close-"));
+  const replies: string[] = [];
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 10,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.handleCommand("new B", 1, 11, "ctx");
+  await manager.handleCommand("close", 1, 12, "ctx");
+  assert.match(replies.at(-1) ?? "", /Closed tab B/);
+
+  await manager.handleCommand("status B", 1, 13, "ctx");
+  assert.match(replies.at(-1) ?? "", /Unknown tab: B/);
 });
 
 test("Tab manager opens interactive dashboard and handles tab callbacks", async () => {
