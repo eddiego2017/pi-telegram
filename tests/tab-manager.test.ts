@@ -761,7 +761,8 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bNew\b/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bRename\b/);
   assert.match(dashboardMarkups.at(-1) ?? "", /Manage 🗑/);
-  assert.match(dashboardMarkups.at(-1) ?? "", /\bAbort\|Close\b/);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bAbort\b/);
+  assert.match(dashboardMarkups.at(-1) ?? "", /\bClose\b/);
 
   await manager.handleCallbackQuery(
     {

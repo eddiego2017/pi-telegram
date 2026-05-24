@@ -67,8 +67,6 @@ export type TelegramTreeReplyMarkup = {
     | { text: string; url: string }
   >>;
 };
-type TelegramTreeInlineKeyboardButton =
-  TelegramTreeReplyMarkup["inline_keyboard"][number][number];
 export type TelegramTreeView = "list" | "detail";
 export type TelegramTreeEntryRole =
   | "user"
@@ -658,31 +656,6 @@ export function buildTelegramTreeListReplyMarkup(
   return { inline_keyboard: rows };
 }
 
-function isTelegramTreeAbortButton(button: TelegramTreeInlineKeyboardButton): boolean {
-  if (
-    "callback_data" in button &&
-    /(^|:)abort($|:)/i.test(button.callback_data)
-  ) {
-    return true;
-  }
-  const text = button.text.toLowerCase().replace(/^[^a-z0-9/]+/i, "").trim();
-  return (
-    text === "abort" ||
-    text === "/abort" ||
-    text === "abort pi" ||
-    text === "abort π"
-  );
-}
-
-export function removeTelegramTreeAbortButtons(
-  replyMarkup: TelegramTreeReplyMarkup,
-): TelegramTreeReplyMarkup {
-  const inline_keyboard = replyMarkup.inline_keyboard
-    .map((row) => row.filter((button) => !isTelegramTreeAbortButton(button)))
-    .filter((row) => row.length > 0);
-  return { ...replyMarkup, inline_keyboard };
-}
-
 export function buildTelegramTreeDetailText(entry: TelegramTreeMenuEntry): string {
   const rawDetail = entry.detail || "(empty)";
   const truncated = rawDetail.length > TELEGRAM_TREE_DETAIL_TEXT_LEN;
@@ -785,9 +758,7 @@ export async function openTelegramTreeMenu(
   const entries = buildTelegramTreeMenuEntries(snapshot, filter);
   const messageId = await deps.sendTreeMenu(
     buildTelegramTreeListText(snapshot, entries, 0, filter),
-    removeTelegramTreeAbortButtons(
-      buildTelegramTreeListReplyMarkup(entries, 0, filter),
-    ),
+    buildTelegramTreeListReplyMarkup(entries, 0, filter),
   );
   if (messageId === undefined) return;
   deps.storeState({
@@ -853,16 +824,6 @@ export async function handleTelegramTreeMenuTextMessage(
   }
   const state = deps.getState(replyToMessageId);
   if (!state?.pendingRename || state.chatId !== chatId) return false;
-  const editTreeMessage = (
-    text: string,
-    replyMarkup: TelegramTreeReplyMarkup,
-  ): Promise<void> =>
-    deps.editTreeMessage(
-      chatId,
-      replyToMessageId,
-      text,
-      removeTelegramTreeAbortButtons(replyMarkup),
-    );
   if (deps.isReadOnly?.(deps.getSnapshot())) {
     await deps.sendTextReply(chatId, messageId, "Tree history is read-only for this session.");
     return true;
@@ -895,13 +856,17 @@ export async function handleTelegramTreeMenuTextMessage(
   deps.setState(nextState);
   if (nextIndex >= 0) {
     const nextEntry = entries[nextIndex]!;
-    await editTreeMessage(
+    await deps.editTreeMessage(
+      chatId,
+      replyToMessageId,
       buildTelegramTreeDetailText(nextEntry),
       buildTelegramTreeDetailReplyMarkup(nextEntry),
     );
     deps.setState({ ...nextState, view: "detail", detailIndex: nextIndex, updatedAt: now() });
   } else {
-    await editTreeMessage(
+    await deps.editTreeMessage(
+      chatId,
+      replyToMessageId,
       buildTelegramTreeListText(snapshot, entries, page, "branches"),
       buildTelegramTreeListReplyMarkup(entries, page, "branches"),
     );
@@ -1374,13 +1339,6 @@ export async function handleTelegramTreeMenuCallback(
   let answered = false;
   const safeDeps: TelegramTreeMenuCallbackDeps = {
     ...deps,
-    editTreeMessage: (chatId, messageId, text, replyMarkup) =>
-      deps.editTreeMessage(
-        chatId,
-        messageId,
-        text,
-        removeTelegramTreeAbortButtons(replyMarkup),
-      ),
     answerCallbackQuery: async (callbackQueryId, text) => {
       await deps.answerCallbackQuery(callbackQueryId, text);
       answered = true;

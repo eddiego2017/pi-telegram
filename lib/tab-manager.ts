@@ -1102,10 +1102,6 @@ function buildTelegramTabDashboardReplyMarkup(
   }
   rows.push([
     {
-      text: "Abort",
-      callback_data: `tab:abort:${encodeTelegramTabCallbackName(state.activeTab)}`,
-    },
-    {
       text: "Close",
       callback_data: `tab:close:${encodeTelegramTabCallbackName(state.activeTab)}`,
     },

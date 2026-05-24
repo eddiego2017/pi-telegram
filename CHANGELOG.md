@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `[Tree Menu]` `/tree` now strips abort controls from its inline keyboards, keeping tree navigation focused on history, branches, export, and rewind actions.
+- `[Concurrent Tabs]` Removed the `Abort` button from the `/tab` inline dashboard while keeping `/tab abort [name]`, `/abort`, and `/stop` command routing intact.
 - `[Concurrent Tabs]` `/tab` dashboard rows now show tab age, worker message count, session name, and latest message preview instead of provider/model ids.
 - `[Concurrent Tabs]` `/tab` dashboard now has a `Manage 🗑` close mode for selecting multiple non-default tabs, confirming the batch close, and stopping any selected running workers while keeping their session files.
 - `[Concurrent Tabs]` Tab records now keep the latest Telegram reply target and browser CDP target for browser visual checkpoints, so background tab screenshots use the tab that produced them instead of following the currently active tab; a tab worker's first `nav.py <url>` opens its own Chrome target.
