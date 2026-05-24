@@ -347,6 +347,84 @@ test("Tree menu read-only mode hides and blocks mutation callbacks", async () =>
   ]);
 });
 
+test("Tree menu read-only mode can create active-tab branch", async () => {
+  const snapshot = createSnapshot();
+  const entries = buildTelegramTreeMenuEntries(snapshot);
+  const store = createTelegramTreeMenuStore();
+  store.set({
+    chatId: 7,
+    messageId: 99,
+    entries,
+    page: 0,
+    view: "list",
+    filter: "active",
+    updatedAt: Date.now(),
+  });
+  const events: string[] = [];
+  const baseDeps = {
+    getState: store.get,
+    setState: store.set,
+    getSnapshot: () => snapshot,
+    isReadOnly: () => true,
+    canForkTree: () => true,
+    forkTreeEntry: async (entryId: string) => {
+      events.push(`fork:${entryId}`);
+      return { cancelled: false, text: "second prompt" };
+    },
+    injectTreeExec: async () => {
+      events.push("inject");
+    },
+    canNavigate: () => true,
+  };
+  const handledEntry = await handleTelegramTreeMenuCallback(
+    {
+      id: "cb-entry",
+      data: "tree:entry:1",
+      message: { chat: { id: 7 }, message_id: 99 },
+    },
+    {
+      ...baseDeps,
+      editTreeMessage: async (_chatId, _messageId, _text, markup) => {
+        const button = markup.inline_keyboard[1]?.[0];
+        events.push(button && "callback_data" in button ? button.callback_data : "");
+      },
+      answerCallbackQuery: async (_id, text) => {
+        events.push(`answer:${text ?? ""}`);
+      },
+    },
+  );
+  const handledFork = await handleTelegramTreeMenuCallback(
+    {
+      id: "cb-fork",
+      data: "tree:fork:1",
+      message: { chat: { id: 7 }, message_id: 99 },
+    },
+    {
+      ...baseDeps,
+      editTreeMessage: async (_chatId, _messageId, text, markup) => {
+        events.push(`edit:${text.includes("Created branch")}:${markup.inline_keyboard.length}`);
+      },
+      answerCallbackQuery: async (_id, text) => {
+        events.push(`answer:${text ?? ""}`);
+      },
+      sendTextReply: async (_chatId, _replyTo, text) => {
+        events.push(`reply:${text.includes("second prompt")}`);
+      },
+    },
+  );
+
+  assert.equal(handledEntry, true);
+  assert.equal(handledFork, true);
+  assert.deepEqual(events, [
+    "tree:fork:1",
+    "answer:",
+    "fork:u2",
+    "edit:true:0",
+    "answer:Branch created.",
+    "reply:true",
+  ]);
+});
+
 test("Tree SVG export callback renders and sends file", async () => {
   const snapshot = createSnapshot();
   const entries = buildTelegramTreeMenuEntries(snapshot);

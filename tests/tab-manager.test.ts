@@ -11,6 +11,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  createTelegramTabAwareTreeMenuPorts,
   createTelegramTabAwareResumeMenuPorts,
   createTelegramTabAwareSessionNamePorts,
   createTelegramTabManager,
@@ -32,6 +33,7 @@ class FakeTabBackend implements TelegramTabBackend {
   readonly sessionNames: string[] = [];
   readonly newSessions: (string | undefined)[] = [];
   readonly switchSessions: string[] = [];
+  readonly forks: string[] = [];
   keepStateOnSwitch = false;
   nextSwitchSessionName: string | undefined;
   disposed = false;
@@ -146,6 +148,20 @@ class FakeTabBackend implements TelegramTabBackend {
     return { cancelled: false };
   }
 
+  async fork(entryId: string): Promise<{ text?: string; cancelled: boolean }> {
+    this.forks.push(entryId);
+    const version = this.forks.length;
+    this.state = {
+      ...this.state,
+      sessionFile: `/sessions/${this.tabName}-fork-${version}.jsonl`,
+      sessionId: `forked-${this.tabName}-${version}`,
+      sessionName: undefined,
+      messageCount: 0,
+      isStreaming: false,
+    };
+    return { cancelled: false, text: `prompt ${entryId}` };
+  }
+
   emit(event: RpcChildBackendEvent): void {
     for (const listener of this.listeners) listener(event);
   }
@@ -168,6 +184,7 @@ function makeResumePortTabManager(
     newActiveSession: async () => undefined,
     abortActive: async () => undefined,
     switchSession: async () => false,
+    forkActiveTreeEntry: async () => undefined,
     handleCommand: async () => false,
     handleCallbackQuery: async () => false,
     dispatchPrompt: async () => false,
@@ -242,6 +259,57 @@ test("Tab-aware resume ports keep host fallback when tabs are disabled", async (
   await ports.injectResumeExec("/host/old.jsonl", "ctx");
 
   assert.deepEqual(events, ["parent:/host/old.jsonl"]);
+});
+
+test("Tab-aware tree ports expose active-tab fork without parent tree exec", async () => {
+  const events: string[] = [];
+  const snapshot = {};
+  const ports = createTelegramTabAwareTreeMenuPorts<string>({
+    tabManager: makeResumePortTabManager({
+      getActiveSessionReference: () => ({
+        tabName: "A",
+        cwd: "/repo",
+        sessionFile: "/sessions/A.jsonl",
+      }),
+      forkActiveTreeEntry: async (entryId, ctx) => {
+        events.push(`fork:${entryId}:${ctx}`);
+        return { cancelled: false, text: "selected prompt" };
+      },
+    }),
+    injectParentTreeExec: async (entryId, summarize) => {
+      events.push(`parent:${entryId}:${summarize}`);
+    },
+  });
+
+  assert.equal(ports.isReadOnly(snapshot, "ctx"), true);
+  assert.equal(ports.canForkTree(snapshot, "ctx"), true);
+  assert.deepEqual(await ports.forkTreeEntry("u1", "ctx"), {
+    cancelled: false,
+    text: "selected prompt",
+  });
+  await assert.rejects(
+    () => ports.injectTreeExec("u1", false, "ctx"),
+    /Active tab tree navigation/,
+  );
+  assert.deepEqual(events, ["fork:u1:ctx"]);
+});
+
+test("Tab-aware tree ports fall back to parent tree exec without active tab", async () => {
+  const events: string[] = [];
+  const snapshot = {};
+  const ports = createTelegramTabAwareTreeMenuPorts<string>({
+    tabManager: makeResumePortTabManager({
+      getActiveSessionReference: () => undefined,
+    }),
+    injectParentTreeExec: async (entryId, summarize) => {
+      events.push(`parent:${entryId}:${summarize}`);
+    },
+  });
+
+  assert.equal(ports.isReadOnly(snapshot, "ctx"), false);
+  assert.equal(ports.canForkTree(snapshot, "ctx"), false);
+  await ports.injectTreeExec("u1", false, "ctx");
+  assert.deepEqual(events, ["parent:u1:false"]);
 });
 
 test("Tab manager declines prompt dispatch when disabled", async () => {
@@ -388,6 +456,22 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     cwd: "/repo",
     sessionFile: "/sessions/resumed-A.jsonl",
     sessionId: "resumed-A",
+    sessionName: undefined,
+    currentModel: {
+      provider: "openai",
+      id: "gpt-5.5",
+    },
+  });
+  assert.deepEqual(await manager.forkActiveTreeEntry("u1", "ctx"), {
+    cancelled: false,
+    text: "prompt u1",
+  });
+  assert.deepEqual(backends.get("A")?.forks, ["u1"]);
+  assert.deepEqual(manager.getActiveSessionReference("ctx"), {
+    tabName: "A",
+    cwd: "/repo",
+    sessionFile: "/sessions/A-fork-1.jsonl",
+    sessionId: "forked-A-1",
     sessionName: undefined,
     currentModel: {
       provider: "openai",

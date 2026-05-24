@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` Worker-tab `/tree` prompt detail now shows `Create branch from this prompt`. The action forks the active RPC worker session and updates the tab's active session pointer while keeping sessions in the shared cwd session pool; in-file rewind/switch and branch metadata mutation remain parent-only.
 - `[Concurrent Tabs]` Removed the `Abort` button from the `/tab` inline dashboard while keeping `/tab abort [name]`, `/abort`, and `/stop` command routing intact.
 - `[Concurrent Tabs]` `/tab` dashboard rows now show tab age, worker message count, session name, and latest message preview instead of provider/model ids.
 - `[Concurrent Tabs]` `/tab` dashboard now has a `Manage 🗑` close mode for selecting multiple non-default tabs, confirming the batch close, and stopping any selected running workers while keeping their session files.

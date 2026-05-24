@@ -13,6 +13,7 @@ import {
   RpcChildBackend,
   type RpcChildBackendEvent,
   type RpcChildBackendOptions,
+  type RpcChildForkResult,
   type RpcChildSessionState,
 } from "./rpc-child.ts";
 import {
@@ -67,6 +68,7 @@ export interface TelegramTabBackend {
   abort: () => Promise<void>;
   newSession: (parentSession?: string) => Promise<{ cancelled: boolean }>;
   switchSession: (sessionPath: string) => Promise<{ cancelled: boolean }>;
+  fork: (entryId: string) => Promise<RpcChildForkResult>;
   getState: () => Promise<RpcChildSessionState>;
   setModel: (provider: string, modelId: string) => Promise<void>;
   setThinkingLevel: (level: string) => Promise<void>;
@@ -257,6 +259,10 @@ export interface TelegramTabManager<TContext> {
     ctx: TContext,
     scope?: { kind?: string; tabName?: string },
   ) => Promise<boolean>;
+  forkActiveTreeEntry: (
+    entryId: string,
+    ctx: TContext,
+  ) => Promise<RpcChildForkResult | undefined>;
   handleCommand: (
     args: string,
     chatId: number,
@@ -433,6 +439,47 @@ export function createTelegramTabAwareResumeMenuPorts<TContext>(
       if (!handled) {
         throw new Error("Active tab did not handle /resume.");
       }
+    },
+  };
+}
+
+export interface TelegramTabAwareTreeMenuPorts<TContext> {
+  isReadOnly: (snapshot: unknown, ctx: TContext) => boolean;
+  canForkTree: (snapshot: unknown, ctx: TContext) => boolean;
+  injectTreeExec: (
+    entryId: string,
+    summarize: boolean,
+    ctx: TContext,
+  ) => Promise<void>;
+  forkTreeEntry: (
+    entryId: string,
+    ctx: TContext,
+  ) => Promise<RpcChildForkResult>;
+}
+
+export interface TelegramTabAwareTreeMenuPortDeps<TContext> {
+  tabManager: TelegramTabManager<TContext>;
+  injectParentTreeExec: (entryId: string, summarize: boolean) => Promise<void>;
+}
+
+export function createTelegramTabAwareTreeMenuPorts<TContext>(
+  deps: TelegramTabAwareTreeMenuPortDeps<TContext>,
+): TelegramTabAwareTreeMenuPorts<TContext> {
+  const isActiveTabSession = (ctx: TContext): boolean =>
+    deps.tabManager.getActiveSessionReference(ctx) !== undefined;
+  return {
+    isReadOnly: (_snapshot, ctx) => isActiveTabSession(ctx),
+    canForkTree: (_snapshot, ctx) => isActiveTabSession(ctx),
+    injectTreeExec: async (entryId, summarize, ctx) => {
+      if (isActiveTabSession(ctx)) {
+        throw new Error("Active tab tree navigation uses Create branch.");
+      }
+      await deps.injectParentTreeExec(entryId, summarize);
+    },
+    forkTreeEntry: async (entryId, ctx) => {
+      const result = await deps.tabManager.forkActiveTreeEntry(entryId, ctx);
+      if (!result) throw new Error("No active tab session for tree branch.");
+      return result;
     },
   };
 }
@@ -2426,6 +2473,44 @@ export function createTelegramTabManager<TContext>(
         deps.recordRuntimeEvent?.("tabs", error, {
           tab: runtime.record.name,
           action: "switch_session",
+        });
+        await persist();
+        throw error;
+      }
+    },
+    forkActiveTreeEntry: async (entryId, ctx) => {
+      if (!isEnabled()) return undefined;
+      const runtime = await getActiveRuntime(ctx);
+      if (!runtime) return undefined;
+      await refreshRuntimeState(runtime);
+      if (!canSwitchTelegramTabModel(runtime.record)) {
+        throw new Error(
+          `Tab ${runtime.record.name} is busy. Send /tab abort ${runtime.record.name} first.`,
+        );
+      }
+      try {
+        const backend = await ensureBackend(runtime, ctx);
+        const result = await backend.fork(entryId);
+        if (result.cancelled) return result;
+        stopTabTyping(runtime);
+        resetRuntimeTurnBuffers(runtime);
+        delete runtime.record.lastAssistantText;
+        delete runtime.record.lastMessageText;
+        delete runtime.record.lastMessageAt;
+        delete runtime.record.lastAgentStartAt;
+        delete runtime.record.lastAgentEndAt;
+        runtime.record.lastError = undefined;
+        const childState = await backend.getState();
+        applyRpcStateToRecord(runtime.record, childState);
+        runtime.record.lastUsedAt = now();
+        await persist();
+        return result;
+      } catch (error) {
+        runtime.record.status = "error";
+        runtime.record.lastError = getErrorMessage(error);
+        deps.recordRuntimeEvent?.("tabs", error, {
+          tab: runtime.record.name,
+          action: "fork_tree_entry",
         });
         await persist();
         throw error;

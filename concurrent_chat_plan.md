@@ -71,7 +71,9 @@ navigating Chromium's global active page.
   session is unnamed.
 - `/session` follows the active tab, including `Last 5 turns`, `Full replay`,
   history pagination, context usage, and replayable image attachments.
-- `/tree` follows the active tab in read-only mode.
+- `/tree` follows the active tab. Prompt detail can create a branch by
+  forking the active RPC worker session in the shared cwd session pool; in-file
+  rewind/switch and branch metadata mutation stay read-only for worker tabs.
 - Tabs persist across host `pi` restarts.
 - Default tab limit is 10.
 
@@ -280,8 +282,8 @@ Latest full sequential result: 647 pass, 0 fail.
 
 - Worker tabs still do not load full Telegram extensions, so child-local
   `telegram_attach` remains future work.
-- Worker-tab `/tree` is read-only until child-safe rewind and branch mutation
-  are implemented.
+- Worker-tab `/tree` still keeps in-file rewind/switch and branch metadata
+  mutation read-only until those operations have child-safe RPC support.
 
 ## Completed Implementation Plan
 

@@ -503,15 +503,22 @@ export default function (pi: Pi.ExtensionAPI) {
     pi,
     MenuTree.TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE,
   );
+  const tabAwareTreeMenuPorts =
+    TabManager.createTelegramTabAwareTreeMenuPorts({
+      tabManager,
+      injectParentTreeExec: injectTreeExec,
+    });
   const treeMenuRuntime = MenuTree.buildTelegramTreeMenuRuntime<
     Pi.ExtensionContext
   >({
     getSnapshot: tabAwareSessionSnapshotPorts.getSnapshot,
-    isReadOnly: tabAwareSessionSnapshotPorts.isReadOnly,
+    isReadOnly: tabAwareTreeMenuPorts.isReadOnly,
     sendInteractiveMessage,
     editInteractiveMessage,
     answerCallbackQuery,
-    injectTreeExec,
+    injectTreeExec: tabAwareTreeMenuPorts.injectTreeExec,
+    canForkTree: tabAwareTreeMenuPorts.canForkTree,
+    forkTreeEntry: tabAwareTreeMenuPorts.forkTreeEntry,
     canNavigate: canNavigateTree,
     renderTreeExport: TreeExport.renderTelegramTreeExportFiles,
     sendTreeExportFiles,

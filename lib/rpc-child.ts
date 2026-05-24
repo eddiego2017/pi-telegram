@@ -23,6 +23,11 @@ export interface RpcChildSessionState {
   pendingMessageCount?: number;
 }
 
+export interface RpcChildForkResult {
+  text?: string;
+  cancelled: boolean;
+}
+
 export interface RpcChildBackendOptions {
   tabName: string;
   cwd: string;
@@ -253,6 +258,11 @@ export class RpcChildBackend {
       if (this.lastState) this.lastState.sessionFile = sessionPath;
     }
     return result;
+  }
+
+  async fork(entryId: string): Promise<RpcChildForkResult> {
+    const response = await this.send({ type: "fork", entryId });
+    return getRpcResponseData<RpcChildForkResult>(response);
   }
 
   async getState(): Promise<RpcChildSessionState> {

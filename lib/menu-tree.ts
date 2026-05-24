@@ -163,6 +163,11 @@ export interface TelegramTreeGistPublishResult {
   fileName: string;
 }
 
+export interface TelegramTreeForkResult {
+  text?: string;
+  cancelled: boolean;
+}
+
 export interface TelegramTreeMenuStore {
   get(messageId: number | undefined): TelegramTreeMenuState | undefined;
   set(state: TelegramTreeMenuState): void;
@@ -698,36 +703,41 @@ export function buildTelegramTreeDetailText(entry: TelegramTreeMenuEntry): strin
 
 export function buildTelegramTreeDetailReplyMarkup(
   entry: TelegramTreeMenuEntry,
-  options: { readOnly?: boolean } = {},
+  options: { readOnly?: boolean; canFork?: boolean } = {},
 ): TelegramTreeReplyMarkup {
+  const rows: TelegramTreeReplyMarkup["inline_keyboard"] = [
+    [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
+  ];
   if (options.readOnly) {
-    return {
-      inline_keyboard: [
-        [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
-      ],
-    };
+    if (options.canFork && entry.kind !== "branch") {
+      rows.push([
+        {
+          text: "🌱 Create branch from this prompt",
+          callback_data: `tree:fork:${entry.index}`,
+        },
+      ]);
+    }
+    return { inline_keyboard: rows };
+  }
+  rows.push([
+    entry.kind === "branch"
+      ? {
+          text: "🌿 Switch to this branch",
+          callback_data: `tree:switch:${entry.index}`,
+        }
+      : {
+          text: "↩️ Rewind and replace this prompt",
+          callback_data: `tree:rewind:${entry.index}:none`,
+        },
+  ]);
+  if (entry.kind === "branch") {
+    rows.push(
+      [{ text: "✏️ Rename branch", callback_data: `tree:rename:${entry.index}` }],
+      [{ text: "🗑 Delete branch", callback_data: `tree:delete:${entry.index}` }],
+    );
   }
   return {
-    inline_keyboard: [
-      [{ text: "⬅️ Back to tree", callback_data: "tree:back:list" }],
-      [
-        entry.kind === "branch"
-          ? {
-              text: "🌿 Switch to this branch",
-              callback_data: `tree:switch:${entry.index}`,
-            }
-          : {
-              text: "↩️ Rewind and replace this prompt",
-              callback_data: `tree:rewind:${entry.index}:none`,
-            },
-      ],
-      ...(entry.kind === "branch"
-        ? [
-            [{ text: "✏️ Rename branch", callback_data: `tree:rename:${entry.index}` }],
-            [{ text: "🗑 Delete branch", callback_data: `tree:delete:${entry.index}` }],
-          ]
-        : []),
-    ],
+    inline_keyboard: rows,
   };
 }
 
@@ -896,6 +906,13 @@ export interface TelegramTreeMenuCallbackDeps {
     text?: string,
   ) => Promise<void>;
   injectTreeExec: (entryId: string, summarize: boolean) => Promise<void>;
+  canForkTree?: (snapshot: TelegramTreeSnapshot) => boolean;
+  forkTreeEntry?: (entryId: string) => Promise<TelegramTreeForkResult>;
+  sendTextReply?: (
+    chatId: number,
+    replyToMessageId: number,
+    text: string,
+  ) => Promise<unknown>;
   canNavigate: () => boolean;
   renderTreeExport?: (snapshot: TelegramTreeSnapshot) => Promise<TelegramTreeExportFileSet>;
   sendTreeExportFiles?: (
@@ -936,6 +953,9 @@ async function handleTelegramTreeMenuCallbackUnsafe(
     deps.setState({ ...state, ...next, updatedAt: now() });
   };
   const isReadOnly = (): boolean => deps.isReadOnly?.(deps.getSnapshot()) ?? false;
+  const canForkTree = (): boolean =>
+    Boolean(deps.forkTreeEntry) &&
+    (deps.canForkTree?.(deps.getSnapshot()) ?? true);
   const answerReadOnly = async (): Promise<boolean> => {
     await deps.answerCallbackQuery(query.id, "Tree history is read-only for this session.");
     return true;
@@ -1139,7 +1159,10 @@ async function handleTelegramTreeMenuCallbackUnsafe(
       chatId,
       messageId,
       buildTelegramTreeDetailText(entry),
-      buildTelegramTreeDetailReplyMarkup(entry, { readOnly: isReadOnly() }),
+      buildTelegramTreeDetailReplyMarkup(entry, {
+        readOnly: isReadOnly(),
+        canFork: canForkTree(),
+      }),
     );
     updateState({
       view: "detail",
@@ -1148,6 +1171,61 @@ async function handleTelegramTreeMenuCallbackUnsafe(
       page: clampPage(Math.floor(index / TELEGRAM_TREE_PAGE_SIZE), state.entries.length),
     });
     await deps.answerCallbackQuery(query.id);
+    return true;
+  }
+
+  if (data.startsWith("tree:fork:")) {
+    if (!canForkTree() || !deps.forkTreeEntry) {
+      await deps.answerCallbackQuery(query.id, "Tree branching is not available for this session.");
+      return true;
+    }
+    const index = parseIndex(data, "tree:fork:", state.entries.length);
+    if (index === undefined) {
+      await deps.answerCallbackQuery(query.id, "Entry no longer exists.");
+      return true;
+    }
+    if (!deps.canNavigate()) {
+      await deps.answerCallbackQuery(
+        query.id,
+        "Cannot create branch while π or Telegram queue is busy.",
+      );
+      return true;
+    }
+    const entry = state.entries[index];
+    if (entry.kind === "branch") {
+      await deps.answerCallbackQuery(query.id, "Only prompts can be branched from here.");
+      return true;
+    }
+    let result: TelegramTreeForkResult;
+    try {
+      result = await deps.forkTreeEntry(entry.entryId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await deps.answerCallbackQuery(query.id, `Create branch failed: ${message}`);
+      return true;
+    }
+    if (result.cancelled) {
+      await deps.answerCallbackQuery(query.id, "Create branch cancelled.");
+      return true;
+    }
+    const head = entry.entryId.slice(0, 8);
+    await deps.editTreeMessage(
+      chatId,
+      messageId,
+      `${TELEGRAM_TREE_MENU_TITLE}\n\nCreated branch from <code>${escapeHtml(head)}</code>.\nSend a new prompt to continue from there.`,
+      { inline_keyboard: [] },
+    );
+    updateState({ view: "detail", detailIndex: index, pendingRename: undefined });
+    await deps.answerCallbackQuery(query.id, "Branch created.");
+    const text = result.text?.trim();
+    if (text && deps.sendTextReply) {
+      const safeText = text.length > 3000 ? text.slice(0, 2999) + "…" : text;
+      await deps.sendTextReply(
+        chatId,
+        messageId,
+        `Telegram cannot prefill your chat compose box; copy/edit/send if needed:\n\n${safeText}`,
+      );
+    }
     return true;
   }
 
@@ -1394,7 +1472,9 @@ export interface TelegramTreeMenuRuntimeDeps<TContext> {
     callbackQueryId: string,
     text?: string,
   ) => Promise<void>;
-  injectTreeExec: (entryId: string, summarize: boolean) => Promise<void>;
+  injectTreeExec: (entryId: string, summarize: boolean, ctx: TContext) => Promise<void>;
+  canForkTree?: (snapshot: TelegramTreeSnapshot, ctx: TContext) => boolean;
+  forkTreeEntry?: (entryId: string, ctx: TContext) => Promise<TelegramTreeForkResult>;
   canNavigate: (ctx: TContext) => boolean;
   renderTreeExport?: (snapshot: TelegramTreeSnapshot) => Promise<TelegramTreeExportFileSet>;
   sendTreeExportFiles?: (
@@ -1456,7 +1536,15 @@ export function createTelegramTreeMenuRuntime<TContext>(
           );
         },
         answerCallbackQuery: deps.answerCallbackQuery,
-        injectTreeExec: deps.injectTreeExec,
+        injectTreeExec: (entryId, summarize) =>
+          deps.injectTreeExec(entryId, summarize, ctx),
+        canForkTree: deps.canForkTree
+          ? (snapshot) => deps.canForkTree?.(snapshot, ctx) ?? false
+          : undefined,
+        forkTreeEntry: deps.forkTreeEntry
+          ? (entryId) => deps.forkTreeEntry?.(entryId, ctx) ?? Promise.resolve({ cancelled: true })
+          : undefined,
+        sendTextReply: deps.sendTextReply,
         canNavigate: function canNavigateWithContext() {
           return deps.canNavigate(ctx);
         },
@@ -1535,6 +1623,8 @@ export interface TelegramTreeMenuRuntimePiContextDeps<TContext> {
   editInteractiveMessage: TelegramTreeMenuRuntimeDeps<TContext>["editInteractiveMessage"];
   answerCallbackQuery: TelegramTreeMenuRuntimeDeps<TContext>["answerCallbackQuery"];
   injectTreeExec: TelegramTreeMenuRuntimeDeps<TContext>["injectTreeExec"];
+  canForkTree?: TelegramTreeMenuRuntimeDeps<TContext>["canForkTree"];
+  forkTreeEntry?: TelegramTreeMenuRuntimeDeps<TContext>["forkTreeEntry"];
   canNavigate: TelegramTreeMenuRuntimeDeps<TContext>["canNavigate"];
   renderTreeExport?: TelegramTreeMenuRuntimeDeps<TContext>["renderTreeExport"];
   sendTreeExportFiles?: TelegramTreeMenuRuntimeDeps<TContext>["sendTreeExportFiles"];
@@ -1555,6 +1645,8 @@ export function buildTelegramTreeMenuRuntime<TContext>(
     editInteractiveMessage: deps.editInteractiveMessage,
     answerCallbackQuery: deps.answerCallbackQuery,
     injectTreeExec: deps.injectTreeExec,
+    canForkTree: deps.canForkTree,
+    forkTreeEntry: deps.forkTreeEntry,
     canNavigate: deps.canNavigate,
     renderTreeExport: deps.renderTreeExport,
     sendTreeExportFiles: deps.sendTreeExportFiles,
