@@ -35,13 +35,6 @@ export interface TelegramTabRecord {
   lastMessageText?: string;
   lastMessageAt?: number;
   messageCount?: number;
-  telegramChatId?: number;
-  telegramReplyToMessageId?: number;
-  telegramTargetUpdatedAt?: number;
-  browserTargetId?: string;
-  browserTargetUrl?: string;
-  browserTargetTitle?: string;
-  browserTargetUpdatedAt?: number;
 }
 
 export type TelegramTabCommand =

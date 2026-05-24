@@ -2,13 +2,13 @@
 
 ## Unreleased
 
+- `[Concurrent Tabs]` Removed browser visual-checkpoint delivery state from tab records. `telegram-tabs.json` no longer stores Telegram reply targets or browser CDP targets for browser skill screenshots.
 - `[Concurrent Tabs]` Active-tab `/session` now shows `Delete this session` for persisted worker sessions. Confirming it creates a replacement session in the active tab worker first, then deletes the previous shared session JSONL without falling back to the parent tmux session.
 - `[Concurrent Tabs]` Worker-tab `/tree` branch detail now keeps the existing branch actions visible. `Switch to this branch` jumps the active tab worker by appending the same-session cursor, while `Rename branch` and `Delete branch` write label/delete metadata to the shared session JSONL without creating a tab-private session folder.
 - `[Concurrent Tabs]` Worker-tab `/tree` prompt detail now shows `Create branch from this prompt`. The action appends a hidden branch cursor to the same session file, restarts the active worker on that cursor, and opens `/tree` directly to `Branches` when the active path is otherwise empty; parent-style rewind remains read-only for worker tabs.
 - `[Concurrent Tabs]` Removed the `Abort` button from the `/tab` inline dashboard while keeping `/tab abort [name]`, `/abort`, and `/stop` command routing intact.
 - `[Concurrent Tabs]` `/tab` dashboard rows now show tab age, worker message count, session name, and latest message preview instead of provider/model ids.
 - `[Concurrent Tabs]` `/tab` dashboard now has a `Manage 🗑` close mode for selecting multiple non-default tabs, confirming the batch close, and stopping any selected running workers while keeping their session files.
-- `[Concurrent Tabs]` Tab records now keep the latest Telegram reply target and browser CDP target for browser visual checkpoints, so background tab screenshots use the tab that produced them instead of following the currently active tab; a tab worker's first `nav.py <url>` opens its own Chrome target.
 - `[Concurrent Tabs]` Fixed the production command-target wrapper so bare `/abort` and `/stop` actually forward to the active tab worker instead of falling back to the parent `No active turn.` path.
 - `[Concurrent Tabs]` `/abort` and `/stop` now target the active tab worker when concurrent tabs are enabled; `/stop` still clears the Telegram queue after aborting the tab.
 - `[Concurrent Tabs]` `/resume` now refreshes the active tab's session name from the resumed worker state, clearing stale tab names when the selected session is unnamed.

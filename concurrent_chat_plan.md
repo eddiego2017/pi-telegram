@@ -2,121 +2,22 @@
 
 Reset-safe handoff for concurrent `/tab` support in `pi-telegram`.
 
-Status as of 2026-05-23: concurrent tabs are implemented, tested, and deployed
+Status as of 2026-05-24: concurrent tabs are implemented, tested, and deployed
 in the `pi` Kubernetes deployment. The parent extension owns Telegram polling,
-menus, delivery, and Bot API calls. Each tab owns an isolated RPC worker.
+menus, delivery, Bot API calls, and durable tab state. Each tab owns one
+isolated RPC worker process.
 
-Important direction change as of 2026-05-23: remove the original per-tab
-private session folder design. Tabs should not have private session storage
-under `~/.pi/agent/telegram-tabs/sessions/<tab>`. Sessions are shared by cwd,
-as they were before `/tab`; each tab only keeps a pointer to the active shared
-session file.
-
-Implementation status as of 2026-05-23: the shared cwd session pool change,
-the `/resume` session-name refresh fix, and active-tab `/abort`/`/stop` routing
-are implemented locally and applied to the live `pi` Kubernetes deployment.
-The Telegram runtime was reloaded through tmux after validation.
-
-Follow-up fix on 2026-05-23: live testing showed bare `/abort` and `/stop`
-still replied `No active turn.` because the production command-target runtime
-wrapper did not forward the active-tab abort port to the core command handler.
-That wrapper now forwards `abortActiveTab`, with a regression covering the
-actual routing path.
-
-Follow-up fix on 2026-05-23: browser skill visual checkpoint sends are direct
-Bot API `sendPhoto` calls from the worker process. The existing
-`telegram-tabs.json` tab record is now updated before each routed
-prompt/follow-up with the tab's latest Telegram reply target. Browser checkpoint
-scripts can read that existing registry via `PI_TELEGRAM_TAB`.
-
-Follow-up fix on 2026-05-23: the first fix only targeted Telegram delivery.
-The browser skill still used Chromium's global active page when commands omitted
-`--tab`, so a background worker could screenshot whichever noVNC tab was active.
-The browser skill now stores each worker's latest CDP target id in the same
-existing `telegram-tabs.json` tab record. Background-tab screenshots use and
-reply to the tab that produced them without adding a private tab folder. A tab
-worker's first `nav.py <url>` opens and stores its own Chrome target instead of
-navigating Chromium's global active page.
-
-## What Works
-
-- `/tab` opens the inline dashboard for switching tabs and confirmed close.
-  Tab rows show tab age, worker message count, session name, and latest message
-  preview instead of provider/model ids. The dashboard does not show an Abort
-  button; `/tab abort [name]`, `/abort`, and `/stop` remain command-only controls.
-- `/tab` dashboard `Manage 🗑` mode supports multi-select closing of
-  non-default tabs with an explicit confirmation; selected running workers are
-  stopped and session files are kept.
-- `/tab new A`, `/tab A`, `/tab rename A B`, `/tab close A`, and `/tab abort`
-  are parent-owned and stay responsive while workers run.
-- Bare `/abort` and `/stop` target the active tab worker when concurrent tabs
-  are enabled. `/stop` also clears the Telegram queue.
-- Normal Telegram prompts route to the active tab.
-- Inactive tabs keep running and send compact completion notices.
-- Switching tabs replays the selected tab's last 5 user turns with agent replies
-  and replayable image attachments.
-- Active tab runs stream answer text, thinking previews, tool-call previews,
-  final Markdown replies, and native Telegram `typing` actions.
-- Browser visual checkpoints from tab workers read the existing tab registry for
-  both Telegram reply target and browser CDP target, so they use and reply to
-  the tab that produced them, including background tabs.
-- `/llm` and `/model` switch the active tab's child worker model while idle.
-- `/new` starts a fresh session inside the active tab worker through RPC
-  `new_session`, creating the new file in the shared cwd session pool.
-- `/resume` lists the normal global cwd sessions and switches the selected
-  session into the active tab worker through RPC `switch_session`. If the child reports stale
-  session state after a successful switch, the parent restarts that worker on
-  the selected session file. The active tab's session name is refreshed from
-  the resumed worker state, and stale tab names are cleared when the selected
-  session is unnamed.
-- `/session` follows the active tab, including `Last 5 turns`, `Full replay`,
-  history pagination, context usage, replayable image attachments, and
-  `Delete this session` for persisted tab sessions. Tab-session delete creates
-  a replacement worker session first, then removes the previous shared session
-  JSONL; it does not route through the parent tmux session.
-- `/tree` follows the active tab. Prompt detail can create a branch by
-  appending a hidden cursor in the same session file and restarting the active
-  RPC worker on that cursor. Branch detail keeps `Switch to this branch`,
-  `Rename branch`, and `Delete branch` available for worker tabs by appending
-  same-session cursor/metadata entries; parent-style rewind stays read-only for
-  worker tabs.
-- Tabs persist across host `pi` restarts.
-- Default tab limit is 10.
-
-## Live Smoke
-
-Already passed in Telegram:
+## Current Model
 
 ```text
-/tab
-/tab new A
-multi-turn conversation in A
-/tab new B
-conversation in B isolated from A
-/tab close B
-restart host pi
-continue preserved tab session
-/llm <model tokens>
-/model
-/session
-/tree
-/new
-/resume
+tabs     = UI/runtime/process namespace
+sessions = shared cwd session pool
 ```
 
-## Architecture
+Tabs keep a pointer to one active shared session file. They do not own private
+session directories, and `/resume` remains the normal global cwd session list.
 
-```text
-host pi process
-  pi-telegram parent
-    Telegram polling/auth/menus/replies
-    TabManager
-      default -> RpcChildBackend
-      A       -> RpcChildBackend
-      B       -> RpcChildBackend
-```
-
-Target worker launch shape:
+Worker launch shape:
 
 ```bash
 pi --mode rpc --no-extensions \
@@ -124,47 +25,20 @@ pi --mode rpc --no-extensions \
   --session-dir <shared cwd session directory>
 ```
 
-Deprecated original launch shape:
+If a tab already points at an old absolute session file under
+`~/.pi/agent/telegram-tabs/sessions/<tab>`, it may keep reading that file until
+the user runs `/new` or `/resume`. New sessions and new workers use the shared
+cwd session directory.
 
-```bash
-pi --mode rpc --no-extensions \
-  -e <provider-only-extension> \
-  --session-dir ~/.pi/agent/telegram-tabs/sessions/<tab>
-```
+## Durable Tab State
 
-That deprecated shape is the design being removed. Do not create new tab-owned
-session directories. Do not make `/resume` list per-tab directories. Do not
-describe session isolation as a tab feature in docs.
-
-Guardrails:
-
-- Workers must not load full `pi-telegram`.
-- Workers must not poll Telegram or own Telegram locks.
-- Parent-owned commands such as `/tab`, `/session`, `/tree`, `/new`, and
-  `/resume` must not be routed into a worker as prompts.
-- Provider-only extensions may be loaded through
-  `concurrentTabs.workerExtensions`.
-
-## New Session Storage Model
-
-The desired model is:
-
-```text
-tabs     = UI/runtime/process namespace
-sessions = shared cwd session pool
-```
-
-Tabs may keep their own active session pointer, but the pointed-to file belongs
-to the normal shared session pool for the cwd. There is no concept of
-"sessions owned by tab A" or "resume list for tab B".
-
-Durable tab state remains in:
+Durable state lives in:
 
 ```text
 ~/.pi/agent/telegram-tabs.json
 ```
 
-Expected durable fields per tab:
+Allowed per-tab fields:
 
 ```text
 name
@@ -181,34 +55,47 @@ lastError
 lastAgentStartAt
 lastAgentEndAt
 lastAssistantText
+lastMessageText
+lastMessageAt
+messageCount
 ```
 
-These are tab state, not a private session namespace. `sessionFile` is just the
-active shared session file for that tab.
+Do not add browser checkpoint delivery state to tab records. Removed fields:
+`telegramChatId`, `telegramReplyToMessageId`, `telegramTargetUpdatedAt`,
+`browserTargetId`, `browserTargetUrl`, `browserTargetTitle`, and
+`browserTargetUpdatedAt`.
 
-Per-tab state that should remain:
+Browser skill automatic step images were removed. Browser skill scripts must not
+write `telegram-tabs.json`, read tab reply targets, or call Bot API `sendPhoto`
+for automatic visual checkpoints.
 
-- One isolated RPC worker process per tab, for concurrency.
-- One active shared-session pointer per tab: `sessionFile`, `sessionId`,
-  `sessionName`.
-- One model/thinking selection per tab: `currentModel`,
-  `currentThinkingLevel`.
-- In-memory streaming buffers per tab: text, thinking, tool-call preview state,
-  sent-preview de-duplication, typing timers, active Telegram message ids.
-- Per-tab status/unread/last-reply UI state.
+## Behavior
 
-Per-tab state that should be removed:
+- `/tab` opens the dashboard; `Manage` supports multi-select close.
+- `/tab new A`, `/tab A`, `/tab rename A B`, `/tab close A`, and
+  `/tab abort [name]` are parent-owned.
+- Bare `/abort` and `/stop` target the active tab worker when concurrent tabs
+  are enabled. `/stop` still clears the Telegram queue.
+- Normal Telegram prompts route to the active tab.
+- Inactive tabs keep running and send compact completion notices.
+- Switching tabs replays the selected tab's latest turns.
+- Active tabs stream answer text, thinking previews, tool-call previews, final
+  Markdown replies, and Telegram `typing` actions.
+- `/llm`, `/model`, `/new`, `/resume`, `/session`, and `/tree` follow the
+  active tab.
+- `/tree` worker branch actions use same-session cursors/metadata; parent-style
+  prompt rewind remains read-only for worker tabs.
+- Default tab limit is 10.
 
-- `~/.pi/agent/telegram-tabs/sessions/<tab>` as a storage root.
-- Any worker launch that chooses `--session-dir` by tab name.
-- Any `/resume`, `/session`, `/tree`, `/new`, or docs behavior that treats a
-  tab as owning a private session list.
+## Guardrails
 
-Existing old files under `~/.pi/agent/telegram-tabs/sessions/<tab>` must not be
-deleted automatically. If an existing tab already points at one of those files,
-it may keep reading it by absolute `sessionFile` until the user runs `/new` or
-`/resume`. New sessions and new workers should use the shared cwd session
-directory.
+- Workers must not load full `pi-telegram`.
+- Workers must not poll Telegram or own Telegram locks.
+- Parent-owned commands must not be routed into a worker as prompts.
+- Do not create new tab-owned session directories.
+- Do not make `/resume`, `/session`, `/tree`, `/new`, or docs treat a tab as
+  owning a private session list.
+- Browser skill must remain outside `telegram-tabs.json` ownership.
 
 ## Main Files
 
@@ -216,15 +103,15 @@ directory.
 lib/tabs.ts          tab state, validation, command parsing, formatting
 lib/rpc-child.ts     JSONL RPC child backend and RPC command helpers
 lib/tab-manager.ts   durable tab registry and worker orchestration
-lib/menu-resume.ts   /resume menu, global listing, tab-scoped callback dispatch
+lib/menu-resume.ts   /resume menu, global listing, tab-scoped callbacks
 lib/menu-session.ts  /session snapshot/replay/history rendering
-lib/menu-tree.ts     /tree prompt history rendering
+lib/menu-tree.ts     /tree prompt history and worker branch actions
 lib/commands.ts      command routing for /tab, /new, /name, /llm, etc.
 lib/routing.ts       inbound prompt/control routing
 index.ts             extension composition root
 ```
 
-Tests:
+Focused tests:
 
 ```text
 tests/tab-manager.test.ts
@@ -238,117 +125,27 @@ tests/status.test.ts
 tests/pi.test.ts
 ```
 
-Resolved code areas that previously reflected the old private-folder design:
+## Validation
 
-```text
-lib/tab-manager.ts
-  Removed getTelegramTabsSessionRoot(agentDir).
-  Removed tab-name session directory creation.
-  RpcChildBackend now receives the current shared cwd session directory.
-  getActiveResumeSessionScope().sessionDir is the shared cwd session directory.
-
-lib/rpc-child.ts
-  buildRpcChildArgs() still supports --session-dir and omits it when no
-  sessionDir is provided, allowing the pi CLI to use its normal default.
-
-tests/tab-manager.test.ts
-tests/menu-resume.test.ts
-  Expectations now make the shared-session behavior explicit.
-```
-
-## Current Config Shape
-
-```json
-{
-  "concurrentTabs": {
-    "enabled": true,
-    "maxTabs": 10,
-    "inactiveNotify": true,
-    "workerExtensions": [
-      "/home/pi/.pi/agent/extensions/cpa-openai-proxy.ts",
-      "/home/pi/.pi/agent/extensions/cpa-anthropic-proxy.ts",
-      "/home/pi/.pi/agent/extensions/opencode-cpa-provider.ts",
-      "/home/pi/.pi/agent/extensions/groq-filter.ts"
-    ]
-  }
-}
-```
-
-## Recent Validation
+Latest local validation:
 
 ```text
 npm run typecheck
-node --experimental-strip-types --test tests/tab-manager.test.ts tests/menu-resume.test.ts tests/routing.test.ts
-node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts
+node --experimental-strip-types --test tests/tab-manager.test.ts tests/rpc-child.test.ts
 ```
 
-Latest full sequential result: 647 pass, 0 fail.
-
-## Known Limits
-
-- Worker tabs still do not load full Telegram extensions, so child-local
-  `telegram_attach` remains future work.
-- Worker-tab `/tree` still keeps in-file prompt rewind read-only. Branch
-  switch, rename, and delete are implemented with same-session file cursors and
-  metadata, without tab-private session directories.
-
-## Completed Implementation Plan
-
-Goal completed: remove per-tab private session folders while preserving
-concurrent tab behavior.
-
-1. Add or expose a reliable way for `createTelegramTabManager()` to know the
-   normal shared session directory for the current cwd. Prefer the same source
-   the non-tab session manager uses; do not infer it from
-   `~/.pi/agent/telegram-tabs`.
-2. Change `lib/tab-manager.ts` so `ensureBackend()` passes the shared cwd
-   session directory to `RpcChildBackend` when `runtime.record.sessionFile` is
-   absent.
-3. Stop creating `join(sessionRoot, runtime.record.name)`. After the change,
-   creating or switching tabs must not create a tab-named session directory.
-4. Keep `runtime.record.sessionFile` semantics. If a tab has an explicit
-   `sessionFile`, start the worker with that file so existing old private files
-   remain readable.
-5. Remove `sessionDir` from the active resume scope if no longer needed, or set
-   it to the shared cwd session directory only. `/resume` must keep listing
-   global cwd sessions.
-6. Ensure `/new` on a tab creates a new session in the shared cwd session pool
-   and updates that tab's `sessionFile`, `sessionId`, and `sessionName`.
-7. Ensure `/resume` selection applies the selected shared session file to the
-   active tab only.
-8. Update README/CHANGELOG/docs after implementation so they no longer claim
-   that each tab has its own session directory.
-9. Local validation completed:
+Latest full local sequential result before the browser-checkpoint removal:
 
 ```text
-npm run typecheck
-node --experimental-strip-types --test tests/tab-manager.test.ts tests/menu-resume.test.ts tests/routing.test.ts
 node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts
+647 pass, 0 fail
 ```
 
-10. Validated and reloaded in the `pi` Kubernetes deployment:
+Live `pi` pod validation after browser-checkpoint removal:
 
 ```text
-kubectl -n pi exec deploy/pi -c pi -- sh -lc 'cd /home/pi/projects/pi-telegram && npm run typecheck'
-kubectl -n pi exec deploy/pi -c pi -- sh -lc 'cd /home/pi/projects/pi-telegram && node --experimental-strip-types --test --test-name-pattern "routes prompts to active workers|rebinds worker" tests/tab-manager.test.ts'
-kubectl -n pi exec deploy/pi -c pi -- sh -lc 'cd /home/pi/projects/pi-telegram && node --experimental-strip-types --test --test-name-pattern "refreshes session name|routes prompts to active workers|rebinds worker" tests/tab-manager.test.ts'
-kubectl -n pi exec deploy/pi -c pi -- sh -lc 'cd /home/pi/projects/pi-telegram && node --experimental-strip-types --test tests/rpc-child.test.ts tests/menu-resume.test.ts'
-kubectl -n pi exec deploy/pi -c pi -- sh -lc 'tmux send-keys -t pi:0 C-u /telegram-reload-runtime Enter'
+cd /home/pi/projects/pi-telegram && npm run typecheck
+python3 -m py_compile browser skill scripts
+telegram-tabs.json cleaned of removed checkpoint fields
+pi runtime restarted
 ```
-
-Note: one pod-only run of the full targeted tab-manager test file hit the
-timing-sensitive `Tab manager sends typing actions for the active running tab`
-assertion because the pod scheduler allowed one extra typing interval. The same
-full suite passed locally; the pod rerun used focused tests for the changed
-shared-session behavior.
-
-Acceptance criteria:
-
-- `/tab new A` does not create
-  `~/.pi/agent/telegram-tabs/sessions/A`.
-- `/new` inside any tab creates the new session in the same shared session pool
-  used by normal `/resume`.
-- `/resume` shows all sessions for the cwd, not a tab-specific list.
-- Selecting a `/resume` item changes only the active tab's session pointer.
-- `/session`, `/tree`, `/llm`, `/model`, streaming, typing, inactive
-  completion notices, and tab switching still behave as before.

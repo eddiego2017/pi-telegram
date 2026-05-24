@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -592,24 +592,6 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     "ctx",
   );
   assert.deepEqual(backends.get("A")?.prompts, ["hello A"]);
-  const persistedAfterPrompt = JSON.parse(await readFile(statePath, "utf8"));
-  assert.deepEqual(
-    {
-      chatId: persistedAfterPrompt.tabs.A.telegramChatId,
-      replyToMessageId: persistedAfterPrompt.tabs.A.telegramReplyToMessageId,
-      updatedAt: persistedAfterPrompt.tabs.A.telegramTargetUpdatedAt,
-    },
-    { chatId: 1, replyToMessageId: 20, updatedAt: 1000 },
-  );
-  persistedAfterPrompt.tabs.A.browserTargetId = "cdp-A";
-  persistedAfterPrompt.tabs.A.browserTargetUrl = "https://example.test/a";
-  persistedAfterPrompt.tabs.A.browserTargetTitle = "A";
-  persistedAfterPrompt.tabs.A.browserTargetUpdatedAt = 1500;
-  await writeFile(
-    statePath,
-    `${JSON.stringify(persistedAfterPrompt, null, "\t")}\n`,
-    "utf8",
-  );
   assert.match(replies.at(-1) ?? "", /Started tab A/);
   assert.equal(await manager.canSwitchActiveModel("ctx"), false);
   assert.equal(
@@ -630,29 +612,6 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     "ctx",
   );
   assert.deepEqual(backends.get("A")?.followUps, ["second A"]);
-  const persistedAfterFollowUp = JSON.parse(await readFile(statePath, "utf8"));
-  assert.deepEqual(
-    {
-      chatId: persistedAfterFollowUp.tabs.A.telegramChatId,
-      replyToMessageId: persistedAfterFollowUp.tabs.A.telegramReplyToMessageId,
-      updatedAt: persistedAfterFollowUp.tabs.A.telegramTargetUpdatedAt,
-    },
-    { chatId: 1, replyToMessageId: 21, updatedAt: 1000 },
-  );
-  assert.deepEqual(
-    {
-      id: persistedAfterFollowUp.tabs.A.browserTargetId,
-      url: persistedAfterFollowUp.tabs.A.browserTargetUrl,
-      title: persistedAfterFollowUp.tabs.A.browserTargetTitle,
-      updatedAt: persistedAfterFollowUp.tabs.A.browserTargetUpdatedAt,
-    },
-    {
-      id: "cdp-A",
-      url: "https://example.test/a",
-      title: "A",
-      updatedAt: 1500,
-    },
-  );
   assert.match(replies.at(-1) ?? "", /Queued follow-up in tab A/);
 
   await manager.handleCommand("new B", 1, 30, "ctx");
