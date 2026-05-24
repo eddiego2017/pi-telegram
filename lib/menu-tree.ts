@@ -764,8 +764,15 @@ export async function openTelegramTreeMenu(
 ): Promise<void> {
   const now = deps.now ?? Date.now;
   const snapshot = deps.getSnapshot();
-  const filter: TelegramTreeFilter = "active";
-  const entries = buildTelegramTreeMenuEntries(snapshot, filter);
+  let filter: TelegramTreeFilter = "active";
+  let entries = buildTelegramTreeMenuEntries(snapshot, filter);
+  if (entries.length === 0) {
+    const branchEntries = buildTelegramTreeMenuEntries(snapshot, "branches");
+    if (branchEntries.length > 0) {
+      filter = "branches";
+      entries = branchEntries;
+    }
+  }
   const messageId = await deps.sendTreeMenu(
     buildTelegramTreeListText(snapshot, entries, 0, filter),
     buildTelegramTreeListReplyMarkup(entries, 0, filter),

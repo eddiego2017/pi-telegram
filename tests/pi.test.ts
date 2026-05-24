@@ -4,11 +4,17 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import {
   compactExtensionContext,
   createExtensionApiRuntimePorts,
+  createTelegramSessionFileTreeBranchCursor,
   createScopedModelPatternPersister,
   deriveSessionContextUsageFromEntries,
   type ExtensionContext,
@@ -16,6 +22,7 @@ import {
   getExtensionContextModel,
   hasExtensionContextPendingMessages,
   isExtensionContextIdle,
+  TELEGRAM_TREE_BRANCH_CURSOR_CUSTOM_TYPE,
 } from "../lib/pi.ts";
 
 type PiRuntimeApiHarness = Parameters<
@@ -82,6 +89,43 @@ test("Pi API runtime ports bind methods without losing receiver context", async 
     "thinking:low",
     "model:gpt-5",
   ]);
+});
+
+test("Pi tree branch cursor rewinds a session file without forking it", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tree-cursor-"));
+  const manager = SessionManager.create("/repo", tempDir);
+  const sessionFile = manager.getSessionFile();
+  if (!sessionFile) throw new Error("missing test session file");
+  const userId = manager.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: "[telegram] first prompt" }],
+  } as never);
+  manager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "first answer" }],
+  } as never);
+
+  const result = createTelegramSessionFileTreeBranchCursor(
+    { cwd: "/repo", sessionFile },
+    userId,
+  );
+  assert.equal(result.cancelled, false);
+  assert.equal(result.text, "[telegram] first prompt");
+
+  const reopened = SessionManager.open(sessionFile, undefined, "/repo");
+  assert.equal(reopened.getSessionFile(), sessionFile);
+  assert.equal(reopened.getLeafId(), result.markerId);
+  const marker = reopened.getEntry(result.markerId) as {
+    type?: string;
+    customType?: string;
+    parentId?: string | null;
+    data?: { targetId?: string; branchFromId?: string | null };
+  };
+  assert.equal(marker.type, "custom");
+  assert.equal(marker.customType, TELEGRAM_TREE_BRANCH_CURSOR_CUSTOM_TYPE);
+  assert.equal(marker.parentId, null);
+  assert.equal(marker.data?.targetId, userId);
+  assert.equal(marker.data?.branchFromId, null);
 });
 
 test("Pi scoped model persister invalidates cached inputs without clearing live menus", async () => {

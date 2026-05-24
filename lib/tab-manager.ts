@@ -13,7 +13,6 @@ import {
   RpcChildBackend,
   type RpcChildBackendEvent,
   type RpcChildBackendOptions,
-  type RpcChildForkResult,
   type RpcChildSessionState,
 } from "./rpc-child.ts";
 import {
@@ -68,7 +67,6 @@ export interface TelegramTabBackend {
   abort: () => Promise<void>;
   newSession: (parentSession?: string) => Promise<{ cancelled: boolean }>;
   switchSession: (sessionPath: string) => Promise<{ cancelled: boolean }>;
-  fork: (entryId: string) => Promise<RpcChildForkResult>;
   getState: () => Promise<RpcChildSessionState>;
   setModel: (provider: string, modelId: string) => Promise<void>;
   setThinkingLevel: (level: string) => Promise<void>;
@@ -101,6 +99,12 @@ export interface TelegramTabAbortResult {
   tabName: string;
   aborted: boolean;
   message: string;
+}
+
+export interface TelegramTabTreeBranchResult {
+  text?: string;
+  cancelled: boolean;
+  markerId?: string;
 }
 
 export interface TelegramTabManagerDeps<TContext> {
@@ -162,6 +166,10 @@ export interface TelegramTabManagerDeps<TContext> {
     error: unknown,
     details?: Record<string, unknown>,
   ) => void;
+  createTreeBranch?: (
+    reference: TelegramTabSessionReference,
+    entryId: string,
+  ) => Promise<TelegramTabTreeBranchResult> | TelegramTabTreeBranchResult;
 }
 
 interface RuntimeTab {
@@ -259,10 +267,10 @@ export interface TelegramTabManager<TContext> {
     ctx: TContext,
     scope?: { kind?: string; tabName?: string },
   ) => Promise<boolean>;
-  forkActiveTreeEntry: (
+  createActiveTreeBranch: (
     entryId: string,
     ctx: TContext,
-  ) => Promise<RpcChildForkResult | undefined>;
+  ) => Promise<TelegramTabTreeBranchResult | undefined>;
   handleCommand: (
     args: string,
     chatId: number,
@@ -454,7 +462,7 @@ export interface TelegramTabAwareTreeMenuPorts<TContext> {
   forkTreeEntry: (
     entryId: string,
     ctx: TContext,
-  ) => Promise<RpcChildForkResult>;
+  ) => Promise<TelegramTabTreeBranchResult>;
 }
 
 export interface TelegramTabAwareTreeMenuPortDeps<TContext> {
@@ -477,7 +485,7 @@ export function createTelegramTabAwareTreeMenuPorts<TContext>(
       await deps.injectParentTreeExec(entryId, summarize);
     },
     forkTreeEntry: async (entryId, ctx) => {
-      const result = await deps.tabManager.forkActiveTreeEntry(entryId, ctx);
+      const result = await deps.tabManager.createActiveTreeBranch(entryId, ctx);
       if (!result) throw new Error("No active tab session for tree branch.");
       return result;
     },
@@ -2478,7 +2486,7 @@ export function createTelegramTabManager<TContext>(
         throw error;
       }
     },
-    forkActiveTreeEntry: async (entryId, ctx) => {
+    createActiveTreeBranch: async (entryId, ctx) => {
       if (!isEnabled()) return undefined;
       const runtime = await getActiveRuntime(ctx);
       if (!runtime) return undefined;
@@ -2489,10 +2497,15 @@ export function createTelegramTabManager<TContext>(
         );
       }
       try {
-        const backend = await ensureBackend(runtime, ctx);
-        const result = await backend.fork(entryId);
+        if (!deps.createTreeBranch) {
+          throw new Error("Active tab tree branching is not configured.");
+        }
+        const result = await deps.createTreeBranch(
+          getTelegramTabSessionReference(runtime.record, deps.getCwd(ctx)),
+          entryId,
+        );
         if (result.cancelled) return result;
-        stopTabTyping(runtime);
+        await disposeRuntimeBackend(runtime);
         resetRuntimeTurnBuffers(runtime);
         delete runtime.record.lastAssistantText;
         delete runtime.record.lastMessageText;
@@ -2500,8 +2513,7 @@ export function createTelegramTabManager<TContext>(
         delete runtime.record.lastAgentStartAt;
         delete runtime.record.lastAgentEndAt;
         runtime.record.lastError = undefined;
-        const childState = await backend.getState();
-        applyRpcStateToRecord(runtime.record, childState);
+        runtime.record.status = "idle";
         runtime.record.lastUsedAt = now();
         await persist();
         return result;
@@ -2510,7 +2522,7 @@ export function createTelegramTabManager<TContext>(
         runtime.record.lastError = getErrorMessage(error);
         deps.recordRuntimeEvent?.("tabs", error, {
           tab: runtime.record.name,
-          action: "fork_tree_entry",
+          action: "create_tree_branch",
         });
         await persist();
         throw error;

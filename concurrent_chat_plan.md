@@ -72,8 +72,9 @@ navigating Chromium's global active page.
 - `/session` follows the active tab, including `Last 5 turns`, `Full replay`,
   history pagination, context usage, and replayable image attachments.
 - `/tree` follows the active tab. Prompt detail can create a branch by
-  forking the active RPC worker session in the shared cwd session pool; in-file
-  rewind/switch and branch metadata mutation stay read-only for worker tabs.
+  appending a hidden cursor in the same session file and restarting the active
+  RPC worker on that cursor; parent-style rewind/switch and branch metadata
+  mutation stay read-only for worker tabs.
 - Tabs persist across host `pi` restarts.
 - Default tab limit is 10.
 

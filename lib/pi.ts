@@ -59,6 +59,14 @@ export interface PiTelegramTreeBranchMutators<TContext> {
   deleteBranch(entryId: string, ctx: TContext): void;
 }
 
+export const TELEGRAM_TREE_BRANCH_CURSOR_CUSTOM_TYPE = "pi-telegram:tree-branch-cursor";
+
+export interface PiTelegramTreeBranchCursorResult {
+  cancelled: false;
+  markerId: string;
+  text?: string;
+}
+
 export interface PiSessionSnapshotReference {
   cwd: string;
   sessionFile?: string;
@@ -103,6 +111,83 @@ export function createTelegramTreeBranchMutators<TContext>(
     deleteBranch(entryId) {
       api.appendEntry(customType, { leafId: entryId, deleted: true });
     },
+  };
+}
+
+function textFromTreeContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => {
+      if (typeof block !== "object" || block === null) return "";
+      const raw = block as { type?: unknown; text?: unknown };
+      return raw.type === "text" && typeof raw.text === "string"
+        ? raw.text
+        : "";
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function getSessionEntryEditorText(entry: unknown): string | undefined {
+  if (typeof entry !== "object" || entry === null) return undefined;
+  const raw = entry as {
+    type?: unknown;
+    message?: { role?: unknown; content?: unknown };
+    content?: unknown;
+  };
+  if (raw.type === "message" && raw.message?.role === "user") {
+    return textFromTreeContent(raw.message.content);
+  }
+  if (raw.type === "custom_message") return textFromTreeContent(raw.content);
+  return undefined;
+}
+
+function getBranchCursorParentId(entry: unknown): string | null {
+  if (typeof entry !== "object" || entry === null) return null;
+  const raw = entry as {
+    id?: unknown;
+    type?: unknown;
+    parentId?: unknown;
+    message?: { role?: unknown };
+  };
+  if (
+    (raw.type === "message" && raw.message?.role === "user") ||
+    raw.type === "custom_message"
+  ) {
+    return typeof raw.parentId === "string" ? raw.parentId : null;
+  }
+  return typeof raw.id === "string" ? raw.id : null;
+}
+
+export function createTelegramSessionFileTreeBranchCursor(
+  reference: PiSessionSnapshotReference,
+  entryId: string,
+  customType = TELEGRAM_TREE_BRANCH_CURSOR_CUSTOM_TYPE,
+): PiTelegramTreeBranchCursorResult {
+  if (!reference.sessionFile) {
+    throw new Error("Active tab has no session file.");
+  }
+  const sessionManager = SessionManager.open(
+    reference.sessionFile,
+    undefined,
+    reference.cwd,
+  );
+  const entry = sessionManager.getEntry(entryId);
+  if (!entry) throw new Error(`Entry ${entryId} not found.`);
+  const branchFromId = getBranchCursorParentId(entry);
+  if (branchFromId) sessionManager.branch(branchFromId);
+  else sessionManager.resetLeaf();
+  const markerId = sessionManager.appendCustomEntry(customType, {
+    targetId: entryId,
+    branchFromId,
+    createdAt: new Date().toISOString(),
+  });
+  return {
+    cancelled: false,
+    markerId,
+    text: getSessionEntryEditorText(entry),
   };
 }
 

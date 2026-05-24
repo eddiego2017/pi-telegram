@@ -17,6 +17,7 @@ import {
   createTelegramTreeOutcomeNotifier,
   handleTelegramTreeMenuCallback,
   handleTelegramTreeMenuTextMessage,
+  openTelegramTreeMenu,
   TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE,
   type TelegramTreeSnapshot,
 } from "../lib/menu-tree.ts";
@@ -167,6 +168,62 @@ test("Tree menu branch delete metadata hides inactive leaves", () => {
   assert.deepEqual(buildTelegramTreeMenuEntries(snapshot, "branches"), []);
   const svg = buildTelegramTreeSvg(snapshot);
   assert.doesNotMatch(svg, /old branch prompt/);
+});
+
+test("Tree menu opens branches when a branch cursor leaves active path empty", async () => {
+  const snapshot: TelegramTreeSnapshot = {
+    cwd: "/repo",
+    sessionId: "session",
+    entries: [
+      {
+        type: "message",
+        id: "u1",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: { role: "user", content: [{ type: "text", text: "first prompt" }] },
+      },
+      {
+        type: "message",
+        id: "a1",
+        parentId: "u1",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        message: { role: "assistant", content: [{ type: "text", text: "first answer" }] },
+      },
+      {
+        type: "custom",
+        id: "cursor",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:02.000Z",
+        customType: "pi-telegram:tree-branch-cursor",
+      },
+    ],
+    branch: [
+      {
+        type: "custom",
+        id: "cursor",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:02.000Z",
+        customType: "pi-telegram:tree-branch-cursor",
+      },
+    ],
+    leafId: "cursor",
+  };
+  const events: string[] = [];
+  const store = createTelegramTreeMenuStore();
+  await openTelegramTreeMenu({
+    chatId: 7,
+    getSnapshot: () => snapshot,
+    sendTreeMenu: async (text, markup) => {
+      events.push(text.includes("Branches grouped by fork point") ? "branches" : "active");
+      const button = markup.inline_keyboard[0]?.[0];
+      events.push(button && "callback_data" in button ? button.callback_data : "");
+      return 99;
+    },
+    storeState: store.set,
+  });
+
+  assert.deepEqual(events, ["branches", "tree:filter:active"]);
+  assert.equal(store.get(99)?.filter, "branches");
 });
 
 test("Tree branch rename reply labels the branch and refreshes detail", async () => {
@@ -368,7 +425,7 @@ test("Tree menu read-only mode can create active-tab branch", async () => {
     isReadOnly: () => true,
     canForkTree: () => true,
     forkTreeEntry: async (entryId: string) => {
-      events.push(`fork:${entryId}`);
+      events.push(`branch:${entryId}`);
       return { cancelled: false, text: "second prompt" };
     },
     injectTreeExec: async () => {
@@ -418,7 +475,7 @@ test("Tree menu read-only mode can create active-tab branch", async () => {
   assert.deepEqual(events, [
     "tree:fork:1",
     "answer:",
-    "fork:u2",
+    "branch:u2",
     "edit:true:0",
     "answer:Branch created.",
     "reply:true",

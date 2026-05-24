@@ -284,6 +284,7 @@ export default function (pi: Pi.ExtensionAPI) {
     sendLastTurnsOnSwitch: sendTabLastTurnsOnSwitch,
     sendTypingAction,
     recordRuntimeEvent,
+    createTreeBranch: Pi.createTelegramSessionFileTreeBranchCursor,
   });
   const getTabReferenceContextWindow =
     TabManager.createTelegramTabReferenceContextWindowGetter<
