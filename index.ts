@@ -260,7 +260,7 @@ export default function (pi: Pi.ExtensionAPI) {
       sendTextReply,
     });
   const sendTabLastTurnsOnSwitch =
-    MenuSession.createTelegramLastTurnsReplaySender<
+    MenuSession.createTelegramTabSwitchReplaySender<
       TabManager.TelegramTabSessionReference
     >({
       getSnapshot: Pi.getSessionSnapshotFromReference,

@@ -105,7 +105,7 @@ export interface TelegramSessionHistoryItem {
 }
 
 export type TelegramSessionReplayMode = "last5" | "full";
-export type TelegramSessionReplayRole = "user" | "agent" | "custom";
+export type TelegramSessionReplayRole = "user" | "agent" | "tool" | "custom" | "system";
 
 export interface TelegramSessionReplayAttachment {
   path: string;
@@ -562,11 +562,78 @@ export function buildTelegramSessionHistoryItems(
   return items;
 }
 
+function stripTelegramPromptPrefix(text: string): string {
+  return text.replace(/^\[telegram\]\s*/i, "").trim();
+}
+
 function cleanReplayUserText(text: string): string {
-  return text
-    .replace(/^\[telegram\]\s*/i, "")
+  return stripTelegramPromptPrefix(text)
     .replace(/\n\[(?:reply|attachments|outputs)\][\s\S]*$/i, "")
     .trim();
+}
+
+function fencedReplayBlock(text: string, language = ""): string {
+  const fence = text.includes("```") ? "````" : "```";
+  const suffix = text.endsWith("\n") ? "" : "\n";
+  return `${fence}${language}\n${text}${suffix}${fence}`;
+}
+
+function stringifyReplayValue(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function renderReplayToolCallBlock(block: TelegramSessionContentBlock): string {
+  const name = block.name?.trim() || "tool";
+  const argsText = stringifyReplayValue(block.arguments);
+  if (!argsText) return `🔧 Tool call: ${name}`;
+  return `🔧 Tool call: ${name}\n${fencedReplayBlock(argsText, "json")}`;
+}
+
+function renderReplayContentBlock(block: TelegramSessionContentBlock): string {
+  const type = block.type ?? "block";
+  if (type === "text") return block.text ?? "";
+  if (type === "thinking") {
+    const text = block.thinking ?? block.text ?? "";
+    return text ? `💭 Thinking\n${fencedReplayBlock(text)}` : "💭 Thinking";
+  }
+  if (type === "toolCall") return renderReplayToolCallBlock(block);
+  if (type === "toolResult" || type === "tool_result") {
+    const text = block.text ?? block.data ?? stringifyReplayValue(block);
+    return text ? `🧰 Tool result\n${fencedReplayBlock(text)}` : "🧰 Tool result";
+  }
+  if (type === "image" || type === "file") {
+    const target = block.path ?? block.url ?? block.source ?? block.mimeType ?? "attached content";
+    return `[${type}: ${target}]`;
+  }
+  const text = block.text ?? block.thinking ?? block.data;
+  if (text) return `[${type}]\n${String(text)}`;
+  return `[${type}]\n${fencedReplayBlock(stringifyReplayValue(block), "json")}`;
+}
+
+function fullReplayContentText(content: TelegramSessionMessage["content"]): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .map(renderReplayContentBlock)
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
+function fullReplayMessageRole(role: string | undefined): TelegramSessionReplayRole {
+  if (role === "user") return "user";
+  if (role === "assistant") return "agent";
+  if (role === "tool" || role === "toolResult") return "tool";
+  if (role === "system") return "system";
+  return "custom";
 }
 
 function replayMessageFromEntry(
@@ -601,6 +668,36 @@ function replayMessageFromEntry(
   if (entry.type === "custom_message" && entry.display !== false) {
     const text =
       contentText(entry.content).trim() || `custom: ${entry.customType ?? "message"}`;
+    return {
+      entryId: entry.id,
+      timestamp: entry.timestamp,
+      role: "custom",
+      text,
+      attachments: replayAttachmentsFromContent(entry.content),
+    };
+  }
+  return undefined;
+}
+
+function fullReplayMessageFromEntry(
+  entry: TelegramSessionEntry,
+): TelegramSessionReplayMessage | undefined {
+  if (entry.type === "message") {
+    const message = entry.message;
+    if (!message) return undefined;
+    const rawText = fullReplayContentText(message.content);
+    const text = message.role === "user" ? stripTelegramPromptPrefix(rawText) : rawText;
+    return {
+      entryId: entry.id,
+      timestamp: entry.timestamp,
+      role: fullReplayMessageRole(message.role),
+      text: text || `(empty ${message.role ?? "message"})`,
+      attachments: replayAttachmentsFromContent(message.content),
+    };
+  }
+  if (entry.type === "custom_message" && entry.display !== false) {
+    const text =
+      fullReplayContentText(entry.content) || `custom: ${entry.customType ?? "message"}`;
     return {
       entryId: entry.id,
       timestamp: entry.timestamp,
@@ -678,6 +775,33 @@ export function buildTelegramSessionReplayPlan(
     capped,
     cap: TELEGRAM_SESSION_REPLAY_FULL_MESSAGE_CAP,
   };
+}
+
+export function buildTelegramSessionLatestFullTurnReplayMessages(
+  snapshot: TelegramSessionSnapshot,
+): TelegramSessionReplayMessage[] {
+  const branch = snapshot.branch;
+  let start = -1;
+  for (let i = branch.length - 1; i >= 0; i -= 1) {
+    const entry = branch[i];
+    if (entry?.type === "message" && entry.message?.role === "user") {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return [];
+  let end = branch.length;
+  for (let i = start + 1; i < branch.length; i += 1) {
+    const entry = branch[i];
+    if (entry?.type === "message" && entry.message?.role === "user") {
+      end = i;
+      break;
+    }
+  }
+  return branch
+    .slice(start, end)
+    .map(fullReplayMessageFromEntry)
+    .filter((message): message is TelegramSessionReplayMessage => Boolean(message));
 }
 
 function countReplayAttachments(
@@ -1122,21 +1246,21 @@ export interface TelegramSessionReferenceReplaySenderDeps<TReference> {
   ) => Promise<number | undefined>;
 }
 
-export function createTelegramLastTurnsReplaySender<TReference>(
+export function createTelegramTabSwitchReplaySender<TReference>(
   deps: TelegramSessionReferenceReplaySenderDeps<TReference>,
 ): (
   reference: TReference,
   chatId: number,
   replyToMessageId: number,
 ) => Promise<void> {
-  return async function sendTelegramLastTurnsReplayFromReference(
+  return async function sendTelegramTabSwitchReplayFromReference(
     reference,
     chatId,
     _replyToMessageId,
   ) {
     const snapshot = deps.getSnapshot(reference);
-    const plan = buildTelegramSessionReplayPlan(snapshot, "last5");
-    for (const message of plan.messages) {
+    const messages = buildTelegramSessionLatestFullTurnReplayMessages(snapshot);
+    for (const message of messages) {
       const replayMessageId = await deps.sendReplayMessage(
         chatId,
         undefined,
@@ -1150,6 +1274,8 @@ export function createTelegramLastTurnsReplaySender<TReference>(
     }
   };
 }
+
+export const createTelegramLastTurnsReplaySender = createTelegramTabSwitchReplaySender;
 
 export interface TelegramSessionMenuCallbackDeps {
   getState: (messageId: number | undefined) => TelegramSessionMenuState | undefined;

@@ -18,7 +18,7 @@ import {
   buildTelegramSessionReplayPlan,
   buildTelegramSessionReplayTurns,
   buildTelegramSessionStats,
-  createTelegramLastTurnsReplaySender,
+  createTelegramTabSwitchReplaySender,
   createTelegramSessionMenuRuntime,
   createTelegramSessionReplayAttachmentSender,
   formatTelegramSessionReplayMessage,
@@ -458,7 +458,7 @@ test("Session replay callback sends image attachments after their text", async (
   ]);
 });
 
-test("Session reference last-turn replay sender replays recent turns and attachments", async () => {
+test("Session reference tab-switch replay sender replays latest full turn with thinking and tools", async () => {
   const branch: TelegramSessionSnapshot["branch"] = [];
   for (let i = 1; i <= 6; i += 1) {
     branch.push({
@@ -477,8 +477,26 @@ test("Session reference last-turn replay sender replays recent turns and attachm
       type: "message",
       id: `a${i}`,
       timestamp: `2026-05-18T01:0${i}:30Z`,
-      message: { role: "assistant", content: `answer ${i}` },
+      message: {
+        role: "assistant",
+        content:
+          i === 6
+            ? [
+                { type: "thinking", thinking: "reasoning 6" },
+                { type: "toolCall", name: "read", arguments: { path: "demo.ts" } },
+                { type: "text", text: "answer 6" },
+              ]
+            : `answer ${i}`,
+      },
     });
+    if (i === 6) {
+      branch.push({
+        type: "message",
+        id: "tool6",
+        timestamp: "2026-05-18T01:06:45Z",
+        message: { role: "toolResult", content: [{ type: "text", text: "tool result 6" }] },
+      });
+    }
   }
   const snapshot: TelegramSessionSnapshot = {
     cwd: "/repo",
@@ -488,7 +506,7 @@ test("Session reference last-turn replay sender replays recent turns and attachm
   };
   const events: string[] = [];
   let nextMessageId = 90;
-  const sender = createTelegramLastTurnsReplaySender<string>({
+  const sender = createTelegramTabSwitchReplaySender<string>({
     getSnapshot: (reference) => {
       events.push(`snapshot:${reference}`);
       return snapshot;
@@ -505,11 +523,18 @@ test("Session reference last-turn replay sender replays recent turns and attachm
 
   await sender("tab-A", 7, 77);
 
-  assert.equal(events.length, 12);
   assert.equal(events[0], "snapshot:tab-A");
-  assert.equal(events[1], "text:none:Replay msg 2026-05-18 01:02 user\nprompt 2");
-  assert.equal(events[10], "image:98:/tmp/telegram/demo.png:demo.png");
-  assert.equal(events[11], "text:none:Replay msg 2026-05-18 01:06 agent\nanswer 6");
+  assert.equal(events.length, 5);
+  assert.equal(
+    events[1],
+    "text:none:Replay msg 2026-05-18 01:06 user\nprompt 6\n\n[attachments] /tmp/telegram\n- /demo.png",
+  );
+  assert.equal(events[2], "image:90:/tmp/telegram/demo.png:demo.png");
+  assert.match(events[3], /Replay msg 2026-05-18 01:06 agent\n💭 Thinking/);
+  assert.match(events[3], /reasoning 6/);
+  assert.match(events[3], /🔧 Tool call: read/);
+  assert.match(events[3], /answer 6/);
+  assert.equal(events[4], "text:none:Replay msg 2026-05-18 01:06 tool\ntool result 6");
 });
 
 test("Session replay attachment sender uploads photos and reports failures", async () => {

@@ -971,7 +971,7 @@ test("Tab-aware session name ports target the active tab", async () => {
   assert.deepEqual(parentSets, []);
 });
 
-test("Tab manager sends last-turn replay after tab switch", async () => {
+test("Tab manager sends latest-turn replay after tab switch", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-switch-replay-"));
   const replies: string[] = [];
   const replays: string[] = [];
@@ -1133,7 +1133,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
     },
     "ctx",
   );
-  assert.equal(answers.at(-1), "Replaying last 5 turns.");
+  assert.equal(answers.at(-1), "Replaying latest full turn.");
   assert.deepEqual(replays, ["A:7:77", "A:7:77"]);
 
   await manager.handleCallbackQuery(
