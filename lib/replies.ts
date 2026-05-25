@@ -323,17 +323,20 @@ export async function sendTelegramRenderedChunks<TReplyMarkup>(
       index === 0
         ? buildTelegramReplyParameters(options?.replyToMessageId)
         : undefined;
-    const sent = await deps.sendMessage({
-      chat_id: chatId,
-      text: chunk.text,
-      parse_mode: chunk.parseMode,
-      reply_markup:
-        index === chunks.length - 1 ? options?.replyMarkup : undefined,
-      ...(replyParameters ? { reply_parameters: replyParameters } : {}),
-      ...(options?.disableLinkPreview
-        ? { link_preview_options: { is_disabled: true as const } }
-        : {}),
-    });
+    const sent = await deps
+      .sendMessage({
+        chat_id: chatId,
+        text: chunk.text,
+        parse_mode: chunk.parseMode,
+        reply_markup:
+          index === chunks.length - 1 ? options?.replyMarkup : undefined,
+        ...(replyParameters ? { reply_parameters: replyParameters } : {}),
+        ...(options?.disableLinkPreview
+          ? { link_preview_options: { is_disabled: true as const } }
+          : {}),
+      })
+      .catch(() => undefined);
+    if (!sent) return lastMessageId;
     lastMessageId = sent.message_id;
   }
   return lastMessageId;

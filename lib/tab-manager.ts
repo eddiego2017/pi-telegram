@@ -3049,7 +3049,7 @@ export function createTelegramTabManager<TContext>(
           await answerTabCallback(query.id, "No replay available.");
           return true;
         }
-        await answerTabCallback(query.id, "Replaying latest full turn.");
+        await answerTabCallback(query.id, "Replaying latest 5 messages.");
         await deps.sendLastTurnsOnSwitch(
           getTelegramTabSessionReference(runtime.record),
           chatId,

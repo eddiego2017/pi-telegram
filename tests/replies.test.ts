@@ -172,6 +172,28 @@ test("Reply delivery sends chunks and applies reply markup only to the last chun
   ]);
 });
 
+test("Reply delivery stops quietly when Telegram send fails", async () => {
+  const sentBodies: Array<Record<string, unknown>> = [];
+  const messageId = await sendTelegramRenderedChunks(
+    7,
+    [{ text: "one" }, { text: "two" }],
+    {
+      sendMessage: async (body) => {
+        sentBodies.push(body);
+        if (sentBodies.length === 2) throw new Error("rate limited");
+        return { message_id: sentBodies.length };
+      },
+      editMessage: async () => {},
+    },
+  );
+
+  assert.equal(messageId, 1);
+  assert.deepEqual(
+    sentBodies.map((body) => body.text),
+    ["one", "two"],
+  );
+});
+
 test("Reply delivery applies reply parameters only to the first chunk", async () => {
   const sentBodies: Array<Record<string, unknown>> = [];
   await sendTelegramRenderedChunks(

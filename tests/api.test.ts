@@ -255,6 +255,36 @@ test("Telegram API helpers retry 429 and 5xx responses", async () => {
   }
 });
 
+test("Telegram API helpers do not sleep through long flood waits", async () => {
+  const sleeps: number[] = [];
+  let calls = 0;
+  const restoreFetch = setApiTestFetch(async () => {
+    calls += 1;
+    return createApiErrorResponse(
+      429,
+      "Too Many Requests",
+      new Headers({ "retry-after": "8128" }),
+    );
+  });
+  try {
+    await assert.rejects(
+      () =>
+        callTelegram<string>("123:abc", "sendMessage", {}, {
+          sleep: async (ms) => {
+            sleeps.push(ms);
+          },
+        }),
+      {
+        message: "Telegram API sendMessage failed: HTTP 429: Too Many Requests",
+      },
+    );
+    assert.equal(calls, 1);
+    assert.deepEqual(sleeps, []);
+  } finally {
+    restoreFetch();
+  }
+});
+
 test("Telegram multipart API rebuilds forms for retryable responses", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-telegram-upload-"));
   const filePath = join(tempDir, "demo.txt");

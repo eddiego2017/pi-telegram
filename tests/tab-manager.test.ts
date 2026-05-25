@@ -1133,7 +1133,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
     },
     "ctx",
   );
-  assert.equal(answers.at(-1), "Replaying latest full turn.");
+  assert.equal(answers.at(-1), "Replaying latest 5 messages.");
   assert.deepEqual(replays, ["A:7:77", "A:7:77"]);
 
   await manager.handleCallbackQuery(

@@ -777,6 +777,18 @@ export function buildTelegramSessionReplayPlan(
   };
 }
 
+export function buildTelegramSessionLatestFullReplayMessages(
+  snapshot: TelegramSessionSnapshot,
+  limit = 5,
+): TelegramSessionReplayMessage[] {
+  const safeLimit = Math.max(0, Math.floor(limit));
+  if (safeLimit === 0) return [];
+  return snapshot.branch
+    .map(fullReplayMessageFromEntry)
+    .filter((message): message is TelegramSessionReplayMessage => Boolean(message))
+    .slice(-safeLimit);
+}
+
 export function buildTelegramSessionLatestFullTurnReplayMessages(
   snapshot: TelegramSessionSnapshot,
 ): TelegramSessionReplayMessage[] {
@@ -1259,7 +1271,7 @@ export function createTelegramTabSwitchReplaySender<TReference>(
     _replyToMessageId,
   ) {
     const snapshot = deps.getSnapshot(reference);
-    const messages = buildTelegramSessionLatestFullTurnReplayMessages(snapshot);
+    const messages = buildTelegramSessionLatestFullReplayMessages(snapshot, 5);
     for (const message of messages) {
       const replayMessageId = await deps.sendReplayMessage(
         chatId,

@@ -37,6 +37,7 @@ function getTelegramApiTempDir(): string {
   return join(agentDir, "tmp", "telegram");
 }
 const TELEGRAM_TEMP_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const TELEGRAM_MAX_RETRY_AFTER_SECONDS = 30;
 const TELEGRAM_INBOUND_FILE_MAX_BYTES = getTelegramInboundFileByteLimitFromEnv(
   process.env,
   ["PI_TELEGRAM_INBOUND_FILE_MAX_BYTES", "TELEGRAM_MAX_FILE_SIZE_BYTES"],
@@ -362,11 +363,15 @@ export function isTelegramMessageNotModifiedError(error: unknown): boolean {
 }
 
 function isRetryableTelegramApiError(error: unknown): boolean {
-  return (
-    error instanceof TelegramApiHttpError &&
-    (error.status === 429 ||
-      (error.status !== undefined && error.status >= 500))
-  );
+  if (!(error instanceof TelegramApiHttpError)) return false;
+  if (
+    error.status === 429 &&
+    error.retryAfterSeconds !== undefined &&
+    error.retryAfterSeconds > TELEGRAM_MAX_RETRY_AFTER_SECONDS
+  ) {
+    return false;
+  }
+  return error.status === 429 || (error.status !== undefined && error.status >= 500);
 }
 
 function getTelegramRetryDelayMs(
