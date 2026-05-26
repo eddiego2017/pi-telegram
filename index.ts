@@ -8,6 +8,7 @@ import * as Api from "./lib/api.ts";
 import * as CommandTemplates from "./lib/command-templates.ts";
 import * as Commands from "./lib/commands.ts";
 import * as Config from "./lib/config.ts";
+import * as Debug from "./lib/debug.ts";
 import * as DumpExport from "./lib/dump-export.ts";
 import {
   createTelegramExtensionSectionRegistry,
@@ -63,6 +64,7 @@ export default function (pi: Pi.ExtensionAPI) {
   const bridgeRuntime = Runtime.createTelegramBridgeRuntime();
   const { abort, lifecycle, queue, setup, typing } = bridgeRuntime;
   const configStore = Config.createTelegramConfigStore();
+  Config.setGlobalTelegramConfigStore(configStore);
   const isProactivePushEnabled =
     Config.createTelegramProactivePushChecker(configStore);
   const getConcurrentTabsConfig =
@@ -90,7 +92,14 @@ export default function (pi: Pi.ExtensionAPI) {
   const runtimeEvents = Status.createTelegramRuntimeEventRecorder({
     getBotToken: configStore.getBotToken,
   });
-  const recordRuntimeEvent = runtimeEvents.record;
+  const debugLogger = Debug.createTelegramDebugLogger({
+    getConfig: Config.createTelegramDebugConfigGetter(configStore),
+    getBotToken: configStore.getBotToken,
+  });
+  const recordRuntimeEvent = Debug.createTelegramRuntimeEventRecorder({
+    runtimeRecorder: runtimeEvents.record,
+    debugLogger,
+  });
   const getContextModel = Pi.getExtensionContextModel;
   const isIdle = Pi.isExtensionContextIdle;
   const hasPendingMessages = Pi.hasExtensionContextPendingMessages;
@@ -105,6 +114,12 @@ export default function (pi: Pi.ExtensionAPI) {
     exec: piRuntime.exec,
     target: "pi:0",
     command: "/clone",
+    recordRuntimeEvent,
+  });
+  const injectReloadRuntime = Pi.createTmuxSlashCommandInjector({
+    exec: piRuntime.exec,
+    target: "pi:0",
+    command: "/telegram-reload-runtime",
     recordRuntimeEvent,
   });
   const injectResumeExec = Pi.createTelegramResumeExecInjector({
@@ -209,6 +224,7 @@ export default function (pi: Pi.ExtensionAPI) {
     getBotToken: configStore.getBotToken,
     recordRuntimeEvent,
     getDefaultMessageThreadId: resolveDefaultMessageThreadId,
+    debugLogger,
   });
 
   // --- Message Delivery & Preview ---
@@ -284,6 +300,7 @@ export default function (pi: Pi.ExtensionAPI) {
     sendLastTurnsOnSwitch: sendTabLastTurnsOnSwitch,
     sendTypingAction,
     recordRuntimeEvent,
+    debugLogger,
     createTreeBranch: Pi.createTelegramSessionFileTreeBranchCursor,
   });
   const getTabReferenceContextWindow =
@@ -345,6 +362,7 @@ export default function (pi: Pi.ExtensionAPI) {
       updateStatus,
       sendTextReply,
       recordRuntimeEvent,
+      debugLogger,
       ...promptDispatchRuntime,
       sendUserMessage,
     }).dispatchNext;
@@ -643,9 +661,11 @@ export default function (pi: Pi.ExtensionAPI) {
     compact: tabAwareCompactPorts.compact,
     injectNewSession: tabAwareNewSessionPorts.injectNewSession,
     injectClone,
+    injectReloadRuntime,
     getSessionName: tabAwareSessionNamePorts.getSessionName,
     setSessionName: tabAwareSessionNamePorts.setSessionName,
     recordRuntimeEvent,
+    debugLogger,
   });
   const pollingRuntime = Polling.createTelegramPollingControllerRuntime<
     Api.TelegramUpdate,
@@ -663,6 +683,7 @@ export default function (pi: Pi.ExtensionAPI) {
     stopTypingLoop: typing.stop,
     updateStatus,
     recordRuntimeEvent,
+    debugLogger,
   });
   const lockedPollingRuntime = Locks.createTelegramLockedPollingRuntime({
     lock: lockRuntime,
@@ -809,6 +830,7 @@ export default function (pi: Pi.ExtensionAPI) {
     getActiveToolExecutions: lifecycle.getActiveToolExecutions,
     setActiveToolExecutions: lifecycle.setActiveToolExecutions,
     triggerPendingModelSwitchAbort: modelSwitchController.triggerPendingAbort,
+    debugLogger,
   });
   // Wire transport-level reply dedup reset via lifecycle
   Lifecycle.setResetTransportReplyDedup(Replies.resetTransportReplyDedup);

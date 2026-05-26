@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Diagnostics]` Added structured debug JSON logs for Loki/stdout. The bridge now records polling, update routing, Telegram API request/response (including `answerCallbackQuery` and `editMessageText`), queue dispatch, agent/tool lifecycle, and concurrent-tab worker events by default; tab workers also emit semantic first-output and turn-summary latency events while high-frequency update bodies are omitted from the generic worker log. Request/response bodies are redacted and size-limited, with `PI_TELEGRAM_DEBUG=0` / `debug.enabled: false` and `PI_TELEGRAM_DEBUG_BODIES` / `debug.includeBodies` available for tuning.
 - `[Concurrent Tabs]` `/tab close` now closes the current active non-default tab directly; `/tab close <name>` remains available for named tabs.
 - `[Commands]` `/llm` list and multi-match replies now mark the active LLM with `🟢`, including the active tab worker model when concurrent tabs are enabled.
 - `[Concurrent Tabs]` Routed Telegram `/compact` through the active tab worker before falling back to the parent π session. Impact: compacting tab-backed conversations now compresses the tab's actual session instead of the idle parent TUI session.

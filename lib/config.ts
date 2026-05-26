@@ -19,6 +19,12 @@ export interface TelegramConcurrentTabsConfig {
   workerExtensions?: string[];
 }
 
+export interface TelegramDebugConfig {
+  enabled?: boolean;
+  includeBodies?: boolean | "redacted" | "raw";
+  maxBodyChars?: number;
+}
+
 export function getTelegramAgentDir(): string {
   return process.env.PI_CODING_AGENT_DIR
     ? resolve(process.env.PI_CODING_AGENT_DIR)
@@ -51,6 +57,7 @@ export interface TelegramConfig {
   outboundHandlers?: TelegramOutboundHandlerConfig[];
   proactivePush?: boolean;
   concurrentTabs?: TelegramConcurrentTabsConfig;
+  debug?: TelegramDebugConfig;
 }
 
 export interface TelegramConfigStore {
@@ -73,6 +80,40 @@ export interface TelegramConfigStoreOptions {
   initialConfig?: TelegramConfig;
   agentDir?: string;
   configPath?: string;
+}
+
+const GLOBAL_TELEGRAM_CONFIG_STORE_KEY = "__piTelegramConfigStore__" as const;
+
+type GlobalTelegramConfigStore = Pick<
+  TelegramConfigStore,
+  "get" | "set" | "persist" | "load"
+>;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __piTelegramConfigStore__: GlobalTelegramConfigStore | undefined;
+}
+
+export function setGlobalTelegramConfigStore(
+  store: GlobalTelegramConfigStore,
+): void {
+  globalThis[GLOBAL_TELEGRAM_CONFIG_STORE_KEY] = store;
+}
+
+export function getGlobalTelegramConfig(): TelegramConfig | undefined {
+  return globalThis[GLOBAL_TELEGRAM_CONFIG_STORE_KEY]?.get();
+}
+
+export async function updateGlobalTelegramConfig(
+  mutate: (config: TelegramConfig) => void,
+): Promise<boolean> {
+  const store = globalThis[GLOBAL_TELEGRAM_CONFIG_STORE_KEY];
+  if (!store) return false;
+  const nextConfig = JSON.parse(JSON.stringify(store.get())) as TelegramConfig;
+  mutate(nextConfig);
+  store.set(nextConfig);
+  await store.persist(nextConfig);
+  return true;
 }
 
 export async function readTelegramConfig(
@@ -162,6 +203,12 @@ export function createTelegramConcurrentTabsConfigGetter(
   configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
 ): () => Required<TelegramConcurrentTabsConfig> {
   return () => configStore.getConcurrentTabsConfig();
+}
+
+export function createTelegramDebugConfigGetter(
+  configStore: Pick<TelegramConfigStore, "get">,
+): () => TelegramDebugConfig | undefined {
+  return () => configStore.get().debug;
 }
 
 export function createTelegramProactivePushChecker(

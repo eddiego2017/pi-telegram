@@ -44,9 +44,12 @@ import {
 } from "./tabs.ts";
 import type { TelegramConcurrentTabsConfig } from "./config.ts";
 import { getTelegramAgentDir } from "./config.ts";
+import type { TelegramDebugLogger } from "./debug.ts";
 import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
 
 const TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS = 1200;
+const TELEGRAM_TAB_STREAM_FAILURE_BASE_RETRY_MS = 30_000;
+const TELEGRAM_TAB_STREAM_FAILURE_MAX_RETRY_MS = 10 * 60 * 1000;
 const TELEGRAM_TAB_STREAM_MARKDOWN_LIMIT = 3600;
 const TELEGRAM_TAB_TYPING_ACTION_INTERVAL_MS = 2500;
 const TELEGRAM_TAB_DASHBOARD_STATE_TTL_MS = 10 * 60 * 1000;
@@ -159,6 +162,8 @@ export interface TelegramTabManagerDeps<TContext> {
     replyToMessageId: number,
   ) => Promise<void>;
   streamEditThrottleMs?: number;
+  streamFailureBaseRetryMs?: number;
+  streamFailureMaxRetryMs?: number;
   sendTypingAction?: (chatId: number) => Promise<unknown>;
   typingIntervalMs?: number;
   now?: () => number;
@@ -172,6 +177,7 @@ export interface TelegramTabManagerDeps<TContext> {
     error: unknown,
     details?: Record<string, unknown>,
   ) => void;
+  debugLogger?: TelegramDebugLogger;
   createTreeBranch?: (
     reference: TelegramTabSessionReference,
     entryId: string,
@@ -186,6 +192,8 @@ interface RuntimeTab {
   activeBuffer: string;
   activeAssistantText?: string;
   activeErrorDelivered?: boolean;
+  streamDeliveryFailureCount?: number;
+  streamDeliveryBlockedUntil?: number;
   textStream?: TelegramTabStreamState;
   thinkingBuffers: Map<number, string>;
   thinkingStreams: Map<number, TelegramTabStreamState>;
@@ -196,6 +204,12 @@ interface RuntimeTab {
   typingInterval?: ReturnType<typeof setInterval>;
   activeChatId?: number;
   activeReplyToMessageId?: number;
+  activeTurnId?: string;
+  promptStartedAt?: number;
+  promptSentAt?: number;
+  agentStartedAt?: number;
+  firstOutputAt?: number;
+  firstOutputLogged?: boolean;
   unsubscribe?: () => void;
 }
 
@@ -213,6 +227,8 @@ interface TelegramTabStreamState {
   markdown: string;
   sentMarkdown: string;
   lastFlushAt: number;
+  failedFlushCount?: number;
+  nextFlushAt?: number;
   messageId?: number;
   flushTimer?: ReturnType<typeof setTimeout>;
   flushPromise?: Promise<void>;
@@ -826,6 +842,8 @@ function resetRuntimeTurnBuffers(runtime: RuntimeTab): void {
   runtime.activeBuffer = "";
   runtime.activeAssistantText = undefined;
   runtime.activeErrorDelivered = false;
+  runtime.streamDeliveryFailureCount = undefined;
+  runtime.streamDeliveryBlockedUntil = undefined;
   if (runtime.textStream) {
     clearTelegramTabStreamState(runtime.textStream);
     runtime.textStream = undefined;
@@ -1346,6 +1364,10 @@ export function createTelegramTabManager<TContext>(
   const isEnabled = (): boolean => deps.getConfig().enabled;
   const streamEditThrottleMs =
     deps.streamEditThrottleMs ?? TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS;
+  const streamFailureBaseRetryMs =
+    deps.streamFailureBaseRetryMs ?? TELEGRAM_TAB_STREAM_FAILURE_BASE_RETRY_MS;
+  const streamFailureMaxRetryMs =
+    deps.streamFailureMaxRetryMs ?? TELEGRAM_TAB_STREAM_FAILURE_MAX_RETRY_MS;
   const typingIntervalMs =
     deps.typingIntervalMs ?? TELEGRAM_TAB_TYPING_ACTION_INTERVAL_MS;
   const pruneDashboardStates = (): void => {
@@ -1508,11 +1530,88 @@ export function createTelegramTabManager<TContext>(
     runtime.textStream ??= createStreamState();
     return runtime.textStream;
   };
+  const getStreamFailureRetryMs = (failureCount: number): number =>
+    Math.min(
+      streamFailureMaxRetryMs,
+      streamFailureBaseRetryMs *
+        2 ** Math.min(Math.max(0, failureCount - 1), 6),
+    );
+  const schedulePendingTabStreamRetry = (
+    runtime: RuntimeTab,
+    stream: TelegramTabStreamState,
+  ): void => {
+    const nextFlushAt = Math.max(
+      stream.nextFlushAt ?? 0,
+      runtime.streamDeliveryBlockedUntil ?? 0,
+    );
+    if (nextFlushAt <= 0 || stream.flushTimer) return;
+    if (stream.markdown === stream.sentMarkdown) return;
+    const wait = Math.max(0, nextFlushAt - now());
+    stream.flushTimer = setTimeout(() => {
+      stream.flushTimer = undefined;
+      void flushTabStreamMarkdown(runtime, stream);
+    }, wait);
+  };
+  const blockTabStreamDelivery = (
+    runtime: RuntimeTab,
+    stream: TelegramTabStreamState,
+  ): void => {
+    const failedFlushCount =
+      Math.max(
+        stream.failedFlushCount ?? 0,
+        runtime.streamDeliveryFailureCount ?? 0,
+      ) + 1;
+    const retryAt = now() + getStreamFailureRetryMs(failedFlushCount);
+    stream.failedFlushCount = failedFlushCount;
+    stream.lastFlushAt = now();
+    stream.nextFlushAt = retryAt;
+    runtime.streamDeliveryFailureCount = failedFlushCount;
+    runtime.streamDeliveryBlockedUntil = retryAt;
+  };
+  const unblockTabStreamDelivery = (
+    runtime: RuntimeTab,
+    stream: TelegramTabStreamState,
+  ): void => {
+    stream.failedFlushCount = undefined;
+    stream.nextFlushAt = undefined;
+    runtime.streamDeliveryFailureCount = undefined;
+    runtime.streamDeliveryBlockedUntil = undefined;
+  };
+  const getTabStreamDeliveryBlockedUntil = (
+    runtime: RuntimeTab,
+    stream: TelegramTabStreamState,
+  ): number | undefined => {
+    const nextFlushAt = Math.max(
+      stream.nextFlushAt ?? 0,
+      runtime.streamDeliveryBlockedUntil ?? 0,
+    );
+    return nextFlushAt > 0 ? nextFlushAt : undefined;
+  };
+  const scheduleAllPendingTabStreamRetries = (
+    runtime: RuntimeTab,
+    except?: TelegramTabStreamState,
+  ): void => {
+    const streams = [
+      runtime.textStream,
+      ...runtime.thinkingStreams.values(),
+      ...runtime.toolCallStreams.values(),
+    ];
+    for (const stream of streams) {
+      if (!stream || stream === except) continue;
+      if (stream.markdown === stream.sentMarkdown) continue;
+      schedulePendingTabStreamRetry(runtime, stream);
+    }
+  };
   const flushTabStreamMarkdown = async (
     runtime: RuntimeTab,
     stream: TelegramTabStreamState,
   ): Promise<void> => {
     if (!stream.markdown || stream.markdown === stream.sentMarkdown) return;
+    const blockedUntil = getTabStreamDeliveryBlockedUntil(runtime, stream);
+    if (blockedUntil !== undefined && now() < blockedUntil) {
+      schedulePendingTabStreamRetry(runtime, stream);
+      return;
+    }
     if (stream.flushPromise) {
       stream.flushRequested = true;
       await stream.flushPromise;
@@ -1524,39 +1623,49 @@ export function createTelegramTabManager<TContext>(
         const markdown = stream.markdown;
         if (!markdown || markdown === stream.sentMarkdown) return;
         let delivered = false;
-        if (stream.messageId === undefined) {
-          const messageId = await sendTabStreamMarkdownReply(
-            runtime.activeChatId,
-            runtime.activeReplyToMessageId,
-            markdown,
-          );
-          if (messageId !== undefined) {
-            stream.messageId = messageId;
+        try {
+          if (stream.messageId === undefined) {
+            const messageId = await sendTabStreamMarkdownReply(
+              runtime.activeChatId,
+              runtime.activeReplyToMessageId,
+              markdown,
+            );
+            if (messageId !== undefined) {
+              stream.messageId = messageId;
+              delivered = true;
+            }
+          } else if (deps.editStreamMarkdownMessage) {
+            const messageId = await editTabStreamMarkdownMessage(
+              runtime.activeChatId,
+              stream.messageId,
+              markdown,
+            );
             delivered = true;
+            if (messageId !== undefined) stream.messageId = messageId;
           }
-        } else if (deps.editStreamMarkdownMessage) {
-          const messageId = await editTabStreamMarkdownMessage(
-            runtime.activeChatId,
-            stream.messageId,
-            markdown,
-          );
-          delivered = true;
-          if (messageId !== undefined) stream.messageId = messageId;
+        } catch (error) {
+          deps.recordRuntimeEvent?.("tabs", error, {
+            tab: runtime.record.name,
+            action: "stream_markdown",
+          });
         }
-        if (!delivered) return;
+        if (!delivered) {
+          blockTabStreamDelivery(runtime, stream);
+          scheduleAllPendingTabStreamRetries(runtime, stream);
+          return;
+        }
+        unblockTabStreamDelivery(runtime, stream);
         stream.sentMarkdown = markdown;
         stream.lastFlushAt = now();
       } while (stream.flushRequested);
-    })().catch((error) => {
-      deps.recordRuntimeEvent?.("tabs", error, {
-        tab: runtime.record.name,
-        action: "stream_markdown",
-      });
-    });
+    })();
     try {
       await stream.flushPromise;
     } finally {
       stream.flushPromise = undefined;
+      if (stream.markdown !== stream.sentMarkdown) {
+        schedulePendingTabStreamRetry(runtime, stream);
+      }
     }
   };
   const scheduleTabStreamMarkdownFlush = (
@@ -1569,9 +1678,15 @@ export function createTelegramTabManager<TContext>(
       clearTimeout(stream.flushTimer);
       stream.flushTimer = undefined;
     }
-    const wait = force
-      ? 0
-      : Math.max(0, streamEditThrottleMs - (now() - stream.lastFlushAt));
+    const blockedUntil = getTabStreamDeliveryBlockedUntil(runtime, stream);
+    const retryWait =
+      blockedUntil === undefined ? 0 : Math.max(0, blockedUntil - now());
+    const wait =
+      retryWait > 0
+        ? retryWait
+        : force
+          ? 0
+          : Math.max(0, streamEditThrottleMs - (now() - stream.lastFlushAt));
     if (wait === 0) {
       void flushTabStreamMarkdown(runtime, stream);
       return;
@@ -1666,6 +1781,61 @@ export function createTelegramTabManager<TContext>(
       runtime.toolCallStreams.delete(index);
     }
   };
+  const getTabTurnDetails = (tabName: string, runtime: RuntimeTab): Record<string, unknown> => ({
+    tab: tabName,
+    turnId: runtime.activeTurnId,
+    chatId: runtime.activeChatId,
+    replyToMessageId: runtime.activeReplyToMessageId,
+  });
+  const logTabFirstOutput = (
+    tabName: string,
+    runtime: RuntimeTab,
+    outputKind: string,
+  ): void => {
+    if (runtime.firstOutputLogged) return;
+    const firstOutputAt = now();
+    runtime.firstOutputAt = firstOutputAt;
+    runtime.firstOutputLogged = true;
+    deps.debugLogger?.log("telegram.tab.first_output", {
+      ...getTabTurnDetails(tabName, runtime),
+      outputKind,
+      promptSentToFirstOutputMs:
+        runtime.promptSentAt === undefined ? undefined : firstOutputAt - runtime.promptSentAt,
+      agentStartToFirstOutputMs:
+        runtime.agentStartedAt === undefined ? undefined : firstOutputAt - runtime.agentStartedAt,
+    });
+  };
+  const logTabTurnSummary = (
+    tabName: string,
+    runtime: RuntimeTab,
+    stopReason?: string,
+    error?: string,
+  ): void => {
+    const endedAt = now();
+    deps.debugLogger?.log("telegram.tab.turn.summary", {
+      ...getTabTurnDetails(tabName, runtime),
+      stopReason,
+      error,
+      totalMs:
+        runtime.promptStartedAt === undefined ? undefined : endedAt - runtime.promptStartedAt,
+      promptStartToSentMs:
+        runtime.promptStartedAt === undefined || runtime.promptSentAt === undefined
+          ? undefined
+          : runtime.promptSentAt - runtime.promptStartedAt,
+      promptSentToAgentStartMs:
+        runtime.promptSentAt === undefined || runtime.agentStartedAt === undefined
+          ? undefined
+          : runtime.agentStartedAt - runtime.promptSentAt,
+      agentStartToFirstOutputMs:
+        runtime.agentStartedAt === undefined || runtime.firstOutputAt === undefined
+          ? undefined
+          : runtime.firstOutputAt - runtime.agentStartedAt,
+      firstOutputToAgentEndMs:
+        runtime.firstOutputAt === undefined ? undefined : endedAt - runtime.firstOutputAt,
+      agentStartToAgentEndMs:
+        runtime.agentStartedAt === undefined ? undefined : endedAt - runtime.agentStartedAt,
+    });
+  };
   const sendActiveTabToolCallMessage = (
     tabState: TelegramTabsState,
     tabName: string,
@@ -1699,8 +1869,20 @@ export function createTelegramTabManager<TContext>(
     if (!tabState) return;
     const record = runtime.record;
     const eventNow = now();
+    deps.debugLogger?.log(
+      "telegram.tab.worker.event",
+      {
+        ...getTabTurnDetails(tabName, runtime),
+        type: event.type,
+        status: record.status,
+        bodyOmitted: event.type === "message_update" || event.type === "message_end" || event.type === "agent_end" ? true : undefined,
+      },
+      event.type === "message_update" || event.type === "message_end" || event.type === "agent_end" ? undefined : event,
+    );
     if (event.type === "agent_start") {
       resetRuntimeTurnBuffers(runtime);
+      runtime.agentStartedAt = eventNow;
+      deps.debugLogger?.log("telegram.tab.agent.start", getTabTurnDetails(tabName, runtime));
       record.status = "running";
       record.lastError = undefined;
       record.lastAgentStartAt = eventNow;
@@ -1709,17 +1891,20 @@ export function createTelegramTabManager<TContext>(
       return;
     }
     if (event.type === "message_start") {
+      deps.debugLogger?.log("telegram.tab.message.start", getTabTurnDetails(tabName, runtime));
       runtime.activeBuffer = "";
       runtime.textStream = undefined;
       return;
     }
     const delta = extractRpcTextDelta(event);
     if (delta) {
+      logTabFirstOutput(tabName, runtime, "text_delta");
       runtime.activeBuffer += delta;
       streamActiveTabText(tabState, tabName, runtime, runtime.activeBuffer);
     }
     const thinkingDelta = getRpcAssistantThinkingDelta(event);
     if (thinkingDelta) {
+      logTabFirstOutput(tabName, runtime, "thinking_delta");
       const nextThinkingText = `${runtime.thinkingBuffers.get(thinkingDelta.index) ?? ""}${
         thinkingDelta.delta
       }`;
@@ -1744,6 +1929,12 @@ export function createTelegramTabManager<TContext>(
     }
     const toolCallPreview = getRpcAssistantToolCallPreview(event);
     if (toolCallPreview) {
+      logTabFirstOutput(tabName, runtime, "tool_call");
+      deps.debugLogger?.log("telegram.tab.tool.preview", {
+        ...getTabTurnDetails(tabName, runtime),
+        index: toolCallPreview.index,
+        final: toolCallPreview.final,
+      }, toolCallPreview.markdown);
       streamActiveTabToolCall(
         tabState,
         tabName,
@@ -1755,12 +1946,17 @@ export function createTelegramTabManager<TContext>(
     }
     const assistantText = extractRpcAssistantText(event);
     if (assistantText) {
+      logTabFirstOutput(tabName, runtime, "assistant_text");
       runtime.activeAssistantText = assistantText;
       record.lastAssistantText = assistantText;
       record.lastMessageText = assistantText;
       record.lastMessageAt = eventNow;
     }
     if (event.type === "message_end" && isAssistantAgentMessage(event.message)) {
+      deps.debugLogger?.log("telegram.tab.message.end", {
+        ...getTabTurnDetails(tabName, runtime),
+        hasAssistantMessage: true,
+      });
       const finalBodyText = extractAgentBodyText(event.message);
       if (runtime.textStream && finalBodyText) {
         runtime.activeBuffer = finalBodyText;
@@ -1779,6 +1975,10 @@ export function createTelegramTabManager<TContext>(
       sendActiveTabToolCallMessage(tabState, tabName, runtime, event.message);
     }
     if (event.type === "agent_end") {
+      deps.debugLogger?.log("telegram.tab.agent.end", {
+        ...getTabTurnDetails(tabName, runtime),
+        messageCount: Array.isArray(event.messages) ? event.messages.length : undefined,
+      });
       stopTabTyping(runtime);
       for (const index of [...runtime.thinkingBuffers.keys()]) {
         flushActiveTabThinkingBuffer(tabState, tabName, runtime, index);
@@ -1807,6 +2007,7 @@ export function createTelegramTabManager<TContext>(
       record.lastAgentEndAt = eventNow;
       const assistantError = extractRpcAssistantError(event);
       if (assistantError) {
+        logTabTurnSummary(tabName, runtime, "error", assistantError);
         record.status = "error";
         record.lastError = assistantError;
         const isActive = tabState.activeTab === tabName;
@@ -1869,10 +2070,12 @@ export function createTelegramTabManager<TContext>(
           );
         }
       }
+      logTabTurnSummary(tabName, runtime, "stop");
       void persist();
       return;
     }
     if (event.type === "exit") {
+      deps.debugLogger?.log("telegram.tab.worker.exit", getTabTurnDetails(tabName, runtime), event);
       stopTabTyping(runtime);
       if (record.status === "running" || record.status === "starting") {
         record.status = "exited";
@@ -1884,10 +2087,15 @@ export function createTelegramTabManager<TContext>(
       return;
     }
     if (event.type === "error") {
+      const errorMessage = typeof event.error === "string" ? event.error : "RPC child error";
+      deps.debugLogger?.log("telegram.tab.worker.error", {
+        ...getTabTurnDetails(tabName, runtime),
+        error: errorMessage,
+      }, event);
+      logTabTurnSummary(tabName, runtime, "error", errorMessage);
       stopTabTyping(runtime);
       record.status = "error";
-      record.lastError =
-        typeof event.error === "string" ? event.error : "RPC child error";
+      record.lastError = errorMessage;
       void persist();
     }
   };
@@ -1903,6 +2111,18 @@ export function createTelegramTabManager<TContext>(
     const workerArgs = buildTelegramTabWorkerExtensionArgs(
       deps.getConfig().workerExtensions,
     );
+    deps.debugLogger?.log(
+      "telegram.tab.worker.start",
+      {
+        tab: runtime.record.name,
+        cwd,
+        sessionDir,
+        sessionFile: runtime.record.sessionFile,
+        workerExtensionCount: deps.getConfig().workerExtensions.length,
+      },
+      workerArgs,
+    );
+    const workerStartedAt = Date.now();
     const backend = deps.createBackend?.({
       tabName: runtime.record.name,
       cwd,
@@ -1922,10 +2142,20 @@ export function createTelegramTabManager<TContext>(
     });
     try {
       const childState = await backend.start();
+      deps.debugLogger?.log(
+        "telegram.tab.worker.ready",
+        { tab: runtime.record.name, elapsedMs: Date.now() - workerStartedAt },
+        childState,
+      );
       applyRpcStateToRecord(runtime.record, childState);
       await persist();
       return backend;
     } catch (error) {
+      deps.debugLogger?.log("telegram.tab.worker.start_error", {
+        tab: runtime.record.name,
+        elapsedMs: Date.now() - workerStartedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
       runtime.record.status = "error";
       runtime.record.lastError = getErrorMessage(error);
       runtime.backend = undefined;
@@ -3151,18 +3381,39 @@ export function createTelegramTabManager<TContext>(
       const promptNow = now();
       runtime.activeChatId = turn.chatId;
       runtime.activeReplyToMessageId = turn.replyToMessageId;
+      runtime.activeTurnId = `tab:${runtime.record.name}:${turn.chatId}:${turn.replyToMessageId}:${promptNow}`;
+      runtime.promptStartedAt = promptNow;
+      runtime.promptSentAt = undefined;
+      runtime.agentStartedAt = undefined;
+      runtime.firstOutputAt = undefined;
+      runtime.firstOutputLogged = false;
       runtime.record.lastUsedAt = promptNow;
       runtime.record.lastMessageText = promptText;
       runtime.record.lastMessageAt = promptNow;
       await persist();
       startTabTyping(tabState.activeTab, runtime);
       try {
+        deps.debugLogger?.log(
+          "telegram.tab.prompt.start",
+          {
+            ...getTabTurnDetails(runtime.record.name, runtime),
+            wasRunning,
+          },
+          promptText,
+        );
+        const promptStartedAt = Date.now();
         const backend = await ensureBackend(runtime, ctx);
         if (wasRunning) {
           await backend.followUp(promptText);
         } else {
           await backend.prompt(promptText);
         }
+        runtime.promptSentAt = now();
+        deps.debugLogger?.log("telegram.tab.prompt.sent", {
+          ...getTabTurnDetails(runtime.record.name, runtime),
+          elapsedMs: Date.now() - promptStartedAt,
+          wasRunning,
+        });
         runtime.record.status = "running";
         await persist();
         await deps.sendTextReply(
@@ -3173,6 +3424,16 @@ export function createTelegramTabManager<TContext>(
             : `Started tab ${runtime.record.name}.`,
         );
       } catch (error) {
+        deps.debugLogger?.log("telegram.tab.prompt.error", {
+          ...getTabTurnDetails(runtime.record.name, runtime),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        logTabTurnSummary(
+          runtime.record.name,
+          runtime,
+          "error",
+          error instanceof Error ? error.message : String(error),
+        );
         stopTabTyping(runtime);
         runtime.record.status = "error";
         runtime.record.lastError = getErrorMessage(error);
@@ -3193,6 +3454,7 @@ export function createTelegramTabManager<TContext>(
       await Promise.all(
         [...runtimeTabs.values()].map(async (runtime) => {
           stopTabTyping(runtime);
+          resetRuntimeTurnBuffers(runtime);
           runtime.unsubscribe?.();
           await runtime.backend?.dispose();
           runtime.backend = undefined;

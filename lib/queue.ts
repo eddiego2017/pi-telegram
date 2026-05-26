@@ -4,6 +4,8 @@
  * Owns queue item contracts, lane admission, pure queue mutations, and dispatch planning
  */
 
+import type { TelegramDebugLogger } from "./debug.ts";
+
 // --- Queue Items ---
 
 export interface QueuedAttachment {
@@ -540,6 +542,7 @@ export interface TelegramAgentStartHookRuntimeDeps<
   createPreviewState: () => void;
   startTypingLoop: (ctx: TContext) => void;
   updateStatus: (ctx: TContext) => void;
+  debugLogger?: TelegramDebugLogger;
 }
 
 export type TelegramAgentStartHookEvent = unknown;
@@ -558,6 +561,7 @@ export interface TelegramToolExecutionHookRuntimeDeps<
   TContext,
 > extends TelegramToolExecutionRuntimeDeps {
   triggerPendingModelSwitchAbort: (ctx: TContext) => unknown;
+  debugLogger?: TelegramDebugLogger;
 }
 
 export type TelegramToolExecutionHookEvent = unknown;
@@ -618,9 +622,15 @@ export function createTelegramAgentStartHook<
     _event: TelegramAgentStartHookEvent,
     ctx: TContext,
   ): Promise<void> {
+    const queuedItems = deps.getQueuedItems();
+    deps.debugLogger?.log("telegram.agent.start", {
+      queuedItems: queuedItems.length,
+      hasPendingDispatch: deps.hasPendingDispatch(),
+      hasActiveTurn: deps.hasActiveTurn(),
+    });
     deps.setAbortHandler(ctx);
     handleTelegramAgentStartRuntime<TTurn, TContext>({
-      queuedItems: deps.getQueuedItems(),
+      queuedItems,
       hasPendingDispatch: deps.hasPendingDispatch(),
       hasActiveTurn: deps.hasActiveTurn(),
       resetToolExecutions: deps.resetToolExecutions,
@@ -712,12 +722,20 @@ export function createTelegramToolExecutionHooks<TContext>(
 ) {
   return {
     onToolExecutionStart: (): void => {
+      deps.debugLogger?.log("telegram.tool.start", {
+        activeToolExecutions: deps.getActiveToolExecutions(),
+        hasActiveTurn: deps.hasActiveTurn(),
+      });
       handleTelegramToolExecutionStartRuntime(deps);
     },
     onToolExecutionEnd: (
       _event: TelegramToolExecutionHookEvent,
       ctx: TContext,
     ): void => {
+      deps.debugLogger?.log("telegram.tool.end", {
+        activeToolExecutions: deps.getActiveToolExecutions(),
+        hasActiveTurn: deps.hasActiveTurn(),
+      });
       handleTelegramToolExecutionEndRuntime({
         hasActiveTurn: deps.hasActiveTurn,
         getActiveToolExecutions: deps.getActiveToolExecutions,
@@ -815,6 +833,7 @@ export interface TelegramAgentEndRuntimeDeps<
     error: unknown,
     details?: Record<string, unknown>,
   ) => void;
+  debugLogger?: TelegramDebugLogger;
 }
 
 export interface TelegramAgentEndHookRuntimeDeps<
@@ -861,6 +880,7 @@ export interface TelegramAgentEndHookRuntimeDeps<
     promptCacheUsage?: TelegramAgentEndAssistantResult["usage"],
   ) => string | undefined;
   recordRuntimeEvent?: TelegramAgentEndRuntimeDeps<TTurn>["recordRuntimeEvent"];
+  debugLogger?: TelegramDebugLogger;
 }
 
 export interface TelegramAgentEndHookEvent<TMessage> {
@@ -984,6 +1004,7 @@ export function createTelegramAgentEndHook<
         ? deps.getContextUsageFooter?.(ctx, assistant.usage)
         : undefined,
       recordRuntimeEvent: deps.recordRuntimeEvent,
+      debugLogger: deps.debugLogger,
     });
   };
 }
@@ -993,6 +1014,22 @@ export async function handleTelegramAgentEndRuntime<
   TReplyMarkup = unknown,
 >(deps: TelegramAgentEndRuntimeDeps<TTurn, TReplyMarkup>): Promise<void> {
   const { turn, assistant } = deps;
+  deps.debugLogger?.log(
+    "telegram.agent.end",
+    {
+      hasTurn: !!turn,
+      turnId: turn ? `tg:${turn.chatId}:${turn.replyToMessageId}` : undefined,
+      chatId: turn?.chatId,
+      replyToMessageId: turn?.replyToMessageId,
+      stopReason: assistant.stopReason,
+      hasText: !!assistant.text,
+      errorMessage: assistant.errorMessage,
+      inputTokens: assistant.usage?.input,
+      cacheReadTokens: assistant.usage?.cacheRead,
+      cacheWriteTokens: assistant.usage?.cacheWrite,
+    },
+    assistant,
+  );
   const rawFinalText = assistant.text;
   const outboundReply = rawFinalText
     ? deps.planOutboundReply?.(rawFinalText)
@@ -1643,6 +1680,7 @@ export interface TelegramRuntimeEventRecorderPort {
     error: unknown,
     details?: Record<string, unknown>,
   ) => void;
+  debugLogger?: TelegramDebugLogger;
 }
 
 export interface TelegramControlRuntimeDeps<
@@ -1661,6 +1699,12 @@ export async function executeTelegramControlItemRuntime<TContext>(
   item: PendingTelegramControlItem<TContext>,
   deps: TelegramControlRuntimeDeps<TContext>,
 ): Promise<void> {
+  const startedAt = Date.now();
+  deps.debugLogger?.log("telegram.queue.dispatch.control.start", {
+    controlType: item.controlType,
+    chatId: item.chatId,
+    replyToMessageId: item.replyToMessageId,
+  });
   try {
     await item.execute(deps.ctx);
   } catch (error) {
@@ -1676,6 +1720,10 @@ export async function executeTelegramControlItemRuntime<TContext>(
       `Telegram control action failed: ${message}`,
     );
   } finally {
+    deps.debugLogger?.log("telegram.queue.dispatch.control.end", {
+      controlType: item.controlType,
+      elapsedMs: Date.now() - startedAt,
+    });
     deps.onSettled();
   }
 }
@@ -1760,6 +1808,7 @@ export interface TelegramDispatchRuntimeDeps<TContext = unknown> {
   ) => void;
   onPromptDispatchFailure: (message: string) => void;
   onIdle: () => void;
+  debugLogger?: TelegramDebugLogger;
 }
 
 export interface TelegramQueueDispatchControllerDeps<
@@ -1792,6 +1841,17 @@ export function executeTelegramQueueDispatchPlan<TContext = unknown>(
     deps.executeControlItem(plan.item);
     return;
   }
+  deps.debugLogger?.log(
+    "telegram.queue.dispatch.prompt",
+    {
+      turnId: `tg:${plan.item.chatId}:${plan.item.replyToMessageId}`,
+      chatId: plan.item.chatId,
+      replyToMessageId: plan.item.replyToMessageId,
+      queueLane: plan.item.queueLane,
+      queueOrder: plan.item.queueOrder,
+    },
+    plan.item.content,
+  );
   deps.onPromptDispatchStart(plan.item.chatId);
   try {
     deps.sendUserMessage(plan.item.content);
@@ -1827,6 +1887,7 @@ export function createTelegramQueueDispatchRuntime<TContext = unknown>(
     sendUserMessage: deps.sendUserMessage,
     onPromptDispatchFailure: deps.onPromptDispatchFailure,
     recordRuntimeEvent: deps.recordRuntimeEvent,
+    debugLogger: deps.debugLogger,
   });
 }
 
@@ -1845,6 +1906,12 @@ export function createTelegramQueueDispatchController<TContext = unknown>(
         deps.getQueuedItems(),
         deps.canDispatch(ctx),
       );
+      deps.debugLogger?.log("telegram.queue.dispatch.plan", {
+        kind: dispatchPlan.kind,
+        remainingItems:
+          dispatchPlan.kind === "none" ? deps.getQueuedItems().length : dispatchPlan.remainingItems.length,
+        canDispatch: deps.canDispatch(ctx),
+      });
       if (dispatchPlan.kind !== "none") {
         deps.setQueuedItems(dispatchPlan.remainingItems);
       }
@@ -1856,6 +1923,7 @@ export function createTelegramQueueDispatchController<TContext = unknown>(
             ctx,
             sendTextReply: deps.sendTextReply,
             recordRuntimeEvent: deps.recordRuntimeEvent,
+            debugLogger: deps.debugLogger,
             onSettled: () => {
               controlDispatchPending = false;
               if (deps.hasDispatchContext && !deps.hasDispatchContext()) return;
@@ -1874,6 +1942,7 @@ export function createTelegramQueueDispatchController<TContext = unknown>(
         onIdle: () => {
           deps.updateStatus(ctx);
         },
+        debugLogger: deps.debugLogger,
       });
     },
   };

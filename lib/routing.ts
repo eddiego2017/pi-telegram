@@ -7,6 +7,7 @@
 import { readFile } from "node:fs/promises";
 import * as Commands from "./commands.ts";
 import type { TelegramConfigStore } from "./config.ts";
+import type { TelegramDebugLogger } from "./debug.ts";
 import type { TelegramSectionRegistry } from "./extension-sections.ts";
 import type { TelegramInboundHandlerRuntime } from "./inbound-handlers.ts";
 import * as Media from "./media.ts";
@@ -188,6 +189,7 @@ export interface TelegramInboundRouteRuntimeDeps<
   ) => void;
   injectNewSession: (ctx: TContext) => Promise<boolean>;
   injectClone: () => Promise<void>;
+  injectReloadRuntime?: () => Promise<void>;
   getSessionName: (ctx: TContext) => string | undefined;
   setSessionName: (name: string, ctx: TContext) => void | Promise<void>;
   recordRuntimeEvent?: (
@@ -195,6 +197,7 @@ export interface TelegramInboundRouteRuntimeDeps<
     error: unknown,
     details?: Record<string, unknown>,
   ) => void;
+  debugLogger?: TelegramDebugLogger;
   sectionRegistry?: TelegramSectionRegistry;
 }
 
@@ -219,6 +222,12 @@ function isTelegramOwnedCallbackData(data: string): boolean {
   return TELEGRAM_OWNED_CALLBACK_PREFIXES.some((prefix) =>
     data.startsWith(prefix),
   );
+}
+
+function getTelegramTurnId(chatId: unknown, messageId: unknown): string | undefined {
+  return typeof chatId === "number" && typeof messageId === "number"
+    ? `tg:${chatId}:${messageId}`
+    : undefined;
 }
 
 export function createTelegramInboundRouteRuntime<
@@ -336,6 +345,19 @@ export function createTelegramInboundRouteRuntime<
     query: TCallbackQuery,
     ctx: TContext,
   ): Promise<void> => {
+    const startedAt = Date.now();
+    deps.debugLogger?.log(
+      "telegram.route.callback.start",
+      {
+        callbackQueryId: query.id,
+        turnId: getTelegramTurnId(query.message?.chat?.id, query.message?.message_id),
+        fromUserId: query.from?.id,
+        messageId: query.message?.message_id,
+        chatId: query.message?.chat?.id,
+      },
+      query,
+    );
+    try {
     if (deps.buttonActionStore) {
       const handled = await OutboundHandlers.handleTelegramButtonCallbackQuery(
         query,
@@ -393,6 +415,13 @@ export function createTelegramInboundRouteRuntime<
       return;
     }
     await menuCallbackHandler(query, ctx);
+    } finally {
+      deps.debugLogger?.log("telegram.route.callback.end", {
+        callbackQueryId: query.id,
+        turnId: getTelegramTurnId(query.message?.chat?.id, query.message?.message_id),
+        elapsedMs: Date.now() - startedAt,
+      });
+    }
   };
   const promptTurnBuilder = Turns.createTelegramPromptTurnRuntimeBuilder<
     TMessage,
@@ -468,7 +497,11 @@ export function createTelegramInboundRouteRuntime<
     compactActiveTab: deps.tabManager
       ? (ctx, callbacks) => deps.tabManager?.compactActive(ctx, callbacks) ?? false
       : undefined,
-    queueReloadRuntimeCommand: () => {
+    queueReloadRuntimeCommand: async () => {
+      if (deps.injectReloadRuntime) {
+        await deps.injectReloadRuntime();
+        return;
+      }
       if (!deps.sendUserMessage) {
         throw new Error("sendUserMessage is unavailable");
       }
@@ -711,11 +744,65 @@ export function createTelegramInboundRouteRuntime<
     handleAuthorizedTelegramCallbackQuery: callbackHandler,
     sendTextReply: deps.sendTextReply,
     handleAuthorizedTelegramMessage: async (message, ctx) => {
-      const handledByTree = await deps.treeMenuMessageHandler?.(message, ctx);
-      if (handledByTree) return;
-      await textDispatch.handleMessage(message, ctx);
+      const startedAt = Date.now();
+      deps.debugLogger?.log(
+        "telegram.route.message.start",
+        {
+          turnId: getTelegramTurnId(message.chat?.id, message.message_id),
+          chatId: message.chat?.id,
+          messageId: message.message_id,
+          fromUserId: message.from?.id,
+        },
+        message,
+      );
+      try {
+        const handledByTree = await deps.treeMenuMessageHandler?.(message, ctx);
+        if (handledByTree) return;
+        await textDispatch.handleMessage(message, ctx);
+      } finally {
+        deps.debugLogger?.log("telegram.route.message.end", {
+          turnId: getTelegramTurnId(message.chat?.id, message.message_id),
+          chatId: message.chat?.id,
+          messageId: message.message_id,
+          elapsedMs: Date.now() - startedAt,
+        });
+      }
     },
-    handleAuthorizedTelegramEditedMessage: editRuntime.updateFromEditedMessage,
-    handleAuthorizedTelegramGuestMessage,
+    handleAuthorizedTelegramEditedMessage: (message, ctx) => {
+      deps.debugLogger?.log(
+        "telegram.route.edited_message",
+        {
+          turnId: getTelegramTurnId(message.chat?.id, message.message_id),
+          chatId: message.chat?.id,
+          messageId: message.message_id,
+          fromUserId: message.from?.id,
+        },
+        message,
+      );
+      return editRuntime.updateFromEditedMessage(message, ctx);
+    },
+    handleAuthorizedTelegramGuestMessage: async (message, ctx) => {
+      const startedAt = Date.now();
+      deps.debugLogger?.log(
+        "telegram.route.guest.start",
+        {
+          guestQueryId: message.guest_query_id,
+          turnId: getTelegramTurnId(message.chat?.id, message.message_id),
+          chatId: message.chat?.id,
+          messageId: message.message_id,
+          fromUserId: message.from?.id,
+        },
+        message,
+      );
+      try {
+        await handleAuthorizedTelegramGuestMessage(message, ctx);
+      } finally {
+        deps.debugLogger?.log("telegram.route.guest.end", {
+          guestQueryId: message.guest_query_id,
+          turnId: getTelegramTurnId(message.chat?.id, message.message_id),
+          elapsedMs: Date.now() - startedAt,
+        });
+      }
+    },
   });
 }

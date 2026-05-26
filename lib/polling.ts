@@ -4,6 +4,14 @@
  * Owns polling request builders, stop conditions, and the long-poll loop runtime for Telegram updates
  */
 
+interface TelegramDebugLoggerPort {
+  log: (
+    event: string,
+    details?: Record<string, unknown>,
+    body?: unknown,
+  ) => void;
+}
+
 export interface TelegramPollingConfig {
   botToken?: string;
   lastUpdateId?: number;
@@ -148,10 +156,12 @@ export function createTelegramPollingControllerRuntime<
       sleep: deps.sleep,
       maxUpdateFailures: deps.maxUpdateFailures,
       recordRuntimeEvent: deps.recordRuntimeEvent,
+      debugLogger: deps.debugLogger,
     }),
     updateStatus: deps.updateStatus,
     createAbortController: deps.createAbortController,
     recordRuntimeEvent: deps.recordRuntimeEvent,
+    debugLogger: deps.debugLogger,
   });
 }
 
@@ -186,6 +196,7 @@ export function shouldStartTelegramPolling(
 export async function stopTelegramPollingRuntime<TContext>(
   deps: TelegramPollingRuntimeDeps<TContext>,
 ): Promise<void> {
+  deps.debugLogger?.log("telegram.polling.stop");
   deps.stopTypingLoop();
   deps.getPollingController()?.abort();
   deps.setPollingController(undefined);
@@ -222,8 +233,10 @@ export function startTelegramPollingRuntime<TContext>(
     return;
   }
   const controller = deps.createAbortController?.() ?? new AbortController();
+  deps.debugLogger?.log("telegram.polling.start");
   deps.setPollingController(controller);
   const promise = deps.runPollLoop(ctx, controller.signal).finally(() => {
+    deps.debugLogger?.log("telegram.polling.settled");
     deps.setPollingPromise(undefined);
     deps.setPollingController(undefined);
     updateTelegramPollingStatusSafely(deps.updateStatus, ctx, {
@@ -242,6 +255,7 @@ export interface TelegramRuntimeEventRecorderPort {
     error: unknown,
     details?: Record<string, unknown>,
   ) => void;
+  debugLogger?: TelegramDebugLoggerPort;
 }
 
 export interface TelegramPollLoopDeps<
@@ -316,6 +330,7 @@ export function createTelegramPollLoopRunner<
       sleep,
       maxUpdateFailures: deps.maxUpdateFailures,
       recordRuntimeEvent: deps.recordRuntimeEvent,
+      debugLogger: deps.debugLogger,
     });
 }
 
@@ -353,19 +368,44 @@ export async function runTelegramPollLoop<
   let handledUpdateFailureRethrown = false;
   while (!deps.signal.aborted) {
     try {
-      const updates = await deps.getUpdates(
-        buildTelegramLongPollRequest(deps.config.lastUpdateId),
-        deps.signal,
-      );
+      const requestBody = buildTelegramLongPollRequest(deps.config.lastUpdateId);
+      const pollStartedAt = Date.now();
+      deps.debugLogger?.log("telegram.poll.request", {
+        lastUpdateId: deps.config.lastUpdateId,
+      }, requestBody);
+      const updates = await deps.getUpdates(requestBody, deps.signal);
+      if (updates.length > 0) {
+        deps.debugLogger?.log(
+          "telegram.poll.response",
+          { count: updates.length, elapsedMs: Date.now() - pollStartedAt },
+          updates,
+        );
+      }
       for (const update of updates) {
+        const updateStartedAt = Date.now();
+        deps.debugLogger?.log(
+          "telegram.update.received",
+          { updateId: update.update_id },
+          update,
+        );
         try {
           await deps.handleUpdate(update, deps.ctx);
           deps.config.lastUpdateId = update.update_id;
           updateFailures.delete(update.update_id);
           await deps.persistConfig();
+          deps.debugLogger?.log("telegram.update.handled", {
+            updateId: update.update_id,
+            elapsedMs: Date.now() - updateStartedAt,
+          });
         } catch (error) {
           const failureCount = (updateFailures.get(update.update_id) ?? 0) + 1;
           updateFailures.set(update.update_id, failureCount);
+          deps.debugLogger?.log("telegram.update.error", {
+            updateId: update.update_id,
+            failureCount,
+            elapsedMs: Date.now() - updateStartedAt,
+            error: error instanceof Error ? error.message : String(error),
+          });
           deps.recordRuntimeEvent?.("polling", error, {
             phase: "handleUpdate",
             updateId: update.update_id,
@@ -389,6 +429,10 @@ export async function runTelegramPollLoop<
       if (handledUpdateFailureRethrown) {
         handledUpdateFailureRethrown = false;
       } else {
+        deps.debugLogger?.log("telegram.poll.error", {
+          lastUpdateId: deps.config.lastUpdateId,
+          error: error instanceof Error ? error.message : String(error),
+        });
         deps.recordRuntimeEvent?.("polling", error, { phase: "loop" });
       }
       deps.onErrorStatus(getTelegramPollingErrorMessage(error));

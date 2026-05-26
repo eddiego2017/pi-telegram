@@ -12,6 +12,8 @@ import { join, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
+import type { TelegramDebugLogger } from "./debug.ts";
+
 export const TELEGRAM_API_BASE = "https://api.telegram.org";
 
 export const TELEGRAM_FILE_MAX_BYTES = 50 * 1024 * 1024;
@@ -279,6 +281,7 @@ export interface TelegramBridgeApiRuntimeDeps {
     error: unknown,
     details?: Record<string, unknown>,
   ) => void;
+  debugLogger?: TelegramDebugLogger;
   /** Resolve the ambient forum-topic id for outbound calls that did not
    *  explicitly specify one. Receives the target chat id so multi-chat
    *  scenarios don't leak threads across chats. Returns undefined for
@@ -390,6 +393,23 @@ function getTelegramRetryDelayMs(
 
 function sleepTelegramRetry(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getTelegramApiRetryAfterSeconds(error: unknown): number | undefined {
+  if (error instanceof TelegramApiHttpError) return error.retryAfterSeconds;
+  if (typeof error !== "object" || error === null) return undefined;
+  const value = (error as { retryAfterSeconds?: unknown }).retryAfterSeconds;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function isTelegramOutboundApiMethod(method: string): boolean {
+  return (
+    method.startsWith("send") ||
+    method.startsWith("edit") ||
+    method === "deleteMessage"
+  );
 }
 
 function assertTelegramFileSizeWithinLimit(
@@ -710,6 +730,7 @@ export function createDefaultTelegramBridgeApiRuntime(deps: {
   getBotToken: () => string | undefined;
   recordRuntimeEvent: TelegramBridgeApiRuntimeDeps["recordRuntimeEvent"];
   getDefaultMessageThreadId?: (chatId: number) => number | undefined;
+  debugLogger?: TelegramDebugLogger;
 }): TelegramBridgeApiRuntime {
   return createTelegramBridgeApiRuntime({
     client: createTelegramApiClient(deps.getBotToken),
@@ -718,12 +739,14 @@ export function createDefaultTelegramBridgeApiRuntime(deps: {
     tempFileMaxAgeMs: TELEGRAM_TEMP_FILE_MAX_AGE_MS,
     recordRuntimeEvent: deps.recordRuntimeEvent,
     getDefaultMessageThreadId: deps.getDefaultMessageThreadId,
+    debugLogger: deps.debugLogger,
   });
 }
 
 export function createTelegramBridgeApiRuntime(
   deps: TelegramBridgeApiRuntimeDeps,
 ): TelegramBridgeApiRuntime {
+  let outboundBlockedUntil = 0;
   const resolveDefaultThreadId =
     deps.getDefaultMessageThreadId ?? ((_chatId: number) => undefined);
   const withDefaultThreadId = <T extends Record<string, unknown>>(body: T): T => {
@@ -739,23 +762,63 @@ export function createTelegramBridgeApiRuntime(
     body: Record<string, unknown>,
     options?: TelegramApiCallOptions,
   ): Promise<TResponse> => {
+    const startedAt = Date.now();
+    if (isTelegramOutboundApiMethod(method)) {
+      const waitMs = outboundBlockedUntil - Date.now();
+      if (waitMs > 0) {
+        const waitSeconds = Math.ceil(waitMs / 1000);
+        const error = new TelegramApiHttpError(
+          `Telegram API ${method} skipped: outbound is rate-limited for ${waitSeconds}s`,
+          429,
+          waitSeconds,
+        );
+        deps.debugLogger?.log("telegram.api.rate_limited", {
+          method,
+          waitSeconds,
+        });
+        throw error;
+      }
+    }
+    deps.debugLogger?.log("telegram.api.request", { method }, body);
     try {
-      return await deps.client.call(method, body, options);
+      const result = await deps.client.call<TResponse>(method, body, options);
+      deps.debugLogger?.log(
+        "telegram.api.response",
+        { method, elapsedMs: Date.now() - startedAt },
+        result,
+      );
+      return result;
     } catch (error) {
+      const retryAfterSeconds = getTelegramApiRetryAfterSeconds(error);
+      if (
+        isTelegramOutboundApiMethod(method) &&
+        retryAfterSeconds !== undefined &&
+        retryAfterSeconds > 0
+      ) {
+        outboundBlockedUntil = Math.max(
+          outboundBlockedUntil,
+          Date.now() + retryAfterSeconds * 1000,
+        );
+      }
+      deps.debugLogger?.log("telegram.api.error", {
+        method,
+        elapsedMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
       deps.recordRuntimeEvent("api", error, { method });
       throw error;
     }
   };
   return {
     call: callRecorded,
-    callMultipart: async (
-      method,
-      fields,
-      fileField,
-      filePath,
-      fileName,
-      options,
-    ) => {
+    callMultipart: async <TResponse>(
+      method: string,
+      fields: Record<string, string>,
+      fileField: string,
+      filePath: string,
+      fileName: string,
+      options?: TelegramApiCallOptions,
+    ): Promise<TResponse> => {
       let effectiveFields = fields;
       if (
         effectiveFields.message_thread_id === undefined &&
@@ -772,8 +835,14 @@ export function createTelegramBridgeApiRuntime(
           }
         }
       }
+      const startedAt = Date.now();
+      deps.debugLogger?.log(
+        "telegram.api.multipart.request",
+        { method, fileField, filePath, fileName },
+        effectiveFields,
+      );
       try {
-        return await deps.client.callMultipart(
+        const result = await deps.client.callMultipart<TResponse>(
           method,
           effectiveFields,
           fileField,
@@ -781,14 +850,31 @@ export function createTelegramBridgeApiRuntime(
           fileName,
           options,
         );
+        deps.debugLogger?.log(
+          "telegram.api.multipart.response",
+          { method, fileName, elapsedMs: Date.now() - startedAt },
+          result,
+        );
+        return result;
       } catch (error) {
+        deps.debugLogger?.log("telegram.api.multipart.error", {
+          method,
+          fileName,
+          elapsedMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
         deps.recordRuntimeEvent("multipart", error, { method, fileName });
         throw error;
       }
     },
     downloadFile: async (fileId, suggestedName) => {
+      const startedAt = Date.now();
+      deps.debugLogger?.log("telegram.api.download.request", {
+        fileId,
+        suggestedName,
+      });
       try {
-        return await deps.client.downloadFile(
+        const targetPath = await deps.client.downloadFile(
           fileId,
           suggestedName,
           deps.tempDir,
@@ -796,7 +882,20 @@ export function createTelegramBridgeApiRuntime(
             maxFileSizeBytes: deps.maxFileSizeBytes,
           },
         );
+        deps.debugLogger?.log("telegram.api.download.response", {
+          fileId,
+          suggestedName,
+          targetPath,
+          elapsedMs: Date.now() - startedAt,
+        });
+        return targetPath;
       } catch (error) {
+        deps.debugLogger?.log("telegram.api.download.error", {
+          fileId,
+          suggestedName,
+          elapsedMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
         deps.recordRuntimeEvent("download", error, { suggestedName });
         throw error;
       }
@@ -844,17 +943,55 @@ export function createTelegramBridgeApiRuntime(
         withDefaultThreadId(body),
       ),
     editMessageText: async (body) => {
+      const startedAt = Date.now();
+      deps.debugLogger?.log("telegram.api.request", { method: "editMessageText" }, body);
       try {
         await deps.client.call("editMessageText", body);
+        deps.debugLogger?.log("telegram.api.response", {
+          method: "editMessageText",
+          elapsedMs: Date.now() - startedAt,
+          result: "edited",
+        });
         return "edited";
       } catch (error) {
-        if (isTelegramMessageNotModifiedError(error)) return "unchanged";
+        if (isTelegramMessageNotModifiedError(error)) {
+          deps.debugLogger?.log("telegram.api.response", {
+            method: "editMessageText",
+            elapsedMs: Date.now() - startedAt,
+            result: "unchanged",
+          });
+          return "unchanged";
+        }
+        deps.debugLogger?.log("telegram.api.error", {
+          method: "editMessageText",
+          elapsedMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
         deps.recordRuntimeEvent("api", error, { method: "editMessageText" });
         throw error;
       }
     },
-    answerCallbackQuery: (callbackQueryId, text) => {
-      return deps.client.answerCallbackQuery(callbackQueryId, text);
+    answerCallbackQuery: async (callbackQueryId, text) => {
+      const startedAt = Date.now();
+      const body = text
+        ? { callback_query_id: callbackQueryId, text }
+        : { callback_query_id: callbackQueryId };
+      deps.debugLogger?.log("telegram.api.request", { method: "answerCallbackQuery" }, body);
+      try {
+        await deps.client.answerCallbackQuery(callbackQueryId, text);
+        deps.debugLogger?.log("telegram.api.response", {
+          method: "answerCallbackQuery",
+          elapsedMs: Date.now() - startedAt,
+        });
+      } catch (error) {
+        deps.debugLogger?.log("telegram.api.error", {
+          method: "answerCallbackQuery",
+          elapsedMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        deps.recordRuntimeEvent("api", error, { method: "answerCallbackQuery" });
+        throw error;
+      }
     },
     answerGuestQuery: (
       guestQueryId: string,
