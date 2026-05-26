@@ -15,6 +15,7 @@ import {
   buildTelegramSessionHistoryText,
   buildTelegramSessionMainReplyMarkup,
   buildTelegramSessionMainText,
+  buildTelegramSessionLatestFullReplayMessages,
   buildTelegramSessionReplayPlan,
   buildTelegramSessionReplayTurns,
   buildTelegramSessionStats,
@@ -458,7 +459,49 @@ test("Session replay callback sends image attachments after their text", async (
   ]);
 });
 
-test("Session reference tab-switch replay sender replays latest five full messages", async () => {
+test("Tab switch replay cleans Telegram reply quotes and empty thinking blocks", () => {
+  const snapshot: TelegramSessionSnapshot = {
+    cwd: "/repo",
+    sessionId: "session-current",
+    sessionFile: "/sessions/current.jsonl",
+    entries: [],
+    branch: [
+      {
+        type: "message",
+        id: "u1",
+        timestamp: "2026-05-18T01:00:00Z",
+        message: {
+          role: "user",
+          content: "[telegram] new question\n\n[reply] old answer that should not replay",
+        },
+      },
+      {
+        type: "message",
+        id: "a1",
+        timestamp: "2026-05-18T01:00:10Z",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "" },
+            { type: "text", text: "fresh answer" },
+          ],
+        },
+      },
+    ],
+  };
+  snapshot.entries = snapshot.branch;
+
+  const messages = buildTelegramSessionLatestFullReplayMessages(snapshot, 5).map(
+    formatTelegramSessionReplayMessage,
+  );
+
+  assert.deepEqual(messages, [
+    "Replay msg 2026-05-18 01:00 user\nnew question",
+    "Replay msg 2026-05-18 01:00 agent\nfresh answer",
+  ]);
+});
+
+test("Session reference tab-switch replay sender replays latest turn capped to five full messages", async () => {
   const branch: TelegramSessionSnapshot["branch"] = [
     {
       type: "message",

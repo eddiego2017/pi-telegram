@@ -601,7 +601,7 @@ function renderReplayContentBlock(block: TelegramSessionContentBlock): string {
   if (type === "text") return block.text ?? "";
   if (type === "thinking") {
     const text = block.thinking ?? block.text ?? "";
-    return text ? `💭 Thinking\n${fencedReplayBlock(text)}` : "💭 Thinking";
+    return text ? `💭 Thinking\n${fencedReplayBlock(text)}` : "";
   }
   if (type === "toolCall") return renderReplayToolCallBlock(block);
   if (type === "toolResult" || type === "tool_result") {
@@ -686,7 +686,7 @@ function fullReplayMessageFromEntry(
     const message = entry.message;
     if (!message) return undefined;
     const rawText = fullReplayContentText(message.content);
-    const text = message.role === "user" ? stripTelegramPromptPrefix(rawText) : rawText;
+    const text = message.role === "user" ? cleanReplayUserText(rawText) : rawText;
     return {
       entryId: entry.id,
       timestamp: entry.timestamp,
@@ -1271,7 +1271,11 @@ export function createTelegramTabSwitchReplaySender<TReference>(
     _replyToMessageId,
   ) {
     const snapshot = deps.getSnapshot(reference);
-    const messages = buildTelegramSessionLatestFullReplayMessages(snapshot, 5);
+    const latestTurnMessages = buildTelegramSessionLatestFullTurnReplayMessages(snapshot);
+    const messages = (latestTurnMessages.length > 0
+      ? latestTurnMessages
+      : buildTelegramSessionLatestFullReplayMessages(snapshot, 5)
+    ).slice(-5);
     for (const message of messages) {
       const replayMessageId = await deps.sendReplayMessage(
         chatId,

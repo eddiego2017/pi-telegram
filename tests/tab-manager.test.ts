@@ -971,7 +971,7 @@ test("Tab-aware session name ports target the active tab", async () => {
   assert.deepEqual(parentSets, []);
 });
 
-test("Tab manager sends latest-turn replay after tab switch", async () => {
+test("Tab manager replays only unread tab completions after switch", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-switch-replay-"));
   const replies: string[] = [];
   const replays: string[] = [];
@@ -1007,7 +1007,35 @@ test("Tab manager sends latest-turn replay after tab switch", async () => {
   await manager.handleCommand("A", 7, 30, "ctx");
 
   assert.match(replies.at(-1) ?? "", /Switched to tab A/);
-  assert.deepEqual(replays, ["A:/sessions/A.jsonl:7:30"]);
+  assert.deepEqual(replays, []);
+
+  await manager.dispatchPrompt(
+    {
+      chatId: 1,
+      replyToMessageId: 31,
+      content: [{ type: "text", text: "question A" }],
+    },
+    "ctx",
+  );
+  await manager.handleCommand("new C", 1, 32, "ctx");
+  backends.get("A")?.emit({ type: "agent_start" });
+  backends.get("A")?.emit({
+    type: "message_update",
+    assistantMessageEvent: { type: "text_delta", delta: "answer A" },
+  });
+  backends.get("A")?.emit({
+    type: "agent_end",
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "answer A" }] },
+    ],
+  });
+  await waitForTabStreamFlush();
+
+  await manager.handleCommand("A", 7, 40, "ctx");
+
+  assert.match(replies.at(-1) ?? "", /Switched to tab A\. Replaying unread latest messages\./);
+  assert.doesNotMatch(replies.at(-1) ?? "", /Last reply/);
+  assert.deepEqual(replays, ["A:/sessions/A.jsonl:7:40"]);
 });
 
 test("Tab manager closes the active tab with bare close command", async () => {
@@ -1122,7 +1150,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
 
   assert.equal(answers.at(-1), "Switching to A.");
   assert.match(textReplies.at(-1) ?? "", /Switched to tab A/);
-  assert.deepEqual(replays, ["A:7:77"]);
+  assert.deepEqual(replays, []);
   assert.match(interactiveEdits.at(-1) ?? "", /plain:Tabs 3\/10/);
 
   await manager.handleCallbackQuery(
@@ -1133,8 +1161,8 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
     },
     "ctx",
   );
-  assert.equal(answers.at(-1), "Replaying latest 5 messages.");
-  assert.deepEqual(replays, ["A:7:77", "A:7:77"]);
+  assert.equal(answers.at(-1), "Replaying latest turn.");
+  assert.deepEqual(replays, ["A:7:77"]);
 
   await manager.handleCallbackQuery(
     {
