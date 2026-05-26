@@ -859,3 +859,34 @@ test("Preview runtime finalizes plain and markdown previews", async () => {
   ]);
   assert.equal(markdownHarness.getState(), undefined);
 });
+
+test("Preview runtime cancels scheduled flushes before finalizing", async () => {
+  const plainHarness = createPreviewRuntimeHarness({
+    mode: "message",
+    messageId: 44,
+    pendingText: "done",
+    lastSentText: "done",
+  });
+  plainHarness.setDraftSupport("unsupported");
+  const plainState = plainHarness.getState();
+  assert.ok(plainState);
+  plainState.flushTimer = setTimeout(() => {}, 1000);
+  assert.equal(await finalizeTelegramPreview(7, plainHarness.deps), true);
+  assert.equal(plainState.flushTimer, undefined);
+
+  const markdownHarness = createPreviewRuntimeHarness({
+    mode: "message",
+    messageId: 55,
+    pendingText: "done",
+    lastSentText: "done",
+  });
+  markdownHarness.setDraftSupport("unsupported");
+  const markdownState = markdownHarness.getState();
+  assert.ok(markdownState);
+  markdownState.flushTimer = setTimeout(() => {}, 1000);
+  assert.equal(
+    await finalizeTelegramMarkdownPreview(7, "**done**", markdownHarness.deps),
+    true,
+  );
+  assert.equal(markdownState.flushTimer, undefined);
+});

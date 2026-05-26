@@ -699,6 +699,7 @@ export async function finalizeTelegramPreview<
     await clearTelegramPreview(chatId, deps);
     return false;
   }
+  deps.clearScheduledFlush(state);
   await flushTelegramPreview(chatId, deps);
   const finalText = buildTelegramPreviewFinalText(state);
   if (!finalText) {
@@ -728,6 +729,7 @@ export async function finalizeTelegramMarkdownPreview<
     await clearTelegramPreview(chatId, deps);
     return false;
   }
+  deps.clearScheduledFlush(state);
   await flushTelegramPreview(chatId, deps);
   const chunks = deps.renderTelegramMessage(markdown, { mode: "markdown" });
   if (chunks.length === 0) {
