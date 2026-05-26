@@ -1038,6 +1038,66 @@ test("Tab manager replays only unread tab completions after switch", async () =>
   assert.deepEqual(replays, ["A:/sessions/A.jsonl:7:40"]);
 });
 
+test("Tab manager sends switched last reply through markdown delivery when available", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-switch-markdown-"));
+  const textReplies: string[] = [];
+  const markdownReplies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 10,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      textReplies.push(text);
+      return textReplies.length;
+    },
+    sendMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+      markdownReplies.push(markdown);
+      return markdownReplies.length;
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.dispatchPrompt(
+    {
+      chatId: 1,
+      replyToMessageId: 11,
+      content: [{ type: "text", text: "question A" }],
+    },
+    "ctx",
+  );
+  backends.get("A")?.emit({ type: "agent_start" });
+  backends.get("A")?.emit({
+    type: "agent_end",
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer **A**\n\n```ts\nconst x = 1\n```" }],
+      },
+    ],
+  });
+
+  await manager.handleCommand("new B", 1, 20, "ctx");
+  await manager.handleCommand("A", 7, 30, "ctx");
+
+  assert.match(textReplies.join("\n"), /Created and switched to tab B/);
+  assert.equal(
+    markdownReplies.at(-1),
+    "Switched to tab A.\n\nLast reply:\nanswer **A**\n\n```ts\nconst x = 1\n```",
+  );
+});
+
 test("Tab manager closes the active tab with bare close command", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-active-close-"));
   const replies: string[] = [];

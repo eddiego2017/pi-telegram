@@ -2219,15 +2219,26 @@ export function createTelegramTabManager<TContext>(
       runtime.unreadEvents = 0;
       if (runtime.record.status === "running") startTabTyping(name, runtime);
       await persist();
-      const latest = !shouldReplayUnread && runtime.record.lastAssistantText
-        ? `\n\nLast reply:\n${truncateTelegramTabText(runtime.record.lastAssistantText)}`
-        : "";
+      const lastAssistantText = !shouldReplayUnread
+        ? runtime.record.lastAssistantText
+        : undefined;
       const replayNote = shouldReplayUnread ? " Replaying unread latest messages." : "";
-      await deps.sendTextReply(
-        chatId,
-        replyToMessageId,
-        `Switched to tab ${name}.${replayNote}${latest}`,
-      );
+      if (lastAssistantText && deps.sendMarkdownReply) {
+        await deps.sendMarkdownReply(
+          chatId,
+          replyToMessageId,
+          `Switched to tab ${name}.\n\nLast reply:\n${lastAssistantText}`,
+        );
+      } else {
+        const latest = lastAssistantText
+          ? `\n\nLast reply:\n${truncateTelegramTabText(lastAssistantText)}`
+          : "";
+        await deps.sendTextReply(
+          chatId,
+          replyToMessageId,
+          `Switched to tab ${name}.${replayNote}${latest}`,
+        );
+      }
       if (shouldReplayUnread && deps.sendLastTurnsOnSwitch) {
         await deps.sendLastTurnsOnSwitch(
           getTelegramTabSessionReference(runtime.record),
