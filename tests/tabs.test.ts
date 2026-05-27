@@ -14,6 +14,7 @@ import {
   formatTelegramTabStatus,
   normalizeTelegramTabsState,
   parseTelegramTabCommand,
+  truncateTelegramTabText,
   validateTelegramTabName,
 } from "../lib/tabs.ts";
 
@@ -188,4 +189,11 @@ test("Tab formatters keep list and status compact", () => {
     /A \* running 1s unread/,
   );
   assert.match(formatTelegramTabStatus(state.tabs.A!, 1, 1500), /Last reply:\nhello/);
+});
+
+test("Tab text truncation does not split surrogate pairs", () => {
+  const truncated = truncateTelegramTabText(`${"a".repeat(95)}📝 tail`, 97);
+  assert.equal(truncated, `${"a".repeat(95)}…`);
+  assert.doesNotThrow(() => new TextEncoder().encode(truncated));
+  assert.doesNotMatch(JSON.stringify(truncated), /\\ud[89ab][0-9a-f]{2}/i);
 });

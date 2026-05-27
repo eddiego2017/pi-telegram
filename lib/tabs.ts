@@ -321,7 +321,13 @@ export function formatTelegramTabUsage(): string {
 
 export function truncateTelegramTabText(text: string, limit = 1200): string {
   if (text.length <= limit) return text;
-  return `${text.slice(0, Math.max(0, limit - 1))}…`;
+  const bodyLimit = Math.max(0, limit - 1);
+  let body = "";
+  for (const char of text) {
+    if (body.length + char.length > bodyLimit) break;
+    body += char;
+  }
+  return `${body.trimEnd()}…`;
 }
 
 function formatTelegramTabAge(ms: number): string {
