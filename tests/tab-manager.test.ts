@@ -1708,6 +1708,78 @@ test("Tab manager relays active worker thinking and tool call output", async () 
   assert.equal(markdownReplies.at(-1), "Done.");
 });
 
+test("Tab manager throttles stream delivery across text and thinking streams", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-stream-throttle-"));
+  const streamReplies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async () => undefined,
+    sendMarkdownReply: async () => undefined,
+    sendStreamMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+      streamReplies.push(markdown);
+      return 100 + streamReplies.length;
+    },
+    editStreamMarkdownMessage: async (_chatId, _messageId, markdown) => {
+      streamReplies.push(markdown);
+      return undefined;
+    },
+    streamEditThrottleMs: 50,
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.dispatchPrompt(
+    {
+      chatId: 1,
+      replyToMessageId: 20,
+      content: [{ type: "text", text: "inspect repo" }],
+    },
+    "ctx",
+  );
+
+  const backend = backends.get("A");
+  assert.ok(backend);
+  backend.emit({ type: "agent_start" });
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "thinking_delta",
+      contentIndex: 0,
+      delta: "I should inspect",
+    },
+  });
+  await waitForTabStreamFlush();
+  assert.equal(streamReplies.length, 1);
+
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "text_delta",
+      contentIndex: 1,
+      delta: "I'll check",
+    },
+  });
+  await waitForTabStreamFlush();
+  assert.equal(streamReplies.length, 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  assert.equal(streamReplies.length, 2);
+  assert.match(streamReplies[1] ?? "", /I'll check/);
+});
+
 test("Tab manager does not reuse finalized thinking or tool streams", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-stream-seal-"));
   const streamReplies: string[] = [];

@@ -48,11 +48,11 @@ import { getTelegramAgentDir } from "./config.ts";
 import type { TelegramDebugLogger } from "./debug.ts";
 import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
 
-const TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS = 1200;
+const TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS = 10_000;
 const TELEGRAM_TAB_STREAM_FAILURE_BASE_RETRY_MS = 30_000;
 const TELEGRAM_TAB_STREAM_FAILURE_MAX_RETRY_MS = 10 * 60 * 1000;
 const TELEGRAM_TAB_STREAM_MARKDOWN_LIMIT = 3600;
-const TELEGRAM_TAB_TYPING_ACTION_INTERVAL_MS = 2500;
+const TELEGRAM_TAB_TYPING_ACTION_INTERVAL_MS = 8_000;
 const TELEGRAM_TAB_DASHBOARD_STATE_TTL_MS = 10 * 60 * 1000;
 
 export interface TelegramTabPromptContent {
@@ -195,6 +195,7 @@ interface RuntimeTab {
   activeErrorDelivered?: boolean;
   streamDeliveryFailureCount?: number;
   streamDeliveryBlockedUntil?: number;
+  lastStreamFlushAt?: number;
   textStream?: TelegramTabStreamState;
   thinkingBuffers: Map<number, string>;
   thinkingStreams: Map<number, TelegramTabStreamState>;
@@ -861,6 +862,7 @@ function resetRuntimeTurnBuffers(runtime: RuntimeTab): void {
   runtime.activeErrorDelivered = false;
   runtime.streamDeliveryFailureCount = undefined;
   runtime.streamDeliveryBlockedUntil = undefined;
+  runtime.lastStreamFlushAt = undefined;
   if (runtime.textStream) {
     clearTelegramTabStreamState(runtime.textStream);
     runtime.textStream = undefined;
@@ -1674,6 +1676,7 @@ export function createTelegramTabManager<TContext>(
         unblockTabStreamDelivery(runtime, stream);
         stream.sentMarkdown = markdown;
         stream.lastFlushAt = now();
+        runtime.lastStreamFlushAt = stream.lastFlushAt;
       } while (stream.flushRequested);
     })();
     try {
@@ -1698,12 +1701,19 @@ export function createTelegramTabManager<TContext>(
     const blockedUntil = getTabStreamDeliveryBlockedUntil(runtime, stream);
     const retryWait =
       blockedUntil === undefined ? 0 : Math.max(0, blockedUntil - now());
+    const globalThrottleWait = Math.max(
+      0,
+      streamEditThrottleMs - (now() - (runtime.lastStreamFlushAt ?? 0)),
+    );
     const wait =
       retryWait > 0
         ? retryWait
         : force
           ? 0
-          : Math.max(0, streamEditThrottleMs - (now() - stream.lastFlushAt));
+          : Math.max(
+              globalThrottleWait,
+              streamEditThrottleMs - (now() - stream.lastFlushAt),
+            );
     if (wait === 0) {
       void flushTabStreamMarkdown(runtime, stream);
       return;
