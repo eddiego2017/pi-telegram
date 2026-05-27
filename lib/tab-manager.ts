@@ -43,6 +43,7 @@ import {
   type TelegramTabsState,
 } from "./tabs.ts";
 import type { TelegramConcurrentTabsConfig } from "./config.ts";
+import { isThinkingLevel, type ThinkingLevel } from "./model.ts";
 import { getTelegramAgentDir } from "./config.ts";
 import type { TelegramDebugLogger } from "./debug.ts";
 import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
@@ -265,7 +266,7 @@ export interface TelegramTabManager<TContext> {
   getActiveModel: (
     ctx: TContext,
   ) => Promise<TelegramTabModelSelection | undefined>;
-  getActiveThinkingLevel: (ctx: TContext) => Promise<string | undefined>;
+  getActiveThinkingLevel: (ctx: TContext) => Promise<ThinkingLevel | undefined>;
   getActiveSessionReference: (
     ctx: TContext,
   ) => TelegramTabSessionReference | undefined;
@@ -279,9 +280,9 @@ export interface TelegramTabManager<TContext> {
     ctx: TContext,
   ) => Promise<boolean>;
   setActiveThinkingLevel: (
-    level: string,
+    level: ThinkingLevel,
     ctx: TContext,
-  ) => Promise<boolean>;
+  ) => Promise<ThinkingLevel | undefined>;
   setActiveSessionName: (name: string, ctx: TContext) => Promise<boolean>;
   compactActive: (
     ctx: TContext,
@@ -657,6 +658,22 @@ export function createTelegramTabAwareModelMenuPorts<
       deps.tabManager.isEnabled()
         ? false
         : deps.canOfferParentInFlightModelSwitch(ctx),
+  };
+}
+
+export function createTelegramTabAwareThinkingLevelGetter<TContext>(deps: {
+  tabManager: Pick<
+    TelegramTabManager<TContext>,
+    "isEnabled" | "getActiveThinkingLevel"
+  >;
+  getParentThinkingLevel: () => ThinkingLevel;
+}): (ctx: TContext) => Promise<ThinkingLevel> | ThinkingLevel {
+  return async (ctx) => {
+    if (!deps.tabManager.isEnabled()) return deps.getParentThinkingLevel();
+    return (
+      (await deps.tabManager.getActiveThinkingLevel(ctx)) ??
+      deps.getParentThinkingLevel()
+    );
   };
 }
 
@@ -2658,7 +2675,9 @@ export function createTelegramTabManager<TContext>(
       const runtime = await getActiveRuntime(ctx);
       if (!runtime) return undefined;
       await refreshRuntimeState(runtime);
-      return runtime.record.currentThinkingLevel;
+      const currentThinkingLevel = runtime.record.currentThinkingLevel;
+      if (!isThinkingLevel(currentThinkingLevel ?? "")) return undefined;
+      return currentThinkingLevel as ThinkingLevel;
     },
     getActiveSessionReference: (ctx) => {
       if (!isEnabled()) return undefined;
@@ -2721,17 +2740,23 @@ export function createTelegramTabManager<TContext>(
       }
     },
     setActiveThinkingLevel: async (level, ctx) => {
-      if (!isEnabled()) return false;
+      if (!isEnabled()) return undefined;
       const runtime = await getActiveRuntime(ctx);
-      if (!runtime) return false;
+      if (!runtime) return undefined;
       await refreshRuntimeState(runtime);
-      if (!canSwitchTelegramTabModel(runtime.record)) return false;
+      if (!canSwitchTelegramTabModel(runtime.record)) return undefined;
       try {
         const backend = await ensureBackend(runtime, ctx);
         await backend.setThinkingLevel(level);
-        runtime.record.currentThinkingLevel = level;
-        await refreshRuntimeState(runtime);
-        return true;
+        const childState = await backend.getState();
+        applyRpcStateToRecord(runtime.record, childState);
+        if (!runtime.record.currentThinkingLevel) {
+          runtime.record.currentThinkingLevel = level;
+        }
+        await persist();
+        return isThinkingLevel(runtime.record.currentThinkingLevel)
+          ? runtime.record.currentThinkingLevel
+          : undefined;
       } catch (error) {
         runtime.record.status = "error";
         runtime.record.lastError = getErrorMessage(error);
@@ -2740,7 +2765,7 @@ export function createTelegramTabManager<TContext>(
           action: "set_thinking_level",
         });
         await persist();
-        return false;
+        return undefined;
       }
     },
     setActiveSessionName: async (name, ctx) => {

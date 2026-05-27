@@ -19,8 +19,10 @@ import {
 } from "./model.ts";
 
 export interface TelegramThinkingMenuCallbackDeps {
-  setThinkingLevel: (level: ThinkingLevel) => TelegramMaybePromise<void>;
-  getCurrentThinkingLevel: () => ThinkingLevel;
+  setThinkingLevel: (
+    level: ThinkingLevel,
+  ) => TelegramMaybePromise<ThinkingLevel | void>;
+  getCurrentThinkingLevel: () => TelegramMaybePromise<ThinkingLevel>;
   updateStatusMessage: () => Promise<void>;
   answerCallbackQuery: (
     callbackQueryId: string,
@@ -33,7 +35,7 @@ export interface TelegramThinkingMenuOpenDeps<
 > extends TelegramMenuMessageRuntimeDeps {
   getModelMenuState: () => Promise<TelegramModelMenuState<TModel>>;
   getActiveModel: () => TelegramMaybePromise<TModel | undefined>;
-  getThinkingLevel: () => ThinkingLevel;
+  getThinkingLevel: () => TelegramMaybePromise<ThinkingLevel>;
   storeModelMenuState: (state: TelegramModelMenuState<TModel>) => void;
 }
 
@@ -100,11 +102,13 @@ export async function handleTelegramThinkingMenuCallbackAction(
     );
     return true;
   }
-  await deps.setThinkingLevel(action.level);
+  const effectiveLevel =
+    (await deps.setThinkingLevel(action.level)) ??
+    (await deps.getCurrentThinkingLevel());
   await deps.updateStatusMessage();
   await deps.answerCallbackQuery(
     callbackQueryId,
-    `Thinking: ${deps.getCurrentThinkingLevel()}`,
+    `Thinking: ${effectiveLevel}`,
   );
   return true;
 }
@@ -148,7 +152,7 @@ export async function openTelegramThinkingMenu<
     state,
     buildTelegramThinkingMenuRenderPayload(
       await deps.getActiveModel(),
-      deps.getThinkingLevel(),
+      await deps.getThinkingLevel(),
     ),
     deps,
   );

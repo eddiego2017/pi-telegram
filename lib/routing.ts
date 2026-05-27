@@ -163,8 +163,8 @@ export interface TelegramInboundRouteRuntimeDeps<
     typeof PromptTemplates.getTelegramPromptTemplateCommands
   >[0];
   downloadFile: Media.DownloadTelegramMessageFilesDeps["downloadFile"];
-  getThinkingLevel: () => Model.ThinkingLevel;
-  setThinkingLevel: (level: Model.ThinkingLevel) => void;
+  getThinkingLevel: (ctx: TContext) => Model.ThinkingLevel | Promise<Model.ThinkingLevel>;
+  setThinkingLevel: (level: Model.ThinkingLevel) => Model.ThinkingLevel | void;
   persistScopedModelPatterns?: (
     patterns: string[],
     ctx: TContext,
@@ -274,13 +274,16 @@ export function createTelegramInboundRouteRuntime<
     getThinkingLevel: deps.getThinkingLevel,
     setThinkingLevel: async (level, ctx) => {
       if (deps.tabManager?.isEnabled()) {
-        const changed = await deps.tabManager.setActiveThinkingLevel(level, ctx);
-        if (!changed) {
+        const effectiveLevel = await deps.tabManager.setActiveThinkingLevel(
+          level,
+          ctx,
+        );
+        if (!effectiveLevel) {
           throw new Error("Thinking level is not available.");
         }
-        return;
+        return effectiveLevel;
       }
-      deps.setThinkingLevel(level);
+      return deps.setThinkingLevel(level) ?? deps.getThinkingLevel(ctx);
     },
     updateStatus: deps.updateStatus,
     updateModelMenuMessage: deps.menuActions.updateModelMenuMessage,

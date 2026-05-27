@@ -130,8 +130,10 @@ export interface TelegramMenuEffectPort<TModel extends MenuModel = MenuModel> {
   persistScopedModelPatterns?: (patterns: string[]) => Promise<void>;
   setModel: (model: TModel) => Promise<boolean>;
   setCurrentModel: (model: TModel) => void;
-  setThinkingLevel: (level: ThinkingLevel) => TelegramMaybePromise<void>;
-  getCurrentThinkingLevel: () => ThinkingLevel;
+  setThinkingLevel: (
+    level: ThinkingLevel,
+  ) => TelegramMaybePromise<ThinkingLevel | void>;
+  getCurrentThinkingLevel: () => TelegramMaybePromise<ThinkingLevel>;
   stagePendingModelSwitch: (selection: ScopedTelegramModel<TModel>) => void;
   restartInterruptedTelegramTurn: (
     selection: ScopedTelegramModel<TModel>,
@@ -185,11 +187,11 @@ export interface TelegramMenuCallbackRuntimeDeps<
   getActiveModel: (
     ctx: TContext,
   ) => TelegramMaybePromise<TModel | undefined>;
-  getThinkingLevel: () => ThinkingLevel;
+  getThinkingLevel: (ctx: TContext) => TelegramMaybePromise<ThinkingLevel>;
   setThinkingLevel: (
     level: ThinkingLevel,
     ctx: TContext,
-  ) => TelegramMaybePromise<void>;
+  ) => TelegramMaybePromise<ThinkingLevel | void>;
   updateStatus: (ctx: TContext) => void;
   updateModelMenuMessage: (
     state: TelegramModelMenuState<TModel>,
@@ -258,7 +260,7 @@ export interface TelegramMenuActionRuntimeDeps<
   getActiveModel: (
     ctx: TContext,
   ) => TelegramMaybePromise<TModel | undefined>;
-  getThinkingLevel: () => ThinkingLevel;
+  getThinkingLevel: (ctx: TContext) => TelegramMaybePromise<ThinkingLevel>;
   getQueueItemCount?: () => number;
   buildStatusHtml: (ctx: TContext) => string;
   storeModelMenuState: (state: TelegramModelMenuState<TModel>) => void;
@@ -428,11 +430,11 @@ export interface TelegramMenuCallbackRuntimeAdapterDeps<
   getActiveModel: (
     ctx: TContext,
   ) => TelegramMaybePromise<TModel | undefined>;
-  getThinkingLevel: () => ThinkingLevel;
+  getThinkingLevel: (ctx: TContext) => TelegramMaybePromise<ThinkingLevel>;
   setThinkingLevel: (
     level: ThinkingLevel,
     ctx: TContext,
-  ) => TelegramMaybePromise<void>;
+  ) => TelegramMaybePromise<ThinkingLevel | void>;
   updateStatus: (ctx: TContext, error?: string) => void;
   updateModelMenuMessage: (
     state: TelegramModelMenuState<TModel>,
@@ -663,10 +665,11 @@ export async function handleTelegramMenuCallbackRuntime<
         await deps.getActiveModel(ctx),
         {
           setThinkingLevel: async (level) => {
-            await deps.setThinkingLevel(level, ctx);
+            const effectiveLevel = await deps.setThinkingLevel(level, ctx);
             deps.updateStatus(ctx);
+            return effectiveLevel;
           },
-          getCurrentThinkingLevel: deps.getThinkingLevel,
+          getCurrentThinkingLevel: () => deps.getThinkingLevel(ctx),
           updateStatusMessage: () => deps.updateStatusMessage(state, ctx),
           answerCallbackQuery: deps.answerCallbackQuery,
         },
@@ -679,7 +682,7 @@ export async function handleTelegramMenuCallbackRuntime<
             data: query.data,
             state,
             activeModel: await deps.getActiveModel(ctx),
-            currentThinkingLevel: deps.getThinkingLevel(),
+            currentThinkingLevel: await deps.getThinkingLevel(ctx),
             isIdle: await deps.isIdle(ctx),
             canRestartBusyRun:
               deps.hasActiveTelegramTurn() && deps.hasAbortHandler(),
@@ -696,8 +699,9 @@ export async function handleTelegramMenuCallbackRuntime<
             setModel: (model) => deps.setModel(model, ctx),
             setCurrentModel: (model) => deps.setCurrentModel(model, ctx),
             setThinkingLevel: async (level) => {
-              await deps.setThinkingLevel(level, ctx);
+              const effectiveLevel = await deps.setThinkingLevel(level, ctx);
               deps.updateStatus(ctx);
+              return effectiveLevel;
             },
             stagePendingModelSwitch: (selection) => {
               deps.stagePendingModelSwitch(selection, ctx);
@@ -769,7 +773,7 @@ export function createTelegramMenuActionRuntime<
       updateTelegramThinkingMenuMessage(
         state,
         await deps.getActiveModel(ctx),
-        deps.getThinkingLevel(),
+        await deps.getThinkingLevel(ctx),
         deps,
       ),
     updateStatusMessage: async (state, ctx) =>
@@ -777,7 +781,7 @@ export function createTelegramMenuActionRuntime<
         state,
         deps.buildStatusHtml(ctx),
         await deps.getActiveModel(ctx),
-        deps.getThinkingLevel(),
+        await deps.getThinkingLevel(ctx),
         deps,
         deps.getQueueItemCount?.() ?? 0,
         deps.sectionRegistry,
@@ -795,7 +799,7 @@ export function createTelegramMenuActionRuntime<
         getModelMenuState: () => deps.getModelMenuState(chatId, ctx),
         buildStatusHtml: () => deps.buildStatusHtml(ctx),
         getActiveModel: () => deps.getActiveModel(ctx),
-        getThinkingLevel: deps.getThinkingLevel,
+        getThinkingLevel: () => deps.getThinkingLevel(ctx),
         getQueueItemCount: deps.getQueueItemCount,
         sendStatusMenu: (
           state,
@@ -844,7 +848,7 @@ export function createTelegramMenuActionRuntime<
       openTelegramThinkingMenu({
         getModelMenuState: () => deps.getModelMenuState(chatId, ctx),
         getActiveModel: () => deps.getActiveModel(ctx),
-        getThinkingLevel: deps.getThinkingLevel,
+        getThinkingLevel: () => deps.getThinkingLevel(ctx),
         storeModelMenuState: deps.storeModelMenuState,
         editInteractiveMessage: deps.editInteractiveMessage,
         sendInteractiveMessage: deps.sendInteractiveMessage,

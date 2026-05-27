@@ -41,7 +41,7 @@ export interface TelegramStatusMenuOpenDeps<
   getModelMenuState: () => Promise<TelegramModelMenuState<TModel>>;
   buildStatusHtml: () => string;
   getActiveModel: () => TelegramMaybePromise<TModel | undefined>;
-  getThinkingLevel: () => ThinkingLevel;
+  getThinkingLevel: () => TelegramMaybePromise<ThinkingLevel>;
   getQueueItemCount?: () => number;
   sendStatusMenu: (
     state: TelegramModelMenuState<TModel>,
@@ -105,7 +105,7 @@ export async function openTelegramStatusMenu<
     state,
     deps.buildStatusHtml(),
     await deps.getActiveModel(),
-    deps.getThinkingLevel(),
+    await deps.getThinkingLevel(),
     deps.getQueueItemCount?.() ?? 0,
   );
   if (messageId === undefined) return;

@@ -13,6 +13,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import {
   compactExtensionContext,
+  createEffectiveThinkingLevelSetter,
   createExtensionApiRuntimePorts,
   createTelegramSessionFileTreeBranchCursor,
   createScopedModelPatternPersister,
@@ -83,6 +84,13 @@ test("Pi API runtime ports bind methods without losing receiver context", async 
   assert.deepEqual(runtime.getCommands(), []);
   assert.equal(runtime.getThinkingLevel(), "high");
   runtime.setThinkingLevel("low");
+  assert.equal(
+    createEffectiveThinkingLevelSetter({
+      setThinkingLevel: api.setThinkingLevel.bind(api),
+      getThinkingLevel: api.getThinkingLevel.bind(api),
+    })("medium"),
+    "high",
+  );
   assert.equal(await runtime.setModel(createHarnessModel("gpt-5")), true);
   assert.deepEqual(api.events, [
     "send:hello:followUp",
@@ -90,6 +98,8 @@ test("Pi API runtime ports bind methods without losing receiver context", async 
     "commands",
     "get-thinking",
     "thinking:low",
+    "thinking:medium",
+    "get-thinking",
     "model:gpt-5",
   ]);
 });

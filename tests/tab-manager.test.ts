@@ -176,7 +176,7 @@ function makeResumePortTabManager(
     getActiveSessionName: () => undefined,
     canSwitchActiveModel: async () => true,
     selectActiveModel: async () => true,
-    setActiveThinkingLevel: async () => true,
+    setActiveThinkingLevel: async (level) => level,
     setActiveSessionName: async () => true,
     compactActive: () => false,
     newActiveSession: async () => undefined,
@@ -606,7 +606,7 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     provider: "openai",
     id: "gpt-5.5",
   });
-  assert.equal(await manager.setActiveThinkingLevel("high", "ctx"), true);
+  assert.equal(await manager.setActiveThinkingLevel("high", "ctx"), "high");
   assert.equal(await manager.getActiveThinkingLevel("ctx"), "high");
   assert.deepEqual(backends.get("A")?.thinkingSelections, ["high"]);
   assert.equal(manager.getActiveSessionName("ctx"), undefined);

@@ -79,6 +79,16 @@ export interface PiSessionSnapshotReferenceOptions {
   contextWindow?: number;
 }
 
+export function createEffectiveThinkingLevelSetter(deps: {
+  setThinkingLevel: ExtensionAPI["setThinkingLevel"];
+  getThinkingLevel: ExtensionAPI["getThinkingLevel"];
+}): ExtensionAPI["setThinkingLevel"] {
+  return (level) => {
+    deps.setThinkingLevel(level);
+    return deps.getThinkingLevel();
+  };
+}
+
 export function createExtensionApiRuntimePorts(
   api: Pick<
     ExtensionAPI,

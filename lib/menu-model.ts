@@ -155,7 +155,9 @@ export type TelegramModelMenuCallbackDeps<
   persistScopedModelPatterns?: (patterns: string[]) => Promise<void>;
   setModel: (model: TModel) => Promise<boolean>;
   setCurrentModel: (model: TModel) => void;
-  setThinkingLevel: (level: ThinkingLevel) => TelegramMaybePromise<void>;
+  setThinkingLevel: (
+    level: ThinkingLevel,
+  ) => TelegramMaybePromise<ThinkingLevel | void>;
   stagePendingModelSwitch: (selection: ScopedTelegramModel<TModel>) => void;
   restartInterruptedTelegramTurn: (
     selection: ScopedTelegramModel<TModel>,

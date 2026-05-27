@@ -443,6 +443,10 @@ export default function (pi: Pi.ExtensionAPI) {
       buildStatusHtml,
       getPromptTemplateCommands,
     });
+  const getTabAwareThinkingLevel = TabManager.createTelegramTabAwareThinkingLevelGetter({
+    tabManager,
+    getParentThinkingLevel: getThinkingLevel,
+  });
   const menuActions = Menu.createTelegramMenuActionRuntimeWithStateBuilder<
     ActivePiModel,
     Pi.ExtensionContext
@@ -450,7 +454,7 @@ export default function (pi: Pi.ExtensionAPI) {
     runtime: modelMenuRuntime,
     createSettingsManager: Pi.createSettingsManager,
     getActiveModel: tabAwareModelMenuPorts.getActiveModel,
-    getThinkingLevel,
+    getThinkingLevel: getTabAwareThinkingLevel,
     getQueueItemCount,
     buildStatusHtml: buildAppStatusHtml,
     storeModelMenuState: modelMenuRuntime.storeState,
@@ -646,8 +650,11 @@ export default function (pi: Pi.ExtensionAPI) {
     setMyCommands,
     getCommands,
     downloadFile: downloadTelegramBridgeFile,
-    getThinkingLevel,
-    setThinkingLevel,
+    getThinkingLevel: getTabAwareThinkingLevel,
+    setThinkingLevel: Pi.createEffectiveThinkingLevelSetter({
+      setThinkingLevel,
+      getThinkingLevel,
+    }),
     persistScopedModelPatterns: Pi.createScopedModelPatternPersister({
       createSettingsManager: Pi.createSettingsManager,
       clearCachedModelMenuInputs: modelMenuRuntime.clearCachedInputs,
