@@ -32,7 +32,7 @@ interface TestModel extends Model.MenuModel {
 interface TestUser extends Updates.TelegramUser {}
 
 interface TestMessage extends Routing.TelegramRoutedMessage {
-  chat: { id: number; type: "private" };
+  chat: { id: number; type: "private" | "group" | "supergroup" };
   from?: TestUser;
   message_id: number;
   text?: string;
@@ -49,6 +49,28 @@ interface TestUpdate extends Updates.TelegramUpdateFlow {
   message?: TestMessage;
   edited_message?: TestMessage;
   callback_query?: TestCallbackQuery;
+}
+
+function createTestConfigStore(options: { trustedChatIds?: number[] } = {}) {
+  return {
+    getAllowedUserId: () => 7,
+    setAllowedUserId: () => undefined,
+    persist: async () => undefined,
+    getConcurrentTabsConfig: () => ({
+      enabled: true,
+      maxTabs: 10,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: options.trustedChatIds ?? [],
+      },
+    }),
+  };
 }
 
 test("Routing runtime forwards authorized text messages into prompt queueing", async () => {
@@ -108,11 +130,7 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
     TestContext,
     TestModel
   >({
-    configStore: {
-      getAllowedUserId: () => 7,
-      setAllowedUserId: () => undefined,
-      persist: async () => undefined,
-    },
+    configStore: createTestConfigStore(),
     bridgeRuntime,
     activeTurnRuntime,
     mediaGroupRuntime: Media.createTelegramMediaGroupController<
@@ -332,11 +350,7 @@ test("Routing runtime forwards forum topic service messages only to the tab mana
     TestContext,
     TestModel
   >({
-    configStore: {
-      getAllowedUserId: () => 7,
-      setAllowedUserId: () => undefined,
-      persist: async () => undefined,
-    },
+    configStore: createTestConfigStore(),
     bridgeRuntime,
     activeTurnRuntime,
     mediaGroupRuntime: Media.createTelegramMediaGroupController<
@@ -396,8 +410,7 @@ test("Routing runtime forwards forum topic service messages only to the tab mana
     {
       message: {
         message_id: 20,
-        chat: { id: -10042, type: "private" },
-        from: { id: 7, is_bot: false },
+        chat: { id: -10042, type: "supergroup" },
         message_thread_id: 77,
         forum_topic_created: { name: "Deploy Debug" },
       },
@@ -408,6 +421,259 @@ test("Routing runtime forwards forum topic service messages only to the tab mana
     "topic:-10042:77:Deploy Debug",
     'scope:{"chatId":-10042,"messageThreadId":77}',
   ]);
+  assert.deepEqual(telegramQueueStore.getQueuedItems(), []);
+});
+
+test("Routing runtime ignores ordinary messages from untrusted forum chats", async () => {
+  const events: string[] = [];
+  const model: TestModel = { provider: "test", id: "model" };
+  const bridgeRuntime = Runtime.createTelegramBridgeRuntime();
+  const activeTurnRuntime = Queue.createTelegramActiveTurnStore();
+  const telegramQueueStore = Queue.createTelegramQueueStore<TestContext>();
+  const queueMutationRuntime = Queue.createTelegramQueueMutationController({
+    ...telegramQueueStore,
+    updateStatus: () => events.push("status"),
+  });
+  const currentModelRuntime = Model.createCurrentModelRuntime<
+    TestContext,
+    TestModel
+  >({
+    getContextModel: () => model,
+    updateStatus: () => events.push("status"),
+  });
+  const modelSwitchController =
+    Model.createTelegramModelSwitchControllerRuntime<
+      TestContext,
+      Model.ScopedTelegramModel<TestModel>
+    >({
+      isIdle: () => true,
+      getPendingModelSwitch: () => undefined,
+      setPendingModelSwitch: () => undefined,
+      getActiveTurn: activeTurnRuntime.get,
+      getAbortHandler: bridgeRuntime.abort.getHandler,
+      hasAbortHandler: bridgeRuntime.abort.hasHandler,
+      getActiveToolExecutions: bridgeRuntime.lifecycle.getActiveToolExecutions,
+      allocateItemOrder: bridgeRuntime.queue.allocateItemOrder,
+      allocateControlOrder: bridgeRuntime.queue.allocateControlOrder,
+      appendQueuedItem: queueMutationRuntime.append,
+      updateStatus: () => events.push("status"),
+    });
+  const routeRuntime = Routing.createTelegramInboundRouteRuntime<
+    TestUpdate,
+    TestMessage,
+    TestCallbackQuery,
+    TestContext,
+    TestModel
+  >({
+    configStore: createTestConfigStore({ trustedChatIds: [-10042] }),
+    bridgeRuntime,
+    activeTurnRuntime,
+    mediaGroupRuntime: Media.createTelegramMediaGroupController<
+      TestMessage,
+      TestContext
+    >(),
+    textGroupRuntime: TextGroups.createTelegramTextGroupController<
+      TestMessage,
+      TestContext
+    >(),
+    telegramQueueStore,
+    queueMutationRuntime,
+    modelMenuRuntime: Menu.createTelegramModelMenuRuntime<TestModel>(),
+    currentModelRuntime,
+    modelSwitchController,
+    menuActions: {
+      updateModelMenuMessage: async () => undefined,
+      updateThinkingMenuMessage: async () => undefined,
+      updateStatusMessage: async () => undefined,
+      sendStatusMessage: async () => undefined,
+      openModelMenu: async () => undefined,
+      openThinkingMenu: async () => undefined,
+    },
+    openQueueMenu: async () => undefined,
+    queueMenuCallbackHandler: async () => false,
+    inboundHandlerRuntime: {
+      process: async (files, rawText) => ({
+        rawText,
+        promptFiles: files,
+        handlerOutputs: [],
+        handledFiles: [],
+      }),
+    },
+    updateStatus: () => events.push("status"),
+    dispatchNextQueuedTelegramTurn: () => events.push("dispatch"),
+    answerCallbackQuery: async () => undefined,
+    answerGuestQuery: async () => undefined,
+    sendTextReply: async () => undefined,
+    setMyCommands: async () => undefined,
+    getCommands: () => [],
+    downloadFile: async (_fileId, fileName) => `/tmp/${fileName}`,
+    getThinkingLevel: () => "high",
+    setThinkingLevel: () => undefined,
+    setModel: async () => true,
+    listAvailableModels: () => [],
+    findActiveModelByIdentity: () => undefined,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    compact: () => undefined,
+    injectNewSession: async () => true,
+    injectClone: async () => undefined,
+    getSessionName: () => undefined,
+    setSessionName: () => undefined,
+  });
+  await routeRuntime.handleUpdate(
+    {
+      message: {
+        message_id: 30,
+        chat: { id: -10043, type: "supergroup" },
+        from: { id: 7, is_bot: false },
+        message_thread_id: 77,
+        text: "hello from untrusted forum",
+      },
+    },
+    { cwd: "/repo" },
+  );
+  assert.deepEqual(events, []);
+  assert.deepEqual(telegramQueueStore.getQueuedItems(), []);
+});
+
+test("Routing runtime ignores forum topic service messages from untrusted chats", async () => {
+  const events: string[] = [];
+  const bridgeRuntime = Runtime.createTelegramBridgeRuntime();
+  const activeTurnRuntime = Queue.createTelegramActiveTurnStore();
+  const telegramQueueStore = Queue.createTelegramQueueStore<TestContext>();
+  const queueMutationRuntime = Queue.createTelegramQueueMutationController({
+    ...telegramQueueStore,
+    updateStatus: () => events.push("status"),
+  });
+  const model: TestModel = { provider: "test", id: "model" };
+  const currentModelRuntime = Model.createCurrentModelRuntime<
+    TestContext,
+    TestModel
+  >({
+    getContextModel: () => model,
+    updateStatus: () => events.push("status"),
+  });
+  const modelSwitchController =
+    Model.createTelegramModelSwitchControllerRuntime<
+      TestContext,
+      Model.ScopedTelegramModel<TestModel>
+    >({
+      isIdle: () => true,
+      getPendingModelSwitch: () => undefined,
+      setPendingModelSwitch: () => undefined,
+      getActiveTurn: activeTurnRuntime.get,
+      getAbortHandler: bridgeRuntime.abort.getHandler,
+      hasAbortHandler: bridgeRuntime.abort.hasHandler,
+      getActiveToolExecutions: bridgeRuntime.lifecycle.getActiveToolExecutions,
+      allocateItemOrder: bridgeRuntime.queue.allocateItemOrder,
+      allocateControlOrder: bridgeRuntime.queue.allocateControlOrder,
+      appendQueuedItem: queueMutationRuntime.append,
+      updateStatus: () => events.push("status"),
+    });
+  const tabManager: TelegramTabManager<TestContext> = {
+    isEnabled: () => true,
+    getActiveModel: async () => model,
+    getActiveThinkingLevel: async () => undefined,
+    getActiveSessionReference: () => undefined,
+    getActiveResumeSessionScope: () => undefined,
+    getActiveSessionName: () => undefined,
+    canSwitchActiveModel: async () => true,
+    selectActiveModel: async () => true,
+    setActiveThinkingLevel: async (level) => level,
+    setActiveSessionName: async () => true,
+    compactActive: () => false,
+    newActiveSession: async () => undefined,
+    deleteActiveSession: async () => undefined,
+    abortActive: async () => undefined,
+    switchSession: async () => false,
+    createActiveTreeBranch: async () => undefined,
+    handleCommand: async () => false,
+    handleCallbackQuery: async () => false,
+    handleTopicServiceMessage: async () => {
+      events.push("unexpected:topic-service");
+      return true;
+    },
+    dispatchPrompt: async () => {
+      events.push("unexpected:prompt");
+      return true;
+    },
+    dispose: async () => undefined,
+  };
+  const routeRuntime = Routing.createTelegramInboundRouteRuntime<
+    TestUpdate,
+    TestMessage,
+    TestCallbackQuery,
+    TestContext,
+    TestModel
+  >({
+    configStore: createTestConfigStore({ trustedChatIds: [-10042] }),
+    bridgeRuntime,
+    activeTurnRuntime,
+    mediaGroupRuntime: Media.createTelegramMediaGroupController<
+      TestMessage,
+      TestContext
+    >(),
+    textGroupRuntime: TextGroups.createTelegramTextGroupController<
+      TestMessage,
+      TestContext
+    >(),
+    telegramQueueStore,
+    queueMutationRuntime,
+    modelMenuRuntime: Menu.createTelegramModelMenuRuntime<TestModel>(),
+    currentModelRuntime,
+    modelSwitchController,
+    menuActions: {
+      updateModelMenuMessage: async () => undefined,
+      updateThinkingMenuMessage: async () => undefined,
+      updateStatusMessage: async () => undefined,
+      sendStatusMessage: async () => undefined,
+      openModelMenu: async () => undefined,
+      openThinkingMenu: async () => undefined,
+    },
+    openQueueMenu: async () => undefined,
+    queueMenuCallbackHandler: async () => false,
+    inboundHandlerRuntime: {
+      process: async (files, rawText) => ({
+        rawText,
+        promptFiles: files,
+        handlerOutputs: [],
+        handledFiles: [],
+      }),
+    },
+    updateStatus: () => events.push("status"),
+    dispatchNextQueuedTelegramTurn: () => events.push("dispatch"),
+    answerCallbackQuery: async () => undefined,
+    answerGuestQuery: async () => undefined,
+    sendTextReply: async () => undefined,
+    setMyCommands: async () => undefined,
+    getCommands: () => [],
+    downloadFile: async (_fileId, fileName) => `/tmp/${fileName}`,
+    getThinkingLevel: () => "high",
+    setThinkingLevel: () => undefined,
+    setModel: async () => true,
+    listAvailableModels: () => [],
+    findActiveModelByIdentity: () => undefined,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    compact: () => undefined,
+    injectNewSession: async () => true,
+    injectClone: async () => undefined,
+    getSessionName: () => undefined,
+    setSessionName: () => undefined,
+    tabManager,
+  });
+  await routeRuntime.handleUpdate(
+    {
+      message: {
+        message_id: 20,
+        chat: { id: -10043, type: "supergroup" },
+        message_thread_id: 77,
+        forum_topic_closed: {},
+      },
+    },
+    { cwd: "/repo" },
+  );
+  assert.deepEqual(events, []);
   assert.deepEqual(telegramQueueStore.getQueuedItems(), []);
 });
 
@@ -503,11 +769,7 @@ test("Routing runtime applies model menu picks to the active tab when enabled", 
     TestContext,
     TestModel
   >({
-    configStore: {
-      getAllowedUserId: () => 7,
-      setAllowedUserId: () => undefined,
-      persist: async () => undefined,
-    },
+    configStore: createTestConfigStore(),
     bridgeRuntime,
     activeTurnRuntime,
     mediaGroupRuntime: Media.createTelegramMediaGroupController<

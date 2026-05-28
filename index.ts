@@ -219,6 +219,7 @@ export default function (pi: Pi.ExtensionAPI) {
     answerCallbackQuery,
     answerGuestQuery,
     deleteMessage: deleteTelegramMessage,
+    deleteForumTopic,
     prepareTempDir,
   } = Api.createDefaultTelegramBridgeApiRuntime({
     getBotToken: configStore.getBotToken,
@@ -302,6 +303,7 @@ export default function (pi: Pi.ExtensionAPI) {
     recordRuntimeEvent,
     debugLogger,
     createTreeBranch: Pi.createTelegramSessionFileTreeBranchCursor,
+    deleteForumTopic,
   });
   const getTabReferenceContextWindow =
     TabManager.createTelegramTabReferenceContextWindowGetter<

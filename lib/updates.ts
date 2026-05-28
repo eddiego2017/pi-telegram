@@ -179,11 +179,29 @@ export function getAuthorizedTelegramCallbackQuery(
   return query;
 }
 
+export function isTelegramForumTopicServiceMessage(
+  message: TelegramUpdateMessage | undefined,
+): message is TelegramUpdateMessage {
+  return !!(
+    message &&
+    (message.forum_topic_created ||
+      message.forum_topic_edited ||
+      message.forum_topic_closed ||
+      message.forum_topic_reopened ||
+      message.general_forum_topic_hidden ||
+      message.general_forum_topic_unhidden)
+  );
+}
+
 export function getAuthorizedTelegramMessage(
   update: TelegramUpdateRouting,
 ): TelegramUpdateMessage | undefined {
   const message = update.message;
-  if (!message || !message.from || message.from.is_bot) {
+  if (!message) return undefined;
+  if (isTelegramForumTopicServiceMessage(message) && !message.from) {
+    return message;
+  }
+  if (!message.from || message.from.is_bot) {
     return undefined;
   }
   return message;
@@ -212,7 +230,7 @@ export function getAuthorizedTelegramGuestMessage(
 // --- Flow ---
 
 export interface TelegramMessageReactionUpdated {
-  chat: { type: string };
+  chat: TelegramChat;
   user?: TelegramUser;
   message_id: number;
   old_reaction: TelegramReactionType[];
@@ -241,7 +259,7 @@ export type TelegramUpdateFlowAction<
     }
   | {
       kind: "message";
-      message: TMessage & { from: TelegramUser };
+      message: TMessage;
       authorization: TelegramAuthorizationState;
     }
   | {
@@ -285,16 +303,15 @@ export function buildTelegramUpdateFlowAction<
     };
   }
   const message = getAuthorizedTelegramMessage(update);
-  if (message?.from) {
+  if (message) {
     return {
       kind: "message",
       message: message as NonNullable<
         TUpdate["message"] | TUpdate["edited_message"]
-      > & { from: TelegramUser },
-      authorization: getTelegramAuthorizationState(
-        message.from.id,
-        allowedUserId,
-      ),
+      >,
+      authorization: message.from
+        ? getTelegramAuthorizationState(message.from.id, allowedUserId)
+        : { kind: "allow" },
     };
   }
   const editedMessage = getAuthorizedTelegramEditedMessage(update);
@@ -349,7 +366,7 @@ export type TelegramUpdateExecutionPlan<
     }
   | {
       kind: "message";
-      message: TMessage & { from: TelegramUser };
+      message: TMessage;
       shouldPair: boolean;
       shouldNotifyPaired: boolean;
       shouldDeny: boolean;
@@ -483,6 +500,7 @@ export interface TelegramUpdateRuntimeDeps<
     guestMessage: TelegramGuestMessage & { from: TelegramUser },
     ctx: TContext,
   ) => Promise<void>;
+  isTelegramChatAllowed?: (chat: TelegramChat | undefined) => boolean;
 }
 
 export interface TelegramUpdateRuntimeControllerDeps<
@@ -532,6 +550,7 @@ export interface TelegramUpdateRuntimeControllerDeps<
     guestMessage: TelegramGuestMessage & { from: TelegramUser },
     ctx: TContext,
   ) => Promise<void>;
+  isTelegramChatAllowed?: (chat: TelegramChat | undefined) => boolean;
 }
 
 export interface TelegramUpdateRuntimeController<
@@ -658,6 +677,7 @@ export function createTelegramPairedUpdateRuntime<
       deps.handleAuthorizedTelegramEditedMessage,
     handleAuthorizedTelegramGuestMessage:
       deps.handleAuthorizedTelegramGuestMessage,
+    isTelegramChatAllowed: deps.isTelegramChatAllowed,
   });
 }
 
@@ -675,6 +695,12 @@ export function createTelegramUpdateRuntime<
     reactionUpdate: NonNullable<TUpdate["message_reaction"]>,
     ctx: TContext,
   ): Promise<void> => {
+    if (
+      deps.isTelegramChatAllowed &&
+      !deps.isTelegramChatAllowed(reactionUpdate.chat)
+    ) {
+      return;
+    }
     await handleAuthorizedTelegramReactionUpdate(reactionUpdate, {
       allowedUserId: deps.getAllowedUserId(),
       ctx,
@@ -707,6 +733,7 @@ export function createTelegramUpdateRuntime<
           deps.handleAuthorizedTelegramEditedMessage,
         handleAuthorizedTelegramGuestMessage:
           deps.handleAuthorizedTelegramGuestMessage,
+        isTelegramChatAllowed: deps.isTelegramChatAllowed,
       }),
   };
 }
@@ -841,6 +868,12 @@ async function executeTelegramUpdatePlanInner<
       return;
     }
     if (plan.kind === "reaction") {
+      if (
+        deps.isTelegramChatAllowed &&
+        !deps.isTelegramChatAllowed(plan.reactionUpdate.chat)
+      ) {
+        return;
+      }
       await deps.handleAuthorizedTelegramReactionUpdate(
         plan.reactionUpdate,
         deps.ctx,
@@ -880,7 +913,7 @@ async function executeTelegramUpdatePlanInner<
       }
       return;
     }
-    const pairedNow = plan.shouldPair
+    const pairedNow = plan.shouldPair && plan.message.from
       ? await deps.pairTelegramUserIfNeeded(plan.message.from.id, deps.ctx)
       : false;
     const replyTarget = getTelegramMessageReplyTarget(plan.message);

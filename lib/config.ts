@@ -17,6 +17,8 @@ export interface TelegramConcurrentTabTopicBindingConfig {
   generalIsDefault?: boolean;
   autoCreate?: boolean;
   closeOnTopicClose?: boolean;
+  deleteTopicOnClose?: boolean;
+  trustedChatIds?: number[];
 }
 
 export interface TelegramNormalizedConcurrentTabTopicBindingConfig {
@@ -24,6 +26,8 @@ export interface TelegramNormalizedConcurrentTabTopicBindingConfig {
   generalIsDefault: boolean;
   autoCreate: boolean;
   closeOnTopicClose: boolean;
+  deleteTopicOnClose: boolean;
+  trustedChatIds: number[];
 }
 
 export interface TelegramConcurrentTabsConfig {
@@ -198,6 +202,25 @@ export function createTelegramConfigStore(
   };
 }
 
+export function normalizeTelegramTrustedChatIds(
+  trustedChatIds: unknown,
+): number[] {
+  if (!Array.isArray(trustedChatIds)) return [];
+  return [...new Set(
+    trustedChatIds.filter(
+      (chatId): chatId is number => Number.isSafeInteger(chatId),
+    ),
+  )];
+}
+
+export function isTelegramTrustedChat(
+  trustedChatIds: readonly number[] | undefined,
+  chatId: unknown,
+): boolean {
+  if (!trustedChatIds || trustedChatIds.length === 0) return true;
+  return typeof chatId === "number" && trustedChatIds.includes(chatId);
+}
+
 export function normalizeTelegramConcurrentTabTopicBindingConfig(
   config?: TelegramConcurrentTabTopicBindingConfig,
 ): TelegramNormalizedConcurrentTabTopicBindingConfig {
@@ -206,6 +229,8 @@ export function normalizeTelegramConcurrentTabTopicBindingConfig(
     generalIsDefault: config?.generalIsDefault ?? true,
     autoCreate: config?.autoCreate ?? true,
     closeOnTopicClose: config?.closeOnTopicClose ?? true,
+    deleteTopicOnClose: config?.deleteTopicOnClose ?? false,
+    trustedChatIds: normalizeTelegramTrustedChatIds(config?.trustedChatIds),
   };
 }
 

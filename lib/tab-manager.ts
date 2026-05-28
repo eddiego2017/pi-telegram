@@ -46,8 +46,9 @@ import {
   type TelegramTabsState,
 } from "./tabs.ts";
 import type { TelegramNormalizedConcurrentTabsConfig } from "./config.ts";
+import { isTelegramForumTopicPermissionError } from "./api.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./model.ts";
-import { getTelegramAgentDir } from "./config.ts";
+import { getTelegramAgentDir, isTelegramTrustedChat } from "./config.ts";
 import type { TelegramDebugLogger } from "./debug.ts";
 import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
 import {
@@ -204,6 +205,10 @@ export interface TelegramTabManagerDeps<TContext> {
     entryId: string,
   ) => Promise<TelegramTabTreeBranchResult> | TelegramTabTreeBranchResult;
   deleteSessionFile?: (sessionPath: string) => Promise<void>;
+  deleteForumTopic?: (
+    chatId: number,
+    messageThreadId: number,
+  ) => Promise<boolean>;
 }
 
 interface RuntimeTab {
@@ -1476,6 +1481,8 @@ export function createTelegramTabManager<TContext>(
   const getTopicBindingConfig = () => deps.getConfig().topicBinding;
   const isTopicBindingEnabled = (): boolean =>
     isEnabled() && getTopicBindingConfig()?.enabled === true;
+  const isTrustedTopicBindingChat = (chatId: unknown): boolean =>
+    isTelegramTrustedChat(getTopicBindingConfig()?.trustedChatIds, chatId);
   const isTopicDeliveryActive = (runtime: RuntimeTab): boolean =>
     runtime.activeTopicDelivery === true;
   const isRuntimeDeliveryActive = (
@@ -2363,6 +2370,13 @@ export function createTelegramTabManager<TContext>(
   ): Promise<RuntimeTab | undefined> => {
     const topicBinding = getTopicBindingConfig();
     if (!topicBinding?.enabled) return undefined;
+    if (!isTrustedTopicBindingChat(turn.chatId)) {
+      await sendTurnTextReply(
+        turn,
+        "This Telegram forum is not authorized for topic workspaces.",
+      );
+      return undefined;
+    }
     if (turn.messageThreadId === undefined && topicBinding.generalIsDefault) {
       return getRuntime(tabState, TELEGRAM_DEFAULT_TAB_NAME);
     }
@@ -2398,6 +2412,13 @@ export function createTelegramTabManager<TContext>(
     ctx: TContext,
   ): Promise<RuntimeTab | undefined> => {
     if (!isTopicBindingEnabled()) return getRuntime(tabState, tabState.activeTab);
+    if (turn.messageThreadId !== undefined && !isTrustedTopicBindingChat(turn.chatId)) {
+      await sendTurnTextReply(
+        turn,
+        "This Telegram forum is not authorized for topic workspaces.",
+      );
+      return undefined;
+    }
     if (turn.messageThreadId === undefined) {
       return getTopicBindingConfig()?.generalIsDefault
         ? getRuntime(tabState, TELEGRAM_DEFAULT_TAB_NAME)
@@ -2449,6 +2470,9 @@ export function createTelegramTabManager<TContext>(
     if (!isTopicBindingEnabled()) return { scoped: false };
     const scope = getAmbientTelegramThreadContext();
     if (!scope) return { scoped: false };
+    if (!isTrustedTopicBindingChat(scope.chatId)) {
+      return scope.messageThreadId === undefined ? { scoped: false } : { scoped: true };
+    }
     const topicBinding = getTopicBindingConfig();
     if (scope.messageThreadId === undefined) {
       return {
@@ -2483,6 +2507,9 @@ export function createTelegramTabManager<TContext>(
     if (!isTopicBindingEnabled()) return { scoped: false };
     const scope = getAmbientTelegramThreadContext();
     if (!scope) return { scoped: false };
+    if (!isTrustedTopicBindingChat(scope.chatId)) {
+      return scope.messageThreadId === undefined ? { scoped: false } : { scoped: true };
+    }
     const topicBinding = getTopicBindingConfig();
     if (scope.messageThreadId === undefined) {
       return {
@@ -3708,6 +3735,15 @@ export function createTelegramTabManager<TContext>(
       if (typeof chatId !== "number" || typeof messageThreadId !== "number") {
         return true;
       }
+      if (!isTrustedTopicBindingChat(chatId)) {
+        deps.debugLogger?.log("telegram.tab.topic.service.untrusted_chat", {
+          kind: serviceKind,
+          chatId,
+          messageThreadId,
+          hasFrom: "from" in message,
+        });
+        return true;
+      }
       const tabState = await ensureState(deps.getCwd(ctx));
       if (serviceKind === "created") {
         await upsertTelegramTopicTabRecord(
@@ -3718,7 +3754,7 @@ export function createTelegramTabManager<TContext>(
             topicTitle: message.forum_topic_created?.name,
           },
           ctx,
-          { enforceCapacity: true },
+          { enforceCapacity: false },
         );
         return true;
       }
@@ -3734,7 +3770,8 @@ export function createTelegramTabManager<TContext>(
         return true;
       }
       if (serviceKind === "closed") {
-        if (!getTopicBindingConfig()?.closeOnTopicClose) return true;
+        const topicBinding = getTopicBindingConfig();
+        if (!topicBinding?.closeOnTopicClose) return true;
         const record = findTelegramTabByTopic(
           tabState.tabs,
           chatId,
@@ -3743,6 +3780,41 @@ export function createTelegramTabManager<TContext>(
         if (!record || record.name === TELEGRAM_DEFAULT_TAB_NAME) return true;
         const result = await closeRuntimeTab(tabState, record.name, true);
         if (result.closed) await persist();
+        if (topicBinding.deleteTopicOnClose && deps.deleteForumTopic) {
+          try {
+            await deps.deleteForumTopic(chatId, messageThreadId);
+            deps.debugLogger?.log("telegram.tab.topic.delete", {
+              chatId,
+              messageThreadId,
+              tab: record.name,
+              result: "deleted",
+            });
+          } catch (error) {
+            deps.debugLogger?.log("telegram.tab.topic.delete_error", {
+              chatId,
+              messageThreadId,
+              tab: record.name,
+              error: getErrorMessage(error),
+            });
+            deps.recordRuntimeEvent?.("tabs", error, {
+              action: "deleteForumTopic",
+              tab: record.name,
+              chatId,
+              messageThreadId,
+            });
+            if (isTelegramForumTopicPermissionError(error)) {
+              await runWithTelegramThreadContext(
+                { chatId, messageThreadId: undefined },
+                () =>
+                  deps.sendTextReply(
+                    chatId,
+                    undefined,
+                    "已關閉 pi tab，但無法刪除 Telegram topic。請把 bot 設為 admin，並開啟 Manage Topics 權限。",
+                  ),
+              );
+            }
+          }
+        }
         return true;
       }
       if (serviceKind === "reopened") {

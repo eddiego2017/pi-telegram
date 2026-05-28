@@ -6,7 +6,10 @@
 
 import { readFile } from "node:fs/promises";
 import * as Commands from "./commands.ts";
-import type { TelegramConfigStore } from "./config.ts";
+import {
+  isTelegramTrustedChat,
+  type TelegramConfigStore,
+} from "./config.ts";
 import type { TelegramDebugLogger } from "./debug.ts";
 import type { TelegramSectionRegistry } from "./extension-sections.ts";
 import type { TelegramInboundHandlerRuntime } from "./inbound-handlers.ts";
@@ -50,7 +53,10 @@ export interface TelegramInboundRouteRuntimeDeps<
 > {
   configStore: Pick<
     TelegramConfigStore,
-    "getAllowedUserId" | "setAllowedUserId" | "persist"
+    | "getAllowedUserId"
+    | "setAllowedUserId"
+    | "persist"
+    | "getConcurrentTabsConfig"
   >;
   bridgeRuntime: TelegramBridgeRuntime;
   activeTurnRuntime: Queue.TelegramActiveTurnStore;
@@ -230,18 +236,42 @@ function getTelegramTurnId(chatId: unknown, messageId: unknown): string | undefi
     : undefined;
 }
 
-function isTelegramForumTopicServiceMessage(
-  message: Updates.TelegramUpdateMessage,
+function getTelegramTopicBindingTrustedChatIds(
+  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
+): readonly number[] {
+  return configStore.getConcurrentTabsConfig().topicBinding?.trustedChatIds ?? [];
+}
+
+function isTelegramTrustedTopicBindingChat(
+  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
+  chatId: unknown,
 ): boolean {
-  return !!(
-    message.forum_topic_created ||
-    message.forum_topic_edited ||
-    message.forum_topic_closed ||
-    message.forum_topic_reopened ||
-    message.general_forum_topic_hidden ||
-    message.general_forum_topic_unhidden
+  return isTelegramTrustedChat(
+    getTelegramTopicBindingTrustedChatIds(configStore),
+    chatId,
   );
 }
+
+function shouldIgnoreTelegramUntrustedForumChat(
+  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
+  message: Updates.TelegramUpdateMessage | undefined,
+): boolean {
+  const trustedChatIds = getTelegramTopicBindingTrustedChatIds(configStore);
+  if (trustedChatIds.length === 0) return false;
+  if (!message || message.chat?.type === "private") return false;
+  return !isTelegramTrustedChat(trustedChatIds, message.chat?.id);
+}
+
+function isTelegramChatAllowedForTopicBinding(
+  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
+  chat: Updates.TelegramChat | undefined,
+): boolean {
+  return !shouldIgnoreTelegramUntrustedForumChat(
+    configStore,
+    chat ? { chat } : undefined,
+  );
+}
+
 
 export function createTelegramInboundRouteRuntime<
   TUpdate extends Updates.TelegramUpdateFlow & {
@@ -374,6 +404,14 @@ export function createTelegramInboundRouteRuntime<
       query,
     );
     try {
+    if (shouldIgnoreTelegramUntrustedForumChat(deps.configStore, query.message)) {
+      deps.debugLogger?.log("telegram.route.callback.untrusted_chat", {
+        callbackQueryId: query.id,
+        chatId: query.message?.chat?.id,
+        messageId: query.message?.message_id,
+      });
+      return;
+    }
     if (deps.buttonActionStore) {
       const handled = await OutboundHandlers.handleTelegramButtonCallbackQuery(
         query,
@@ -773,7 +811,26 @@ export function createTelegramInboundRouteRuntime<
         message,
       );
       try {
-        if (isTelegramForumTopicServiceMessage(message)) {
+        if (shouldIgnoreTelegramUntrustedForumChat(deps.configStore, message)) {
+          deps.debugLogger?.log("telegram.route.message.untrusted_chat", {
+            turnId: getTelegramTurnId(message.chat?.id, message.message_id),
+            chatId: message.chat?.id,
+            messageId: message.message_id,
+            messageThreadId: message.message_thread_id,
+            fromUserId: message.from?.id,
+          });
+          return;
+        }
+        if (Updates.isTelegramForumTopicServiceMessage(message)) {
+          if (!isTelegramTrustedTopicBindingChat(deps.configStore, message.chat?.id)) {
+            deps.debugLogger?.log("telegram.route.topic_service.untrusted_chat", {
+              chatId: message.chat?.id,
+              messageId: message.message_id,
+              messageThreadId: message.message_thread_id,
+              hasFrom: !!message.from,
+            });
+            return;
+          }
           const handledByTopic =
             await deps.tabManager?.handleTopicServiceMessage(message, ctx);
           if (handledByTopic !== false) return;
@@ -791,6 +848,16 @@ export function createTelegramInboundRouteRuntime<
       }
     },
     handleAuthorizedTelegramEditedMessage: (message, ctx) => {
+      if (shouldIgnoreTelegramUntrustedForumChat(deps.configStore, message)) {
+        deps.debugLogger?.log("telegram.route.edited_message.untrusted_chat", {
+          turnId: getTelegramTurnId(message.chat?.id, message.message_id),
+          chatId: message.chat?.id,
+          messageId: message.message_id,
+          messageThreadId: message.message_thread_id,
+          fromUserId: message.from?.id,
+        });
+        return;
+      }
       deps.debugLogger?.log(
         "telegram.route.edited_message",
         {
@@ -803,6 +870,8 @@ export function createTelegramInboundRouteRuntime<
       );
       return editRuntime.updateFromEditedMessage(message, ctx);
     },
+    isTelegramChatAllowed: (chat) =>
+      isTelegramChatAllowedForTopicBinding(deps.configStore, chat),
     handleAuthorizedTelegramGuestMessage: async (message, ctx) => {
       const startedAt = Date.now();
       deps.debugLogger?.log(

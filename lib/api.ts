@@ -356,6 +356,10 @@ export interface TelegramBridgeApiRuntime {
     options?: { parseMode?: string },
   ) => Promise<void>;
   deleteMessage: (chatId: number, messageId: number) => Promise<void>;
+  deleteForumTopic: (
+    chatId: number,
+    messageThreadId: number,
+  ) => Promise<boolean>;
   prepareTempDir: () => Promise<number>;
 }
 
@@ -426,7 +430,8 @@ function isTelegramOutboundApiMethod(method: string): boolean {
   return (
     method.startsWith("send") ||
     method.startsWith("edit") ||
-    method === "deleteMessage"
+    method === "deleteMessage" ||
+    method === "deleteForumTopic"
   );
 }
 
@@ -737,6 +742,25 @@ export async function deleteTelegramMessage(
   }
 }
 
+export function isTelegramForumTopicPermissionError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("not enough rights") ||
+    message.includes("not enough privileges") ||
+    message.includes("need administrator") ||
+    message.includes("administrator rights") ||
+    message.includes("not an administrator") ||
+    message.includes("chat_admin_required") ||
+    message.includes("can't delete") ||
+    message.includes("cannot delete") ||
+    message.includes("can't manage") ||
+    message.includes("cannot manage") ||
+    message.includes("manage topics") ||
+    message.includes("can_manage_topics")
+  );
+}
+
 export function createTelegramChatActionSender<TAction extends string>(
   sendChatAction: (chatId: number, action: TAction) => Promise<unknown>,
   action: TAction,
@@ -1040,6 +1064,11 @@ export function createTelegramBridgeApiRuntime(
         chat_id: chatId,
         message_id: messageId,
       }).then(() => {}),
+    deleteForumTopic: (chatId, messageThreadId) =>
+      callRecorded<boolean>("deleteForumTopic", {
+        chat_id: chatId,
+        message_thread_id: messageThreadId,
+      }),
   };
 }
 

@@ -1,793 +1,994 @@
-# Forum Topics as Concurrent Tabs — Feasibility Plan
+# Telegram Forum-Native Topics Plan
 
-## Goal
+## North Star
 
-Map Telegram forum topics onto pi-telegram concurrent tabs:
+Telegram forum topics should be the native workspace/tab model for pi-telegram in a forum supergroup.
 
-1. Creating or first using a Telegram forum topic creates a tab.
-2. Messages inside that topic use the topic-bound tab/session, isolated like `/tab`.
-3. Closing the Telegram forum topic closes the tab worker while keeping the session file.
-4. The forum General topic maps to the existing `default` tab.
-
-This should feel native in Telegram: Telegram's topic list becomes the tab selector, while pi-telegram's existing RPC worker/tab machinery remains the execution layer.
-
-## Current Baseline
-
-The repository is already close to supporting this.
-
-Existing pieces:
-
-- `lib/tab-manager.ts` owns durable tab state, RPC child workers, `/tab` commands, tab close/switch/restart, worker event delivery, inactive completion notices, `/new`, `/resume`, `/session`, `/tree`, model/thinking selection, and active-tab prompt dispatch.
-- `lib/tabs.ts` owns tab record shape, validation, command parsing, state normalization, and status formatting.
-- `lib/turns.ts` already captures `messageThreadId` from the first Telegram message into prompt turns.
-- `lib/queue.ts` already carries `messageThreadId` on `PendingTelegramTurn` and active-turn state.
-- `lib/thread-context.ts` provides an `AsyncLocalStorage` scope for `(chatId, messageThreadId)` and `lib/api.ts` injects `message_thread_id` for outbound API calls when the outbound `chat_id` matches the ambient or active-turn scope.
-- `lib/updates.ts` already stamps ambient thread context for messages, edited messages, and callback queries.
-- `lib/polling.ts` already asks for `message` updates, so service messages such as forum topic create/close can arrive through the existing update lane if the bot is allowed to receive them.
-
-Main mismatch:
-
-- Concurrent tabs currently route normal prompts to `state.activeTab`.
-- Forum-topic semantics need routing by `(chatId, message_thread_id)` rather than the last manually selected tab.
-
-## Product Semantics
-
-### Topic-to-tab mapping
-
-- General topic → `default` tab.
-- Any non-General `message_thread_id` → one dedicated tab.
-- Topic title is display metadata, not the stable identity.
-- Stable identity should be based on chat id and topic id, not topic title, because topic titles can be duplicated, renamed, localized, or contain characters outside current tab-name validation.
-
-Recommended internal identity:
+User-facing model:
 
 ```text
-source.kind = "telegram-topic"
-source.chatId = -100...
-source.messageThreadId = 123
-source.topicTitle = "Deploy Debug"
+Telegram forum topic = workspace / topic / user-visible tab
+General topic        = General workspace
+a pi worker          = temporary runtime for a topic
+session JSONL        = durable conversation history, independent from topic/workspace lifecycle
 ```
 
-Recommended internal tab name:
+Implementation model for now:
 
 ```text
-topic-123
+existing tab-manager / tab records = implementation detail for per-topic runtime isolation
 ```
 
-However, because authorization is user-based rather than chat-allowlist-based, the same operator can already address the bot from multiple forum supergroups. Use a collision-safe compact variant from day one, while keeping the source object as the real stable identity:
+Long-term direction:
 
 ```text
-tg-<chat-hash>-<thread-base36>
+Stop exposing independent manual tabs in Telegram forum-native mode.
+Use Telegram forum topics as the canonical UI and lifecycle.
+Gradually retire the user-facing "tab" concept.
 ```
 
-Avoid raw `topic--1001234567890-123` if it risks the current 32-character tab-name limit. The source object should store full `chatId` and `messageThreadId` from day one so we do not paint ourselves into a single-chat corner.
+This means:
 
-### Lazy creation versus explicit creation
+```text
+Create Telegram topic  -> create/update local topic binding
+Switch Telegram topic  -> switch workspace
+Close Telegram topic   -> close/remove local binding, optionally delete Telegram topic
+Manual /tab lifecycle  -> disabled/legacy in forum-native mode
+```
 
-We should support both:
+## Current Confirmed Behavior
 
-1. Explicit creation: `forum_topic_created` service message creates the tab and records the title.
-2. Lazy creation: the first ordinary message seen in an unknown topic creates the tab.
+Already implemented and live smoke-tested:
 
-Lazy creation is important because the bot may miss service updates due to previous offsets, downtime, permission gaps, or because a topic already existed before enabling the feature.
+- Topic-bound records store stable source metadata:
 
-Fact check: Telegram documents that bots receive service messages regardless of privacy mode. However, ordinary non-command topic messages in groups are only delivered when the bot is an admin, privacy mode is disabled and the bot was re-added, or the message is otherwise addressed to the bot (command/mention/reply). Lazy creation from ordinary messages is therefore reliable only under those deployment conditions.
+  ```text
+  source.kind = telegram-topic
+  source.chatId
+  source.messageThreadId
+  source.topicTitle
+  ```
 
-### Topic closure
+- Routing uses `(chatId, message_thread_id)` for non-General topics.
+- Topic title is display metadata only; identity is `chatId + messageThreadId`.
+- Topic prompts route to their topic-bound runtime and do not depend on global `/tab activeTab`.
+- Worker output, typing, tool previews, and final replies return to the originating topic.
+- `forum_topic_created` creates/updates a topic-bound record.
+- Unknown topic ordinary messages can lazily create a record when `autoCreate=true`.
+- `forum_topic_closed` closes/removes the corresponding non-default topic-bound record.
+- With `deleteTopicOnClose=true`, `forum_topic_closed` also calls Telegram Bot API `deleteForumTopic`.
+- `trustedChatIds` restricts forum-native routing/lifecycle to Eddie's whitelisted forum chat while preserving private DM behavior.
+- From-less forum service messages are accepted only when the chat is trusted.
+- Untrusted non-private messages, callback queries, reaction updates, and topic lifecycle events are ignored before they can enqueue work or mutate topic records.
+- Live smoke test passed:
 
-- `forum_topic_closed` should force-close the bound non-default tab.
-- Closing a tab should dispose the worker and remove the tab record, but preserve the session JSONL file.
-- If a worker is running, topic closure should behave like forced close, not like `/tab close` without `--force`, because Telegram topic close is an external lifecycle event.
-- General/default should not be closable through topic events.
-- MVP session continuity after close must be explicit: if we remove the tab record, reopening the topic later creates a new tab session even though the old JSONL file remains on disk. If we want reopen to restore the old session, we need a tombstone/closed-mapping design instead of deleting the record.
+  ```text
+  create topic -> send test -> Close topic
+  result: pi topic-bound record removed, Telegram topic deleted
+  ```
 
-### Reopen and rename
-
-Telegram has service events for reopen/edit. MVP can be conservative:
-
-- `forum_topic_reopened`: for MVP, if the tab record was removed on close, lazy-create a fresh tab/session on first message; optionally recreate immediately if the event has thread id. Later, a tombstone/closed-mapping design can restore the previous session file.
-- `forum_topic_edited`: update display title/session name metadata if present.
-
-Do not block MVP on full rename/reopen support.
-
-## Configuration
-
-Add this as an opt-in layer under concurrent tabs.
-
-Minimal config:
+Eddie's current local desired config:
 
 ```json
 {
   "concurrentTabs": {
     "enabled": true,
-    "maxTabs": 10,
-    "inactiveNotify": true,
     "topicBinding": {
       "enabled": true,
       "generalIsDefault": true,
       "autoCreate": true,
-      "closeOnTopicClose": true
+      "closeOnTopicClose": true,
+      "deleteTopicOnClose": true,
+      "trustedChatIds": [-1003961592045]
     }
   }
 }
 ```
 
-Type shape:
+## Verified Telegram/Bot API Facts
 
-```ts
-export interface TelegramConcurrentTabTopicBindingConfig {
-  enabled?: boolean;
-  generalIsDefault?: boolean;
-  autoCreate?: boolean;
-  closeOnTopicClose?: boolean;
-}
+Live observations:
 
-export interface TelegramConcurrentTabsConfig {
-  enabled?: boolean;
-  maxTabs?: number;
-  inactiveNotify?: boolean;
-  workerExtensions?: string[];
-  topicBinding?: TelegramConcurrentTabTopicBindingConfig;
-}
-```
+- `Close topic` reliably sends `forum_topic_closed` to the bot.
+- `Reopen topic` sends `forum_topic_reopened` to the bot.
+- Direct Telegram UI `Delete topic` did not produce a usable Bot API update in live testing:
 
-Normalization defaults:
+  ```text
+  no forum_topic_closed
+  no forum_topic_deleted
+  no deleted_business_messages
+  no later update for that thread
+  ```
 
-- `topicBinding.enabled`: false
-- `generalIsDefault`: true
-- `autoCreate`: true
-- `closeOnTopicClose`: true
-
-Reason: topic binding changes routing semantics significantly, so it must not turn on merely because concurrent tabs are enabled.
-
-## Data Model Changes
-
-Extend `TelegramTabRecord` in `lib/tabs.ts`:
-
-```ts
-export interface TelegramTabSourceTelegramTopic {
-  kind: "telegram-topic";
-  chatId: number;
-  messageThreadId?: number;
-  topicTitle?: string;
-}
-
-export type TelegramTabSource = TelegramTabSourceTelegramTopic;
-
-export interface TelegramTabRecord {
-  name: string;
-  // existing fields...
-  source?: TelegramTabSource;
-}
-```
-
-General/default record can either omit `source` or carry:
-
-```ts
-source: { kind: "telegram-topic", chatId, messageThreadId: undefined, topicTitle: "General" }
-```
-
-Recommendation: keep `default` source optional initially and resolve General by absence of `message_thread_id`; this avoids mutating the default tab record every time a message arrives from a chat.
-
-Do not include `closedAt` in the MVP source if topic close deletes the tab record. If reopen/session continuity becomes a requirement, add a separate tombstone/closed mapping that preserves `source + sessionFile + closedAt` without counting as an open tab.
-
-Add helpers in `lib/tabs.ts`:
-
-```ts
-normalizeTelegramTopicTabName(chatId: number, messageThreadId: number): string
-findTelegramTabByTopic(tabs, chatId, messageThreadId): TelegramTabRecord | undefined
-isTelegramGeneralTopicMessage(message): boolean
-```
-
-Be explicit that `messageThreadId === undefined` means General/default. Do not use `0` as a synthetic thread id unless Telegram Bot API proves General sends a stable id in this project. Some Telegram APIs represent General as no `message_thread_id`; treating undefined as General is safest.
-
-## Update Types Needed
-
-`lib/api.ts` and `lib/updates.ts` message interfaces currently include text/media fields and `message_thread_id`, but not forum service payloads. Add optional fields:
-
-```ts
-forum_topic_created?: { name: string; icon_color?: number; icon_custom_emoji_id?: string; is_name_implicit?: true };
-forum_topic_edited?: { name?: string; icon_custom_emoji_id?: string };
-forum_topic_closed?: Record<string, never>;
-forum_topic_reopened?: Record<string, never>;
-general_forum_topic_hidden?: Record<string, never>;
-general_forum_topic_unhidden?: Record<string, never>;
-```
-
-Only `forum_topic_created` and `forum_topic_closed` are required for MVP.
-
-Important routing detail:
-
-- Service messages often have `from`, so current `getAuthorizedTelegramMessage()` should pass them.
-- If any service message lacks `from`, current authorization would ignore it. That is acceptable for MVP because lazy creation from the first user message covers missed create events, but close events without `from` would not close the tab. We should verify Bot API behavior in tests or runtime logs before relying on close events.
-- If close events lack `from`, we need a separate authorization policy using chat allowlist or previously known paired chat. That is beyond minimal MVP and should be designed separately.
-- Known forum service messages should be swallowed and never forwarded as prompts, even when `topicBinding.enabled` is false. If topic binding is disabled, ignore them after logging/debug handling.
-
-## Routing Design
-
-### New tab-manager APIs
-
-Add thread-aware APIs rather than overloading every current active-tab method ad hoc.
-
-Suggested interface additions:
-
-```ts
-export interface TelegramTabRouteScope {
-  chatId: number;
-  messageThreadId?: number;
-  topicTitle?: string;
-}
-
-resolveRouteScopeTab(scope, ctx): Promise<RuntimeTab | undefined>
-handleForumTopicEvent(event, ctx): Promise<boolean>
-dispatchPrompt(turn, ctx): Promise<boolean> // internally route by turn.messageThreadId when topic binding enabled
-```
-
-Better public surface:
-
-```ts
-handleTopicServiceMessage(message, ctx): Promise<boolean>
-```
-
-where tab-manager owns create/close/rename policy and routing stays clean in `routing.ts`.
-
-### Prompt dispatch
-
-`TelegramTabPromptTurn` must first grow the thread id that `PendingTelegramTurn` already carries:
-
-```ts
-export interface TelegramTabPromptTurn {
-  chatId: number;
-  messageThreadId?: number;
-  replyToMessageId: number;
-  content: readonly TelegramTabPromptContent[];
-  statusSummary?: string;
-}
-```
-
-Current flow in `lib/routing.ts`:
-
-1. Build turn via `promptTurnBuilder(messages, [], ctx)`.
-2. If concurrent tabs enabled, call `tabManager.dispatchPrompt(turn, ctx)`.
-3. `dispatchPrompt` sends to `state.activeTab`.
-
-Change only tab-manager's selection logic:
-
-```ts
-const runtime = topicBinding.enabled
-  ? await getRuntimeForTurnTopic(tabState, turn, ctx)
-  : getRuntime(tabState, tabState.activeTab)
-```
-
-`getRuntimeForTurnTopic` behavior:
-
-- If `turn.messageThreadId` is undefined and `generalIsDefault`, return default runtime.
-- If `turn.messageThreadId` is a number:
-  - find existing source mapping for `(turn.chatId, turn.messageThreadId)`.
-  - if missing and `autoCreate`, create a tab record with source metadata and persist.
-  - if missing and not auto-create, reply with a short error and return handled.
-- Do not update `state.activeTab` merely because a topic received a prompt. Topic routing should not have global side effects.
-- Treat the selected topic runtime as delivery-active for its own worker output, independent of global `state.activeTab`.
-
-This is the key semantic shift: when topic binding is enabled, `activeTab` becomes mainly a manual `/tab` dashboard concept, while normal topic prompts use topic scope.
-
-Important implementation detail: current tab-manager streaming/final delivery is gated by checks like `tabState.activeTab === tabName` in helpers such as `streamActiveTabMarkdown()`, `streamActiveTabText()`, `sendActiveTabToolCallMessage()`, and `agent_end` final-reply logic. Topic-bound tabs must bypass or replace this gate, otherwise a topic tab that does not mutate `activeTab` will only produce inactive completion notices instead of the actual answer.
-
-### Commands in topics
-
-Commands are trickier than normal prompts because many command handlers currently ask for the active tab:
-
-- `/llm`
-- `/model`
-- `/thinking`
-- `/new`
-- `/resume`
-- `/session`
-- `/tree`
-- `/name`
-- `/compact`
-- `/abort`
-- `/stop`
-
-Desired behavior: when invoked inside a forum topic, these commands target the topic-bound tab, not the global `activeTab`.
-
-Minimum viable approach:
-
-- Extend tab-manager's existing "active" resolver to prefer ambient thread context when topic binding is enabled.
-- All existing APIs named `getActive*`, `newActiveSession`, `abortActive`, `selectActiveModel`, etc. can internally do:
-
-```ts
-const scoped = getAmbientTelegramThreadContext();
-if (topicBinding.enabled && scoped?.chatId !== undefined) {
-  return getOrCreateRuntimeForTopic(scoped.chatId, scoped.messageThreadId, ctx);
-}
-return getRuntime(tabState, tabState.activeTab);
-```
-
-This works because `lib/updates.ts` already wraps message/callback handling in `runWithTelegramThreadContext()`. Callback queries from inline menus inside a topic should therefore target the same topic if the callback message carries `message_thread_id`.
-
-Sync getter caveat: several tab-aware APIs are synchronous today (`getActiveSessionReference()`, `getActiveResumeSessionScope()`, `getActiveSessionName()`, and `compactActive()`'s boolean return path). They cannot safely lazy-create a missing topic tab or report async max-tab errors. MVP should either pre-resolve/create the topic runtime in command handlers before these getters are used, or make sync getters resolve only existing scoped tabs and avoid silently falling back to the parent/global session.
-
-Caveat: `/tab` itself should probably remain a global/manual dashboard command. Topic binding can still allow `/tab status`, but using `/tab switch` inside a topic should not change where that topic's normal messages go. Document this distinction.
-
-### Service message handling
-
-Add early handling in `routing.ts` before tree handler and text/media dispatch. It should run for known forum service messages regardless of whether topic binding is enabled, so those service messages are swallowed instead of forwarded to π as empty prompts.
-
-```ts
-const handledByTopic = await deps.tabManager?.handleTopicServiceMessage?.(message, ctx);
-if (handledByTopic) return;
-```
-
-Service handlers:
-
-- `forum_topic_created`: create mapping if not present, without starting the backend worker; maybe send a short confirmation into the topic: `Created tab for topic <name>.`
-- `forum_topic_closed`: close mapping if present; maybe no reply because closed topics may reject sends.
-- `forum_topic_edited`: update topic title metadata.
-
-Avoid forwarding service messages as prompts.
-
-## Outbound Delivery and Thread Safety
-
-This is the highest-risk implementation area.
-
-Ambient thread context works while processing the inbound message, but tab worker output arrives later from RPC event listeners, outside that original async call chain. Therefore topic-bound tabs must persist delivery thread context on the runtime tab.
-
-Extend `RuntimeTab`:
-
-```ts
-activeChatId?: number;
-activeMessageThreadId?: number;
-activeReplyToMessageId?: number;
-```
-
-`dispatchPrompt(turn, ctx)` must set:
-
-```ts
-runtime.activeChatId = turn.chatId;
-runtime.activeMessageThreadId = turn.messageThreadId;
-runtime.activeReplyToMessageId = turn.replyToMessageId;
-```
-
-Before wrapping sends, fix the current active-tab delivery gate. Topic-bound worker output should be sent to the topic that started the prompt even when `state.activeTab` points elsewhere. Inactive completion notices are useful for manual `/tab` use, but they are not a substitute for the actual topic reply.
-
-Every tab-manager outbound call triggered by worker events should either:
-
-1. pass `message_thread_id` explicitly through the API abstraction, or
-2. wrap delivery with `runWithTelegramThreadContext({ chatId, messageThreadId }, () => send...)`.
-
-Option 2 is less invasive because the existing API runtime already injects thread ids for `sendMessage`, `sendChatAction`, `editMessageText` where applicable, and multipart. Add a small helper in tab-manager:
-
-```ts
-function runInTabThreadContext<T>(runtime: RuntimeTab, fn: () => T): T {
-  if (runtime.activeChatId === undefined) return fn();
-  return runWithTelegramThreadContext(
-    { chatId: runtime.activeChatId, messageThreadId: runtime.activeMessageThreadId },
-    fn,
-  );
-}
-```
-
-Then use it around:
-
-- streaming markdown send/edit
-- final markdown replies
-- inactive completion notices
-- error replies
-- typing actions
-- switch replay messages if the switch came from topic context
-
-Typing loop note: `startTabTyping()` currently stops typing for every other runtime via `stopOtherTabTyping(tabName)`. That is reasonable for manual active-tab UX but wrong for concurrent topic tabs. When topic binding is enabled, typing should be scoped by runtime/chat/thread and should not stop unrelated topic workers. The `sendTypingAction` call must also run under the tab thread context.
-
-`editMessageText` does not need `message_thread_id` for an existing message, but wrapping is harmless and keeps send paths safe.
-
-## Queue and Grouping Edge Cases
-
-### Text split coalescing
-
-`lib/text-groups.ts` currently groups by `chat.id + from.id`, not `message_thread_id`. In a forum supergroup, two long split messages from the same user in two topics could collide.
-
-Update key to include thread id:
-
-```ts
-return `${message.chat.id}:${message.message_thread_id ?? "general"}:${message.from.id}`;
-```
-
-Need to add `message_thread_id?: number` to `TelegramTextGroupMessage`.
-
-### Media group coalescing
-
-Need to inspect `Media.createTelegramMediaGroupController` keying. If it keys only by `media_group_id`, Telegram's media group ids are probably unique enough, but safer keying should include chat id and thread id. Add `message_thread_id?: number` to `TelegramMediaGroupMessage` if needed.
-
-### Queue reactions and edits
-
-Reactions/removals are currently by message id only. In a supergroup, message ids are chat-scoped, and the bridge is one bot/chat stream, so this is likely okay. If future multi-chat support is real, removal should include chat id.
-
-Edited queued turns already carry `messageThreadId` from turn creation; no major change needed.
-
-### Non-tab queued turn delivery
-
-The existing non-tab queue path also needs attention if forum topics should work outside topic-bound tabs. `PendingTelegramTurn` already stores `messageThreadId`, but `agent_end` currently resets active-turn state before final delivery. Final replies, previews, outbound button artifacts, and `telegram_attach` multipart sends should either wrap delivery in `runWithTelegramThreadContext({ chatId: turn.chatId, messageThreadId: turn.messageThreadId })` or pass `message_thread_id` explicitly.
-
-Control items and button prompts should preserve thread scope too:
-
-- `PendingTelegramControlItem` should include `messageThreadId` when built from a topic command.
-- `createTelegramButtonPromptTurn()` should copy `query.message.message_thread_id` into the queued prompt.
-- Queue dispatch typing should use the queued item's thread id, not only `chatId`.
-
-## Capacity and Limits
-
-Forum topic auto-creation can hit `maxTabs`. Behavior should be explicit:
-
-- If `maxTabs` reached and a new topic receives a prompt, reply in that topic: `Maximum tab count reached. Close another topic/tab first.`
-- Do not silently route to default.
-- General/default should always be available and should count as one tab, as today.
-
-Topic title changes should not create a new tab.
-
-`forum_topic_created` should create/update the durable tab record only. Do not start a backend worker merely because a topic was created; first prompt/use should start the worker. If `maxTabs` is reached on a create service event, prefer debug log/no-op and report the capacity problem only when the first ordinary prompt arrives in that topic.
-
-## Authorization and Chat Scope
-
-Current authorization is user-id based. This means the owner can talk to the bot from a forum supergroup and pi-telegram will accept messages from that user; other users are denied/ignored.
-
-This is acceptable for a personal bot but has implications:
-
-- Other members in the forum will see bot replies unless the group/topic is private enough.
-- The bot does not currently enforce a chat allowlist.
-- If the owner posts in multiple forum supergroups, topic tab state can mix all those chats unless tab source includes chat id and naming avoids collisions.
-- With privacy mode enabled, the bot still receives service messages, but ordinary non-command topic messages require admin status, privacy-disabled/re-added setup, or direct addressing to the bot. This should be documented as an operational prerequisite for native-feeling topic tabs.
-
-Recommendation for MVP:
-
-- Keep existing user-id authorization.
-- Store `chatId` in topic source.
-- Document that topic binding is intended for operator-controlled private forum supergroups.
-- Consider a later `allowedChatIds` config if this becomes multi-chat production behavior.
-
-## UX Decisions
-
-### Should topic messages switch active tab?
-
-Recommendation: no.
-
-Topic binding should route by topic and leave `state.activeTab` alone. Otherwise concurrent messages in topics would constantly race the global active tab and make `/tab` dashboard state confusing.
-
-### What does `/tab` show?
-
-Keep existing dashboard. Add topic labels later:
+Therefore:
 
 ```text
-🗂 Deploy Debug · topic #123 · running
+Close topic  -> reliable lifecycle signal
+Delete topic -> not reliable via Bot API alone
 ```
 
-MVP can show internal names like `topic-123` and session/latest preview. That is acceptable but less polished.
+Design consequence:
 
-### What does `/tab close topic-123` do?
+- Official lifecycle should be Telegram UI **Close topic**.
+- When `deleteTopicOnClose=true`, pi treats Close topic as destructive completion and deletes the Telegram topic itself.
+- Manual Telegram UI Delete topic may leave local orphan records; cleanup will be best-effort Level 1 for now.
 
-It should close the tab but cannot close the Telegram topic. The reverse mapping is one-way for MVP: Telegram close closes tab; tab close does not modify Telegram forum topics.
+## Product Decisions
 
-### Should creating a topic send confirmation?
+### 1. Forum topic is the workspace
 
-Optional. Too much bot noise in topic lists can be annoying. Prefer debug log plus no message, or a very short confirmation only on first ordinary prompt:
+In forum-native mode, users should not think in terms of independent pi tabs.
+
+Preferred language:
 
 ```text
-Started topic tab Deploy Debug.
+topic
+workspace
+General
+session
+worker
 ```
 
-Existing prompt dispatch already replies `Started tab X.`; that may be enough.
+Avoid presenting manual tabs as a separate user concept in Telegram.
 
-## Implementation Phases
+### 2. Existing tab machinery remains internal for now
 
-### Phase 0 — Tests/design only
+Do not immediately rewrite the whole runtime from tabs to topics. The existing tab machinery already provides:
 
-- Write this plan.
-- No runtime behavior changes.
+- isolated worker processes,
+- per-runtime session state,
+- streaming/final reply delivery,
+- model/thinking/session controls,
+- persisted record state.
 
-### Phase 1 — Data/config foundation
+Short-term implementation can keep names like `TelegramTabRecord`, `tab-manager`, and `RuntimeTab` internally while changing Telegram-facing semantics.
 
-Files:
+Long-term Phase 5+ can rename/refactor internals toward topic/workspace terminology.
 
-- `lib/config.ts`
-- `lib/tabs.ts`
-- `tests/config.test.ts` or existing config suite
-- `tests/tabs.test.ts`
+### 3. `/tab` lifecycle commands should be disabled in forum-native mode
 
-Tasks:
-
-- Add `topicBinding` config type and defaults.
-- Add tab source types and state normalization preservation.
-- Add helper to build/find topic tab records.
-- Ensure old `telegram-tabs.json` still loads.
-
-Validation:
-
-```bash
-node --experimental-strip-types --test tests/tabs.test.ts tests/config.test.ts
-```
-
-### Phase 2 — Thread-aware tab routing for prompts
-
-Files:
-
-- `lib/tab-manager.ts`
-- `tests/tab-manager.test.ts`
-
-Tasks:
-
-- Add route-scope helpers.
-- Add `messageThreadId?: number` to `TelegramTabPromptTurn`.
-- In `dispatchPrompt`, choose topic-bound runtime when topic binding is enabled.
-- Lazy-create topic tabs.
-- Route General/undefined thread id to default.
-- Do not mutate `activeTab` on topic prompt.
-- Make topic-bound worker output delivery independent of `state.activeTab`.
-- Store `activeMessageThreadId` on runtime.
-- Wrap worker event outbound sends and typing actions in thread context.
-- Avoid stopping unrelated topic typing loops.
-
-Validation cases:
-
-- Two topic ids dispatch to two different fake backends.
-- General dispatch uses default backend.
-- Existing active-tab routing remains unchanged when topic binding disabled.
-- Max-tab limit returns a clear reply.
-- Worker final/stream output sends under the correct `message_thread_id` via a fake thread resolver or captured API body.
-
-### Phase 3 — Topic service messages
-
-Files:
-
-- `lib/api.ts`
-- `lib/updates.ts`
-- `lib/routing.ts`
-- `lib/tab-manager.ts`
-- `tests/updates.test.ts`
-- `tests/routing.test.ts`
-- `tests/tab-manager.test.ts`
-
-Tasks:
-
-- Add forum service payload fields to message interfaces.
-- Add `handleTopicServiceMessage()` in tab manager.
-- Call service handler before tree/menu/prompt routing.
-- Known forum service messages should be ignored/swallowed even when topic binding is disabled.
-- `forum_topic_created`: create/update topic tab metadata without starting the backend worker.
-- `forum_topic_closed`: force close tab if mapped.
-- `forum_topic_edited`: update title metadata if easy.
-- Ensure service messages are not forwarded to π as prompts.
-
-Validation cases:
-
-- Create event creates mapping.
-- Close event disposes backend and removes mapping.
-- Default cannot be closed by service event.
-- Unknown close is harmless.
-
-### Phase 4 — Commands target topic scope
-
-Files:
-
-- `lib/tab-manager.ts`
-- possibly `lib/routing.ts`
-- `tests/routing.test.ts`
-- `tests/tab-manager.test.ts`
-- model/menu/session/tree tests as needed
-
-Tasks:
-
-- Make active runtime resolution prefer ambient topic scope when topic binding is enabled.
-- Handle synchronous tab-aware getters deliberately: pre-resolve/create the scoped runtime before command/menu code calls them, or make them return only existing scoped tabs without parent fallback.
-- Ensure `/llm`, `/model`, `/thinking`, `/new`, `/resume`, `/session`, `/tree`, `/name`, `/compact`, `/abort`, `/stop` target the topic tab when invoked from a topic.
-- Preserve topic scope in queued control items and outbound button prompt turns.
-- Decide and test `/tab` as global/manual management.
-
-Validation cases:
-
-- `/abort` in topic A aborts topic A backend, not topic B or manual active tab.
-- `/new` in topic A updates topic A session pointer.
-- `/session` in topic A reads topic A session reference.
-- Callback from a menu message in topic A keeps targeting topic A through ambient callback thread context.
-
-### Phase 5 — Grouping and edge hardening
-
-Files:
-
-- `lib/text-groups.ts`
-- `lib/media.ts`
-- associated tests
-
-Tasks:
-
-- Include `message_thread_id` in long-text group key.
-- Review media group keying and include thread id if needed.
-- Add tests for same user sending split messages in two topics.
-
-### Phase 6 — Docs and changelog
-
-Files:
-
-- `README.md`
-- `docs/architecture.md`
-- `CHANGELOG.md`
-- maybe `BACKLOG.md` if any limitations remain
-
-Tasks:
-
-- Document config and behavior.
-- Document General/default mapping.
-- Document privacy/user-id authorization caveat and the admin/privacy-disabled requirement for native ordinary topic messages.
-- Document limitations: topic close does not delete session, `/tab close` does not close Telegram topic, worker `telegram_attach` still future work.
-
-## Feasibility Assessment
-
-### Technically feasible
-
-Yes. The architecture already has the two hardest primitives:
-
-1. isolated concurrent tab workers, and
-2. Telegram topic thread id propagation for outbound replies.
-
-Most work is selection/routing, state metadata, and tests.
-
-### Main risks
-
-1. **Active-tab-gated worker delivery**
-   - Existing tab-manager worker output is often sent only when `tabState.activeTab === tabName`.
-   - Mitigation: topic-bound runtimes must be delivery-active for their own chat/thread, independent of global `activeTab`.
-
-2. **Async outbound context loss**
-   - Worker events happen after the inbound update scope.
-   - Mitigation: store `activeMessageThreadId` on `RuntimeTab` and wrap tab-manager sends with `runWithTelegramThreadContext()`.
-
-3. **Command active-tab semantics**
-   - Many features call `getActive*` and assume one global active tab.
-   - Mitigation: centralize active runtime resolution in tab-manager so commands automatically become topic-scoped when ambient thread context exists.
-
-4. **Telegram service message variability**
-   - Create/close service updates may be missed due to offsets/downtime or may have authorization wrinkles if `from` is absent.
-   - Mitigation: lazy-create on first ordinary topic message; treat service events as optimization/lifecycle sync.
-
-5. **Long text/media grouping across topics**
-   - Existing text group key lacks thread id.
-   - Mitigation: include thread id in grouping keys.
-
-6. **UX confusion between `/tab` active tab and topic-bound tabs**
-   - Mitigation: document that topic messages route by topic; `/tab` remains a management dashboard/manual fallback.
-
-7. **Privacy and delivery mode in supergroups**
-   - Replies are visible in the topic, and ordinary topic messages may not be delivered under default bot privacy mode.
-   - Mitigation: document intended use as a private/operator-controlled forum group where the bot is admin or privacy mode is disabled/re-added; later consider chat allowlist.
-
-### Complexity estimate
-
-- Phase 1–2 prompt-only MVP: moderate, likely contained in `config`, `tabs`, `tab-manager`, tests.
-- Full command scoping and service lifecycle: medium-high because many menu/session/model paths rely on active-tab assumptions.
-- Biggest regression surface: `tab-manager.ts`, `routing.ts`, and menu callback behavior.
-
-## Recommended MVP Cut
-
-Do first:
-
-1. Config + tab source metadata.
-2. Lazy topic tab creation on first prompt.
-3. Topic prompt routing by `message_thread_id`.
-4. General → default.
-5. Make topic-bound worker output delivery independent of global `activeTab`.
-6. Store/wrap outbound thread context for tab worker replies and typing actions.
-7. Text-group key includes thread id.
-
-Defer until after smoke test:
-
-1. `forum_topic_created` confirmation behavior.
-2. `forum_topic_edited` title sync.
-3. Full `/tab` dashboard polish for topic labels.
-4. Chat allowlist.
-5. Telegram API calls to create/close topics from `/tab` actions.
-
-Reason: prompt routing plus correct outbound delivery proves the core idea. Service-message lifecycle and UI polish can be added safely once the core routing works in a real Telegram forum.
-
-## OpenClaw Telegram User API Discovery
-
-Runtime discovery on 2026-05-27 found a usable OpenClaw Telethon user-session path for read-only Telegram forum inspection. Keep this section secret-safe: record paths and procedures only, never token/API/session values.
-
-### Secret-safe locations
-
-OpenClaw runs in Kubernetes namespace `openclaw`, pod `openclaw-0`.
-
-Observed paths inside the OpenClaw container:
+Disable user-facing manual lifecycle operations that conflict with topic-native semantics:
 
 ```text
-~/.openclaw/credentials/                              # plural; singular credential was not present
-~/.openclaw/credentials/telegram-default-allowFrom.json
-~/.openclaw/credentials/telegram-pairing.json
-~/.openclaw/openclaw.json                            # Telegram bot tokens live under channels.telegram.accounts.*.botToken
-~/.openclaw/telegram/                                # bot-info, command hashes, update offsets, ingress spool
-~/.openclaw/skills/telegram-digest/SKILL.md          # Telethon User API app credential reference; do not echo values
-~/.openclaw/skills/telegram-digest/sessions/telegram_digest.session
-~/.openclaw/workspace/*/skills/telegram-digest/sessions/telegram_digest.session
+/tab new
+/tab switch
+/tab close
+/tab rename
 ```
 
-The Telethon scripts are:
+Reason:
 
 ```text
-~/.openclaw/skills/telegram-digest/scripts/setup_session.py
-~/.openclaw/skills/telegram-digest/scripts/fetch_channels.py
-~/.openclaw/skills/telegram-digest/scripts/list_topics.py
+Telegram topic list is the workspace selector.
+Telegram Close topic is the lifecycle close operation.
 ```
 
-Security rules for this discovery:
+`/tab` may temporarily remain as a legacy/read-only dashboard during migration, but it should not be the primary control surface.
 
-- Never print or paste bot tokens, API hash, session strings, phone numbers, or `.session` file contents.
-- Prefer redacted key/path scans (`key name`, type, length) over `cat`/full file output.
-- `.session` files grant full Telegram account access. Treat them as high-sensitivity credentials.
-- Do not copy OpenClaw credentials into pi's canonical `/home/pi/.pi/credentials/` unless explicitly requested.
-- Any Telegram side effect through the user account, such as creating a group/topic, adding a bot, or sending messages, needs explicit operator confirmation.
+Long-term: hide or remove `/tab` from normal Telegram forum-native UX.
 
-### Verification results
+### 4. Repair commands may use `/topic`
 
-Read-only checks performed:
+Although the long-term goal is to avoid multiplying slash commands, repair/orphan operations are conceptually topic operations, not tab operations.
 
-- The OpenClaw `telegram-digest` Telethon session is authorized.
-- That user account can see 2 Telegram forum groups.
-- `@eddie_pi_bot` was not present in those 2 forum groups at discovery time, so they were not immediately usable for pi end-to-end topic smoke testing.
-- pi's `~/.pi/agent/telegram.json` had `concurrentTabs.enabled: true`, but `concurrentTabs.topicBinding` was not yet configured at discovery time.
+Acceptable future commands:
 
-### Smoke-test plan using the user session
+```text
+/topic orphans
+/topic cleanup
+```
 
-After the prompt-routing MVP is installed in the running pi extension:
+Scope:
 
-1. Enable topic binding in pi's config:
+- diagnostic/repair only,
+- not primary workflow,
+- not for creating topics,
+- not for switching topics,
+- not for normal close lifecycle.
 
-   ```json
-   {
-     "concurrentTabs": {
-       "enabled": true,
-       "maxTabs": 10,
-       "inactiveNotify": true,
-       "topicBinding": {
-         "enabled": true,
-         "generalIsDefault": true,
-         "autoCreate": true,
-         "closeOnTopicClose": true
-       }
-     }
-   }
+Do **not** add `/topic new` for now. Official creation remains Telegram UI Create topic.
+
+### 5. Close topic is the official close lifecycle
+
+With Eddie's current config:
+
+```json
+"deleteTopicOnClose": true
+```
+
+The intended lifecycle is:
+
+```text
+Telegram UI Close topic
+-> Bot receives forum_topic_closed
+-> local topic-bound record is closed/removed
+-> local session JSONL is preserved
+-> bot calls deleteForumTopic
+-> Telegram topic is deleted
+```
+
+This is intentionally stronger than Telegram's default Close semantics, but it is opt-in and documented by `deleteTopicOnClose=true`.
+
+### 6. Manual Delete topic gets Level 1 cleanup only
+
+Bot API does not provide a reliable topic-deleted update or topic-list API.
+
+For now, implement only Level 1 best-effort cleanup:
+
+```text
+If a Bot API operation against a topic fails with a clear topic/thread missing error:
+  -> mark/remove local topic-bound record
+  -> dispose worker if any
+  -> preserve session JSONL
+  -> log runtime event
+```
+
+Operations that can discover orphans opportunistically:
+
+```text
+sendMessage
+editMessageText
+sendChatAction
+deleteForumTopic
+attachment/send helpers if they target a topic
+```
+
+Be conservative. Do not treat unrelated Telegram errors as orphan proof.
+
+Examples that may indicate missing topic/thread:
+
+```text
+message thread not found
+topic not found
+TOPIC_CLOSED only if the operation expected an open topic and policy says closed means gone
+```
+
+Examples that should not automatically orphan a record:
+
+```text
+message to be replied not found
+message is not modified
+message can't be edited
+rate limit errors
+temporary network errors
+```
+
+No MTProto/user-session reconciler for now.
+
+### 7. General should be the display name; internal default can wait
+
+User-facing name should be:
+
+```text
+General
+```
+
+Short-term implementation:
+
+```text
+internal record name: default
+user-facing display: General
+```
+
+Do not rush internal migration yet. Later migration can map:
+
+```text
+default -> general
+```
+
+and keep `default` as a legacy alias.
+
+### 8. Topic identity and title handling
+
+Stable identity:
+
+```text
+chatId + messageThreadId
+```
+
+Topic title:
+
+```text
+display metadata only
+```
+
+Rename behavior:
+
+```text
+Deploy Debug renamed to Prod Debug
+-> same topic-bound record
+-> update display title only
+```
+
+Duplicate topic titles must be allowed.
+
+### 9. Session and topic are different things
+
+Closing/deleting a topic should not delete the session JSONL.
+
+```text
+topic/workspace lifecycle != session history lifecycle
+```
+
+A session JSONL is durable history and may later be resumed, branched, archived, or inspected.
+
+### 10. One session should not be attached to multiple open topics
+
+Policy decision: A.
+
+```text
+A session can be attached to at most one open topic/workspace at a time.
+```
+
+If Topic B tries to resume a session already attached to Topic A:
+
+```text
+block the operation
+explain which topic owns the session
+suggest closing the other topic or branching/cloning later
+```
+
+Detection strategy:
+
+1. Canonicalize target `sessionFile`:
+
+   ```text
+   resolve(path), optionally realpath when file exists
    ```
 
-2. Ask the operator to reload/restart pi as needed. Do not run `/reload` from the agent harness.
-3. Use the OpenClaw Telethon user session to perform only explicitly approved Telegram actions:
-   - create or choose an operator-controlled private forum supergroup,
-   - add `@eddie_pi_bot`,
-   - ensure bot permissions/privacy settings allow ordinary topic messages or address the bot explicitly,
-   - create Topic A and Topic B,
-   - send test prompts in General, Topic A, and Topic B.
-4. Validate:
-   - General/no `message_thread_id` routes to `default`,
-   - Topic A and Topic B lazily create distinct `tg-...` tabs,
-   - output, streaming edits, errors, and typing return to the originating topic,
-   - global `/tab` active selection does not change because topic prompts arrive,
-   - max-tab exhaustion replies in the originating topic without fallback.
+2. Scan persisted topic records in `telegram-tabs.json`:
 
-## Open Questions to Verify in Telegram
+   ```text
+   if another open topic record has the same canonical sessionFile -> conflict
+   ```
 
-- Does `forum_topic_closed` include `from` for Bot API polling updates in this bot's configuration?
-- Does General topic send no `message_thread_id`, or a stable id such as `1`? Bot API marks the field optional but does not guarantee General is always absent.
-- Does callback query `message` include `message_thread_id` for inline keyboards posted inside a topic? Existing tests assume yes, but real Telegram should be smoke-tested.
-- Does `sendChatAction` with injected `message_thread_id` show typing in the correct topic consistently?
-- Under this bot's actual deployment, are ordinary non-command topic messages delivered? Verify admin/privacy-disabled/re-added behavior.
-- What update, if any, is delivered when a Telegram topic is deleted rather than merely closed? Bot API exposes close/reopen/edit service fields but not a `forum_topic_deleted` message field.
+3. Also consider latest live runtime state when available:
 
-## Test Command Baseline
+   ```text
+   backend.getState().sessionFile may be newer than persisted record
+   ```
 
-Targeted tests during implementation:
+4. Fallback compare `sessionId` when `sessionFile` is unavailable.
 
-```bash
-node --experimental-strip-types --test tests/tabs.test.ts tests/config.test.ts tests/thread-context.test.ts tests/updates.test.ts tests/tab-manager.test.ts tests/routing.test.ts
+5. Add a simple state mutation lock later if concurrent resume operations race.
+
+### 11. Closing a topic while worker is running needs explicit guards
+
+Desired behavior:
+
+```text
+forum_topic_closed received
+-> mark runtime closing
+-> stop typing loop
+-> abort/dispose backend
+-> persist best-known state if possible
+-> remove topic-bound record
+-> ignore late worker events
+-> deleteForumTopic if configured
+-> preserve session JSONL
 ```
 
-Before finalizing behavior:
+Important guard:
+
+```text
+late child events must not send messages into a closed/deleted topic
+```
+
+Implementation options:
+
+```text
+runtime.closing = true
+unregister backend event listener on dispose
+ignore events when record no longer exists
+use generation token to discard stale events
+```
+
+Add regression tests for late stream/final/tool events after close.
+
+### 12. `activeTab` becomes legacy in forum-native mode
+
+In forum-native mode:
+
+```text
+current Telegram topic decides runtime
+activeTab should not decide prompt routing
+activeTab should not be user-visible
+activeTab should not be mutated by topic messages
+```
+
+`activeTab` may remain only for:
+
+```text
+legacy manual tab mode
+DM/non-forum fallback
+backward compatibility
+tests during transition
+```
+
+Long-term goal: remove user-facing reliance on activeTab entirely in Telegram forum-native UX.
+
+### 13. Topic records and live workers are different layers
+
+A forum topic/workspace should be cheap metadata. A worker is expensive.
+
+```text
+Forum topics / records: many
+Live workers: few
+```
+
+Dashboard should eventually show:
+
+```text
+🧵 General       running      worker hot      session: current
+🧵 Deploy Debug  mapped       no worker       session: deploy.jsonl
+🧵 EVE Market    idle         worker hot      session: eve.jsonl
+🧵 Old Topic     orphan?      no worker       session preserved
+```
+
+Future config direction:
+
+```json
+{
+  "concurrentTabs": {
+    "maxTabs": 100,
+    "maxWorkers": 4
+  }
+}
+```
+
+`maxTabs` limits durable records/dashboard scale. `maxWorkers` limits live child processes.
+
+Do not block service lifecycle sync merely because worker capacity is full.
+
+## Phase Plan
+
+### Phase 0 — Immediate safety: trusted forum chat allowlist
+
+Status: completed, configured, reloaded, and active in Eddie's live runtime.
+
+Problem:
+
+- `forum_topic_closed` and other service messages may be from-less.
+- Current code allows from-less forum service messages so close lifecycle works.
+- Without chat allowlist, a bot added to another forum group could process from-less service events there.
+
+Decision:
+
+```text
+Forum-native / topic-binding lifecycle must be restricted to trusted forum chats.
+```
+
+Eddie local intent:
+
+```text
+This bot should only respond to the whitelisted forum group(s).
+```
+
+Maintainer-friendly design:
+
+```json
+{
+  "concurrentTabs": {
+    "topicBinding": {
+      "trustedChatIds": [-1003961592045]
+    }
+  }
+}
+```
+
+or equivalent naming such as:
+
+```json
+{
+  "telegram": {
+    "allowedForumChatIds": [-1003961592045]
+  }
+}
+```
+
+Config name chosen for Phase 0:
+
+```text
+concurrentTabs.topicBinding.trustedChatIds
+```
+
+Implemented behavior:
+
+1. Normal user messages remain subject to existing authorized user checks.
+2. When `trustedChatIds` is set, ordinary non-private chat messages outside the trusted forum list are ignored by routing.
+3. Private DM behavior is not blocked by `trustedChatIds`.
+4. Forum service messages without `from` require trusted chat match before routing to topic lifecycle.
+5. Forum service messages with `from` are also gated by trusted chat before topic lifecycle side effects.
+6. Callback queries and reaction updates from non-private untrusted chats are ignored.
+7. Destructive lifecycle actions require trusted chat match inside tab-manager too, as a defense-in-depth guard:
+
+   ```text
+   close local topic record
+   deleteForumTopic
+   auto-create topic record from service event
+   title update from service event
+   reopen handling
+   ```
+
+8. If chat is not trusted:
+
+   ```text
+   ignore lifecycle action
+   log debug/runtime event without secrets
+   do not delete topic
+   do not create local record
+   do not enqueue prompt work
+   ```
+
+Recommended default for upstream safety:
+
+```text
+If trustedChatIds is unset:
+  - keep existing non-native behavior as compatible as possible
+  - but in forum-native/destructive mode, require explicit trustedChatIds before processing from-less/destructive service lifecycle
+```
+
+Policy chosen for Phase 0:
+
+```text
+trustedChatIds gates non-private/forum-native chat routing and lifecycle.
+Private DM remains available through existing user authorization.
+```
+
+This matches Eddie's local requirement that the bot only responds to the whitelisted forum group for forum behavior, while keeping upstream-compatible DM behavior.
+
+Phase 0 tests added/updated:
+
+- `trustedChatIds` config normalizes to a de-duplicated safe integer list.
+- from-less `forum_topic_closed` in trusted chat still routes correctly.
+- from-less `forum_topic_closed` in untrusted chat is ignored and does not call `deleteForumTopic`.
+- `forum_topic_created` in untrusted chat does not create a record.
+- ordinary messages in untrusted non-private chats are ignored.
+- ordinary private DM messages are not blocked by `trustedChatIds`.
+- tab-manager defense-in-depth ignores untrusted service lifecycle even if called directly.
+
+### Phase 1 — Forum-native policy and `/tab` lifecycle disable
+
+Goal:
+
+```text
+Make forum-native behavior explicit and stop exposing manual /tab lifecycle as normal Telegram UX.
+```
+
+#### Config
+
+Add an explicit policy flag under topic binding:
+
+```json
+{
+  "concurrentTabs": {
+    "topicBinding": {
+      "enabled": true,
+      "native": true,
+      "trustedChatIds": [-1003961592045]
+    }
+  }
+}
+```
+
+Normalized default:
+
+```text
+native=false
+```
+
+Reason:
+
+- Upstream users who only enabled topic binding should not suddenly lose manual `/tab` commands.
+- Eddie's local config can opt into `native=true`.
+- Later, if forum-native becomes the recommended design, docs can recommend `native=true` without making it a breaking default.
+
+#### Semantics of `native=true`
+
+```text
+forum topics are the canonical user-facing workspaces
+Telegram topic list is the workspace switcher
+Telegram Close topic is the workspace close lifecycle
+manual /tab lifecycle commands are disabled
+/tab may temporarily remain as a read-only diagnostics/dashboard surface
+activeTab is legacy/internal and not user-facing
+```
+
+#### Commands to disable in native mode
+
+Disable lifecycle/state-changing `/tab` subcommands:
+
+```text
+/tab new
+/tab switch
+/tab close
+/tab rename
+```
+
+Also disable equivalent callback buttons/actions in the interactive tab dashboard:
+
+```text
+new tab button
+switch/select tab button if it mutates activeTab
+close selected/current tab buttons
+rename action if present
+```
+
+Allow read-only `/tab` views for now:
+
+```text
+/tab
+/tab status/list-style dashboard
+filter/search if it is read-only
+```
+
+If a disabled action is attempted, reply:
+
+```text
+Forum-native mode is enabled. Use Telegram topics to create, switch, and close workspaces.
+```
+
+Chinese-friendly variant for Eddie local UI:
+
+```text
+Forum-native 模式已啟用。請用 Telegram topic 建立、切換、關閉 workspace。
+```
+
+#### Dashboard wording
+
+Keep command name `/tab` for compatibility in Phase 1, but change user-facing wording where safe:
+
+```text
+Tabs             -> Forum topics / Workspaces
+Active tab       -> Current topic / Current workspace
+Default tab      -> General (display-only where easy; full migration is Phase 2/7)
+Started tab X    -> Started topic workspace X
+```
+
+Do not overdo wording changes in this phase if they require risky broad refactors. Prioritize disabling unsafe lifecycle actions.
+
+#### Implementation tasks
+
+1. Extend config types/normalization:
+
+   ```text
+   TelegramConcurrentTabTopicBindingConfig.native?: boolean
+   TelegramNormalizedConcurrentTabTopicBindingConfig.native: boolean
+   default false
+   ```
+
+2. Add helper in tab-manager:
+
+   ```text
+   isForumNativeMode(): boolean
+   ```
+
+3. In `/tab` command handling, block state-changing subcommands when native mode is enabled:
+
+   ```text
+   new
+   switch
+   close
+   rename
+   ```
+
+4. Keep read-only dashboard/list behavior working.
+
+5. Audit callback handlers for dashboard buttons that call the same disabled actions; either hide them or make them answer with the native-mode message.
+
+6. Keep topic lifecycle behavior unchanged:
+
+   ```text
+   Create topic -> create/update record
+   Close topic  -> close/remove record -> deleteForumTopic when configured
+   ```
+
+7. Update local config after implementation:
+
+   ```json
+   "native": true
+   ```
+
+8. Reload live runtime after validation.
+
+#### Tests for Phase 1
+
+Add/adjust tests:
+
+- Config normalization defaults `native=false`.
+- Config normalization preserves `native=true`.
+- With `native=false`, existing `/tab new/switch/close/rename` behavior remains unchanged.
+- With `native=true`, `/tab new` replies with native-mode guidance and does not create a record.
+- With `native=true`, `/tab switch` does not mutate `activeTab`.
+- With `native=true`, `/tab close` does not close/remove records.
+- With `native=true`, `/tab rename` does not mutate record names.
+- `/tab` dashboard/read-only view still works in native mode.
+- Dashboard callback close/switch actions are blocked or hidden in native mode.
+- Topic service lifecycle still works in native mode.
+
+#### Validation target
 
 ```bash
+node --experimental-strip-types --test tests/config.test.ts tests/tab-manager.test.ts tests/routing.test.ts
+npm run typecheck
 npm test
+npm run pack:check
+git diff --check
+```
+
+#### Phase 1 non-goals
+
+Do not implement yet:
+
+- `/topic cleanup`
+- `/topic orphans`
+- `/topic new`
+- internal `default -> general` migration
+- complete internal tab-to-topic rename
+- worker pool / `maxWorkers`
+- session single-owner enforcement
+- late worker event guard
+
+Those are later phases.
+
+### Phase 2 — General UX and thread normalization
+
+Tasks:
+
+- Display legacy `default` as `General`.
+- Keep internal name `default` for now.
+- Add a central thread normalization helper:
+
+  ```text
+  normalizeForumThread(message)
+  -> { kind: "general" }
+  -> { kind: "topic", messageThreadId }
+  ```
+
+- Initial behavior:
+
+  ```text
+  undefined message_thread_id -> General
+  number -> non-General topic
+  ```
+
+- Leave room for a future known `generalThreadId` if Telegram/Bot API behavior requires it.
+
+### Phase 3 — Session ownership and close-running-worker correctness
+
+Tasks:
+
+- Enforce one session per open topic/workspace.
+- Detect session conflicts by canonical `sessionFile`, with `sessionId` fallback.
+- Refresh/check live runtime state where practical.
+- Add close-running-worker guard:
+
+  ```text
+  mark closing
+  dispose backend
+  stop typing
+  ignore late events
+  preserve session JSONL
+  ```
+
+Tests:
+
+- Cannot resume same session in two open topics.
+- Closing topic while worker is running does not send late replies.
+- Session file remains after topic close/delete.
+
+### Phase 4 — Level 1 orphan cleanup and `/topic` repair commands
+
+Level 1 cleanup:
+
+- Detect clear topic/thread-missing errors from Bot API operations.
+- Remove or mark local topic record as orphan.
+- Dispose worker if any.
+- Preserve session JSONL.
+- Record runtime/debug event.
+
+Repair commands:
+
+```text
+/topic orphans
+/topic cleanup
+```
+
+Initial scope:
+
+- show suspected orphan records,
+- clean records proven orphan by previous Bot API failures,
+- do not attempt full Telegram topic list reconciliation.
+
+No MTProto reconciler in this phase.
+
+### Phase 5 — User-facing tab concept retirement
+
+Goal:
+
+```text
+Telegram forum-native UX should no longer expose independent tabs.
+```
+
+Tasks:
+
+- Hide `/tab` from bot command list in native mode if safe.
+- Keep `/tab` only as legacy/operator/debug fallback, or remove later.
+- Replace user-facing wording:
+
+  ```text
+  tab -> topic/workspace
+  default -> General
+  active tab -> current topic
+  ```
+
+- Continue internal refactor gradually:
+
+  ```text
+  TelegramTabRecord -> TelegramTopicRecord / WorkspaceRecord
+  tab-manager -> topic-runtime-manager
+  RuntimeTab -> TopicRuntime / WorkspaceRuntime
+  ```
+
+Do not start this refactor until behavior is stable.
+
+### Phase 6 — Worker pool model
+
+Future performance/scalability work:
+
+- Add `maxWorkers` separate from durable topic record count.
+- Keep many topic records, but only a few live workers.
+- Evict only idle workers.
+- Never evict running workers automatically.
+- Persist latest runtime state before unloading a worker.
+- Reload worker from session file on next message.
+
+### Phase 7 — Internal `default -> general` migration
+
+Later migration:
+
+```text
+internal default record -> general record
+legacy alias default -> general
+```
+
+Only after display rename and topic-native routing are stable.
+
+## Security / Safety Rules
+
+- Never expose bot tokens or credential values in logs/docs/tests.
+- From-less forum service messages require trusted chat protection before lifecycle side effects.
+- Destructive Bot API calls such as `deleteForumTopic` must be scoped to trusted forum chats.
+- `deleteTopicOnClose=true` should remain opt-in upstream.
+- Missing permissions should warn in General/default, not in the closed topic.
+- Bot must have Manage Topics permission for `deleteForumTopic`.
+- Direct Telegram UI Delete topic is not a reliable Bot API signal.
+
+## Maintainer / PR Considerations
+
+Eddie local deployment can be single trusted forum group.
+
+For upstream maintainability:
+
+- Do not hard-code a single chat globally.
+- Store identity as `chatId + messageThreadId` everywhere.
+- Add trusted chat configuration as a list, even if local config has one item.
+- Document that polished forum-native UX is intended for one primary trusted operator-controlled forum group first.
+- Multi-forum support can be made safe later, but General/default semantics need more design:
+
+  ```text
+  Group A / General
+  Group B / General
+  ```
+
+Possible future multi-forum model:
+
+```text
+single trusted forum:
+  General -> legacy default/internal general
+
+multiple trusted forums:
+  each chat gets its own General record, e.g. tg-<chatHash>-general
+```
+
+Do not block Phase 0 on full multi-forum UX. Just keep data model and config shape compatible.
+
+## Open Questions to Carry Forward
+
+These should not block Phase 0.
+
+1. Exact config name/location for trusted forum chat allowlist:
+
+   ```text
+   concurrentTabs.topicBinding.trustedChatIds
+   vs telegram.allowedForumChatIds
+   vs authorization.allowedChatIds
+   ```
+
+2. Should forum-native mode ignore all ordinary messages outside trusted forum chats, including owner messages?
+
+   Eddie local preference: likely yes for forum behavior.
+
+   Maintainer-compatible option: gate forum-native topic lifecycle/routing by trusted chats while preserving DM behavior.
+
+3. Should service messages with `from` require both authorized user and trusted chat, or trusted chat alone?
+
+   Safer lifecycle policy: trusted chat required for all forum service lifecycle side effects.
+
+4. What exact Telegram error strings should trigger Level 1 orphan cleanup?
+
+   Need conservative tests.
+
+5. Does General topic always arrive without `message_thread_id` in Eddie's group, or can Telegram use a stable id?
+
+   Add normalization now; verify behavior over time.
+
+6. How should `/tab` be hidden/retired without breaking existing users?
+
+   Defer to Phase 5.
+
+7. Should `lastUpdateId` remain in `telegram.json`?
+
+   Known issue: live in-memory config can overwrite manual file edits when polling persists offsets.
+
+   Eddie preference: avoid adding a new settings file for now. Revisit later. Possible future mitigation without new file: persist offset by merging latest file config instead of overwriting from stale memory.
+
+## Review Checklist
+
+Before implementing each phase, review against these five passes:
+
+1. **Security pass**
+   - Are from-less service messages scoped to trusted chats?
+   - Can an untrusted chat trigger create/close/delete side effects?
+   - Are secrets avoided in logs and docs?
+
+2. **Lifecycle pass**
+   - Does Create topic create/update only the intended local record?
+   - Does Close topic close/remove local state and optionally delete Telegram topic?
+   - Are sessions preserved?
+   - Are late worker events ignored after close?
+
+3. **UX pass**
+   - Does user-facing wording say topic/workspace/General rather than tab where possible?
+   - Are manual tab lifecycle commands disabled in native mode?
+   - Are repair commands clearly secondary?
+
+4. **Compatibility pass**
+   - Does legacy non-native tab behavior still work when native mode is off?
+   - Are config defaults safe for upstream?
+   - Is single-forum local usage supported without blocking future multi-forum data identity?
+
+5. **Testability pass**
+   - Are each behavior's boundaries covered by unit tests?
+   - Are destructive calls mocked/asserted?
+   - Are untrusted chat cases tested?
+   - Are error/orphan paths conservative and deterministic?
+
+## Validation Baseline
+
+Current known validation from the latest implementation cut:
+
+```bash
+node --experimental-strip-types --test tests/updates.test.ts tests/routing.test.ts
+npm run typecheck
+npm test
+npm run pack:check
+git diff --check
+```
+
+Latest recorded results after Phase 0:
+
+```text
+targeted tests: 82 pass
+npm run typecheck: pass
+full npm test: 688 pass
+npm run pack:check: pass
+git diff --check: pass
+```
+
+Deployment note:
+
+```text
+Persisted/live config now includes trustedChatIds: [-1003961592045].
+Operator should run /reload when ready so the live extension loads the new guard code.
 ```

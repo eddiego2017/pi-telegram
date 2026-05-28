@@ -553,6 +553,8 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
       generalIsDefault: true,
       autoCreate: true,
       closeOnTopicClose: true,
+      deleteTopicOnClose: false,
+      trustedChatIds: [],
     },
   };
   const backendOptions: unknown[] = [];
@@ -783,6 +785,8 @@ test("Tab manager routes forum topic prompts to topic-bound tabs without switchi
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
       },
     }),
     getCwd: () => "/repo",
@@ -913,6 +917,8 @@ test("Tab manager handles forum topic service create, edit, and close events", a
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
       },
     }),
     getCwd: () => "/repo",
@@ -986,6 +992,222 @@ test("Tab manager handles forum topic service create, edit, and close events", a
   await manager.dispose();
 });
 
+test("Tab manager deletes Telegram forum topics after close when configured", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-delete-on-close-"));
+  const statePath = join(tempDir, "tabs.json");
+  const disposed: string[] = [];
+  const deleteCalls: Array<{ chatId: number; messageThreadId: number }> = [];
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 5,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+        deleteTopicOnClose: true,
+        trustedChatIds: [],
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      const originalDispose = backend.dispose.bind(backend);
+      backend.dispose = async () => {
+        disposed.push(options.tabName);
+        await originalDispose();
+      };
+      return backend;
+    },
+    sendTextReply: async () => undefined,
+    deleteForumTopic: async (chatId, messageThreadId) => {
+      deleteCalls.push({ chatId, messageThreadId });
+      return true;
+    },
+  });
+
+  await manager.dispatchPrompt(
+    {
+      chatId: -10042,
+      messageThreadId: 77,
+      replyToMessageId: 22,
+      content: [{ type: "text", text: "start worker" }],
+    },
+    "ctx",
+  );
+  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  await manager.handleTopicServiceMessage(
+    {
+      chat: { id: -10042 },
+      message_id: 23,
+      message_thread_id: 77,
+      forum_topic_closed: {},
+    },
+    "ctx",
+  );
+
+  const saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    tabs: Record<string, unknown>;
+  };
+  assert.equal(saved.tabs[topicTab], undefined);
+  assert.deepEqual(disposed, [topicTab]);
+  assert.deepEqual(deleteCalls, [{ chatId: -10042, messageThreadId: 77 }]);
+  await manager.dispose();
+});
+
+test("Tab manager ignores forum topic service events from untrusted chats", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-untrusted-"));
+  const statePath = join(tempDir, "tabs.json");
+  const deleteCalls: Array<{ chatId: number; messageThreadId: number }> = [];
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 5,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+        deleteTopicOnClose: true,
+        trustedChatIds: [-10042],
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    sendTextReply: async () => undefined,
+    deleteForumTopic: async (chatId, messageThreadId) => {
+      deleteCalls.push({ chatId, messageThreadId });
+      return true;
+    },
+  });
+
+  await manager.dispatchPrompt(
+    {
+      chatId: -10042,
+      messageThreadId: 77,
+      replyToMessageId: 22,
+      content: [{ type: "text", text: "start worker" }],
+    },
+    "ctx",
+  );
+  const trustedTopicTab = normalizeTelegramTopicTabName(-10042, 77);
+  let saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    tabs: Record<string, unknown>;
+  };
+  assert.ok(saved.tabs[trustedTopicTab]);
+
+  await manager.handleTopicServiceMessage(
+    {
+      chat: { id: -10043 },
+      message_id: 20,
+      message_thread_id: 77,
+      forum_topic_created: { name: "Untrusted" },
+    },
+    "ctx",
+  );
+  saved = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(saved.tabs[normalizeTelegramTopicTabName(-10043, 77)], undefined);
+
+  await manager.handleTopicServiceMessage(
+    {
+      chat: { id: -10043 },
+      message_id: 23,
+      message_thread_id: 77,
+      forum_topic_closed: {},
+    },
+    "ctx",
+  );
+  saved = JSON.parse(await readFile(statePath, "utf8"));
+  assert.ok(saved.tabs[trustedTopicTab]);
+  assert.deepEqual(deleteCalls, []);
+  await manager.dispose();
+});
+
+test("Tab manager warns when delete-topic-on-close lacks Telegram rights", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-delete-rights-"));
+  const statePath = join(tempDir, "tabs.json");
+  const replies: Array<{ chatId: number; replyToMessageId: number | undefined; text: string }> = [];
+  const runtimeEvents: Array<Record<string, unknown>> = [];
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 5,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+        deleteTopicOnClose: true,
+        trustedChatIds: [],
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    sendTextReply: async (chatId, replyToMessageId, text) => {
+      replies.push({ chatId, replyToMessageId, text });
+      return replies.length;
+    },
+    deleteForumTopic: async () => {
+      throw new Error("Bad Request: not enough rights to manage topics");
+    },
+    recordRuntimeEvent: (category, error, details) => {
+      runtimeEvents.push({
+        category,
+        message: error instanceof Error ? error.message : String(error),
+        details,
+      });
+    },
+  });
+
+  await manager.dispatchPrompt(
+    {
+      chatId: -10042,
+      messageThreadId: 77,
+      replyToMessageId: 22,
+      content: [{ type: "text", text: "start worker" }],
+    },
+    "ctx",
+  );
+  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  replies.length = 0;
+  await manager.handleTopicServiceMessage(
+    {
+      chat: { id: -10042 },
+      message_id: 23,
+      message_thread_id: 77,
+      forum_topic_closed: {},
+    },
+    "ctx",
+  );
+
+  const saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    tabs: Record<string, unknown>;
+  };
+  assert.equal(saved.tabs[topicTab], undefined);
+  assert.equal(replies.length, 1);
+  assert.deepEqual(replies[0], {
+    chatId: -10042,
+    replyToMessageId: undefined,
+    text: "已關閉 pi tab，但無法刪除 Telegram topic。請把 bot 設為 admin，並開啟 Manage Topics 權限。",
+  });
+  assert.equal(runtimeEvents[0]?.category, "tabs");
+  assert.deepEqual((runtimeEvents[0]?.details as Record<string, unknown>).action, "deleteForumTopic");
+  await manager.dispose();
+});
+
 test("Tab manager scopes active APIs to ambient forum topics", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-active-api-"));
   const statePath = join(tempDir, "tabs.json");
@@ -1001,6 +1223,8 @@ test("Tab manager scopes active APIs to ambient forum topics", async () => {
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
       },
     }),
     getCwd: () => "/repo",
@@ -1059,6 +1283,8 @@ test("Tab manager rejects unknown forum topics at max tab capacity", async () =>
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
       },
     }),
     getCwd: () => "/repo",

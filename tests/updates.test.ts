@@ -21,6 +21,7 @@ import {
   getAuthorizedTelegramGuestMessage,
   getAuthorizedTelegramMessage,
   handleAuthorizedTelegramReactionUpdate,
+  isTelegramForumTopicServiceMessage,
   normalizeTelegramReactionEmoji,
   TELEGRAM_PRIORITY_REACTION_EMOJIS,
   TELEGRAM_PRIORITY_REACTIONS,
@@ -191,6 +192,16 @@ test("Update routing extracts human messages and edited messages from any chat t
   });
   assert.ok(forumMessage);
   assert.equal(forumMessage.message_thread_id, 99);
+  const serviceMessage = getAuthorizedTelegramMessage({
+    message: {
+      chat: { type: "supergroup" },
+      message_thread_id: 99,
+      forum_topic_closed: {},
+    },
+  });
+  assert.ok(serviceMessage);
+  assert.equal(isTelegramForumTopicServiceMessage(serviceMessage), true);
+  assert.equal(serviceMessage.message_thread_id, 99);
   const editedMessage = getAuthorizedTelegramEditedMessage({
     edited_message: {
       chat: { type: "supergroup" },
@@ -268,6 +279,21 @@ test("Update flow returns authorized callback, message, and edit actions", () =>
   assert.deepEqual(
     messageAction.kind === "message" ? messageAction.authorization : undefined,
     { kind: "pair", userId: 9 },
+  );
+  const serviceAction = buildTelegramUpdateFlowAction(
+    {
+      message: {
+        chat: { id: -10042, type: "supergroup" },
+        message_thread_id: 77,
+        forum_topic_closed: {},
+      },
+    },
+    9,
+  );
+  assert.equal(serviceAction.kind, "message");
+  assert.deepEqual(
+    serviceAction.kind === "message" ? serviceAction.authorization : undefined,
+    { kind: "allow" },
   );
   const editAction = buildTelegramUpdateFlowAction(
     {
@@ -937,6 +963,45 @@ test("Update runtime handles callback deny and message pair flows", async () => 
     "answer:cb:This bot is not authorized for your account.",
     "reply:7:9:Telegram bridge paired with this account.",
     "message",
+  ]);
+});
+
+test("Update runtime routes from-less forum topic service messages", async () => {
+  const events: string[] = [];
+  await executeTelegramUpdate(
+    {
+      message: {
+        chat: { id: -10042, type: "supergroup" },
+        message_id: 20,
+        message_thread_id: 77,
+        forum_topic_closed: {},
+      },
+    },
+    7,
+    {
+      ctx: TEST_CONTEXT,
+      removePendingMediaGroupMessages: () => {},
+      removeQueuedTelegramTurnsByMessageIds: () => 0,
+      handleAuthorizedTelegramReactionUpdate: async () => {},
+      pairTelegramUserIfNeeded: async () => false,
+      answerCallbackQuery: async () => {},
+      answerGuestQuery: async () => {},
+      handleAuthorizedTelegramCallbackQuery: async () => {},
+      sendTextReply: async () => undefined,
+      handleAuthorizedTelegramMessage: async (message) => {
+        const routed = message as {
+          chat: { id?: number };
+          message_thread_id?: number;
+        };
+        events.push(`message:${routed.chat.id}:${routed.message_thread_id}`);
+        events.push(`scope:${JSON.stringify(getAmbientTelegramThreadContext())}`);
+      },
+      handleAuthorizedTelegramEditedMessage: async () => {},
+    },
+  );
+  assert.deepEqual(events, [
+    "message:-10042:77",
+    'scope:{"chatId":-10042,"messageThreadId":77}',
   ]);
 });
 

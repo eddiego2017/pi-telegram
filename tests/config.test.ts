@@ -15,6 +15,7 @@ import {
   createTelegramConcurrentTabsConfigGetter,
   createTelegramUserPairingRuntime,
   getTelegramAuthorizationState,
+  isTelegramTrustedChat,
   normalizeTelegramConcurrentTabsConfig,
   pairTelegramUserIfNeeded,
   readTelegramConfig,
@@ -107,6 +108,8 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
       generalIsDefault: true,
       autoCreate: true,
       closeOnTopicClose: true,
+      deleteTopicOnClose: false,
+      trustedChatIds: [],
     },
   });
   store.setAllowedUserId(43);
@@ -152,6 +155,8 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       generalIsDefault: true,
       autoCreate: true,
       closeOnTopicClose: true,
+      deleteTopicOnClose: false,
+      trustedChatIds: [],
     },
   });
   assert.deepEqual(
@@ -171,6 +176,8 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
       },
     },
   );
@@ -181,6 +188,8 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
         generalIsDefault: false,
         autoCreate: false,
         closeOnTopicClose: false,
+        deleteTopicOnClose: true,
+        trustedChatIds: [-10042, -10042, "bad" as unknown as number, 7.5],
       },
     }).topicBinding,
     {
@@ -188,6 +197,8 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       generalIsDefault: false,
       autoCreate: false,
       closeOnTopicClose: false,
+      deleteTopicOnClose: true,
+      trustedChatIds: [-10042],
     },
   );
   const getConfig = createTelegramConcurrentTabsConfigGetter({
@@ -201,6 +212,8 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
+        deleteTopicOnClose: true,
+        trustedChatIds: [-10042],
       },
     }),
   });
@@ -214,8 +227,15 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       generalIsDefault: true,
       autoCreate: true,
       closeOnTopicClose: true,
+      deleteTopicOnClose: true,
+      trustedChatIds: [-10042],
     },
   });
+  assert.equal(isTelegramTrustedChat([], -10042), true);
+  assert.equal(isTelegramTrustedChat(undefined, -10042), true);
+  assert.equal(isTelegramTrustedChat([-10042], -10042), true);
+  assert.equal(isTelegramTrustedChat([-10042], -10043), false);
+  assert.equal(isTelegramTrustedChat([-10042], undefined), false);
 });
 
 test("Telegram config helpers classify authorization state for pair, allow, and deny", () => {

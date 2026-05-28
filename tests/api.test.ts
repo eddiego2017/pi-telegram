@@ -28,6 +28,7 @@ import {
   downloadTelegramFile,
   fetchTelegramBotIdentity,
   getTelegramInboundFileByteLimitFromEnv,
+  isTelegramForumTopicPermissionError,
   isTelegramMessageNotModifiedError,
   prepareTelegramTempDir,
   TELEGRAM_FILE_MAX_BYTES,
@@ -123,7 +124,7 @@ test("Telegram API byte-limit config prefers positive integer env values", () =>
   );
 });
 
-test("Telegram API helpers detect unchanged edit errors", () => {
+test("Telegram API helpers detect unchanged edit and forum-topic permission errors", () => {
   assert.equal(
     isTelegramMessageNotModifiedError(
       new Error("Bad Request: message is not modified"),
@@ -131,6 +132,13 @@ test("Telegram API helpers detect unchanged edit errors", () => {
     true,
   );
   assert.equal(isTelegramMessageNotModifiedError(new Error("other")), false);
+  assert.equal(
+    isTelegramForumTopicPermissionError(
+      new Error("Bad Request: not enough rights to manage topics"),
+    ),
+    true,
+  );
+  assert.equal(isTelegramForumTopicPermissionError(new Error("other")), false);
 });
 
 test("Telegram API chat-action sender binds a fixed action", async () => {
@@ -569,6 +577,7 @@ test("Telegram bridge API runtime exposes typed Bot API helpers", async () => {
   );
   assert.equal(await runtime.sendChatAction(1, "typing"), true);
   assert.equal(await runtime.sendTypingAction(2), true);
+  assert.equal(await runtime.deleteForumTopic(-10042, 77), true);
   await runtime.answerGuestQuery("guest-1", "hello");
   await runtime.answerGuestQuery("guest-2");
   assert.equal(await runtime.sendMessageDraft(1, 2, "draft"), true);
@@ -593,6 +602,10 @@ test("Telegram bridge API runtime exposes typed Bot API helpers", async () => {
     },
     { method: "sendChatAction", body: { chat_id: 1, action: "typing" } },
     { method: "sendChatAction", body: { chat_id: 2, action: "typing" } },
+    {
+      method: "deleteForumTopic",
+      body: { chat_id: -10042, message_thread_id: 77 },
+    },
     {
       method: "answerGuestQuery",
       body: {
