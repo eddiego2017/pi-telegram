@@ -29,7 +29,10 @@ import {
   getAmbientTelegramThreadContext,
   runWithTelegramThreadContext,
 } from "../lib/thread-context.ts";
-import { normalizeTelegramTopicTabName } from "../lib/tabs.ts";
+import {
+  normalizeTelegramTopicTabName,
+  TELEGRAM_DEFAULT_TAB_NAME,
+} from "../lib/tabs.ts";
 
 class FakeTabBackend implements TelegramTabBackend {
   readonly prompts: string[] = [];
@@ -950,9 +953,10 @@ test("Tab manager handles forum topic service create, edit, and close events", a
     true,
   );
   const topicTab = normalizeTelegramTopicTabName(-10042, 77);
-  let saved: { tabs: Record<string, { source?: { topicTitle?: string } } | undefined> } =
+  let saved: { tabs: Record<string, { source?: { topicTitle?: string }; sessionName?: string } | undefined> } =
     JSON.parse(await readFile(statePath, "utf8"));
   assert.equal(saved.tabs[topicTab]?.source?.topicTitle, "Deploy Debug");
+  assert.equal(saved.tabs[topicTab]?.sessionName, "Deploy Debug");
   assert.equal(backends.size, 0);
 
   await manager.handleTopicServiceMessage(
@@ -966,6 +970,7 @@ test("Tab manager handles forum topic service create, edit, and close events", a
   );
   saved = JSON.parse(await readFile(statePath, "utf8"));
   assert.equal(saved.tabs[topicTab]?.source?.topicTitle, "Deploy Debug 2");
+  assert.equal(saved.tabs[topicTab]?.sessionName, "Deploy Debug 2");
 
   await manager.dispatchPrompt(
     {
@@ -1205,6 +1210,235 @@ test("Tab manager warns when delete-topic-on-close lacks Telegram rights", async
   });
   assert.equal(runtimeEvents[0]?.category, "tabs");
   assert.deepEqual((runtimeEvents[0]?.details as Record<string, unknown>).action, "deleteForumTopic");
+  await manager.dispose();
+});
+
+test("Tab manager syncs forum topic titles into active session names", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-title-session-"));
+  const statePath = join(tempDir, "tabs.json");
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 5,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async () => undefined,
+  });
+
+  await manager.handleTopicServiceMessage(
+    {
+      chat: { id: -10042 },
+      message_id: 20,
+      message_thread_id: 77,
+      forum_topic_created: { name: "Deploy Debug" },
+    },
+    "ctx",
+  );
+
+  await manager.dispatchPrompt(
+    {
+      chatId: -10042,
+      messageThreadId: 77,
+      replyToMessageId: 21,
+      content: [{ type: "text", text: "start worker" }],
+    },
+    "ctx",
+  );
+
+  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  assert.deepEqual(backends.get(topicTab)?.sessionNames, ["Deploy Debug"]);
+
+  await manager.handleTopicServiceMessage(
+    {
+      chat: { id: -10042 },
+      message_id: 22,
+      message_thread_id: 77,
+      forum_topic_edited: { name: "Prod Debug" },
+    },
+    "ctx",
+  );
+
+  assert.deepEqual(backends.get(topicTab)?.sessionNames, [
+    "Deploy Debug",
+    "Prod Debug",
+  ]);
+  assert.equal(
+    manager.getActiveSessionReference("ctx")?.tabName,
+    TELEGRAM_DEFAULT_TAB_NAME,
+  );
+  await runWithTelegramThreadContext(
+    { chatId: -10042, messageThreadId: 77 },
+    async () => {
+      assert.equal(manager.getActiveSessionName("ctx"), "Prod Debug");
+      assert.equal(
+        manager.getActiveSessionReference("ctx")?.sessionName,
+        "Prod Debug",
+      );
+    },
+  );
+
+  const saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    tabs: Record<string, { source?: { topicTitle?: string }; sessionName?: string }>;
+  };
+  assert.equal(saved.tabs[topicTab]?.source?.topicTitle, "Prod Debug");
+  assert.equal(saved.tabs[topicTab]?.sessionName, "Prod Debug");
+  await manager.dispose();
+});
+
+test("Tab manager applies forum topic titles to new and resumed sessions", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-title-new-resume-"));
+  const statePath = join(tempDir, "tabs.json");
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 5,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async () => undefined,
+  });
+
+  await manager.handleTopicServiceMessage(
+    {
+      chat: { id: -10042 },
+      message_id: 20,
+      message_thread_id: 77,
+      forum_topic_created: { name: "Deploy Debug" },
+    },
+    "ctx",
+  );
+
+  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  await runWithTelegramThreadContext(
+    { chatId: -10042, messageThreadId: 77 },
+    async () => {
+      assert.deepEqual(await manager.newActiveSession("ctx"), { cancelled: false });
+      assert.equal(manager.getActiveSessionName("ctx"), "Deploy Debug");
+      const scope = manager.getActiveResumeSessionScope("ctx");
+      assert.equal(
+        await manager.switchSession("/sessions/resumed-topic.jsonl", "ctx", scope),
+        true,
+      );
+      assert.equal(manager.getActiveSessionName("ctx"), "Deploy Debug");
+    },
+  );
+
+  assert.deepEqual(backends.get(topicTab)?.newSessions, [undefined]);
+  assert.deepEqual(backends.get(topicTab)?.switchSessions, [
+    "/sessions/resumed-topic.jsonl",
+  ]);
+  assert.deepEqual(backends.get(topicTab)?.sessionNames, [
+    "Deploy Debug",
+    "Deploy Debug",
+    "Deploy Debug",
+  ]);
+  await manager.dispose();
+});
+
+test("Tab manager syncs persisted topic session names on demand", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-sync-names-"));
+  const statePath = join(tempDir, "tabs.json");
+  const replies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 5,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleTopicServiceMessage(
+    {
+      chat: { id: -10042 },
+      message_id: 20,
+      message_thread_id: 77,
+      forum_topic_created: { name: "Deploy Debug" },
+    },
+    "ctx",
+  );
+  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  await runWithTelegramThreadContext(
+    { chatId: -10042, messageThreadId: 77 },
+    async () => {
+      await manager.setActiveSessionName("manual", "ctx");
+      assert.equal(manager.getActiveSessionName("ctx"), "manual");
+    },
+  );
+
+  assert.deepEqual(backends.get(topicTab)?.sessionNames, [
+    "Deploy Debug",
+    "manual",
+  ]);
+  await manager.handleCommand("sync-names", 1, 30, "ctx");
+  assert.equal(replies.at(-1), "Synced 1 topic session name.");
+  assert.deepEqual(backends.get(topicTab)?.sessionNames, [
+    "Deploy Debug",
+    "manual",
+    "Deploy Debug",
+  ]);
+  await runWithTelegramThreadContext(
+    { chatId: -10042, messageThreadId: 77 },
+    async () => {
+      assert.equal(manager.getActiveSessionName("ctx"), "Deploy Debug");
+    },
+  );
   await manager.dispose();
 });
 

@@ -103,6 +103,9 @@ test("Tab command parser handles MVP command forms", () => {
     kind: "restart",
     name: "A",
   });
+  assert.deepEqual(parseTelegramTabCommand("sync-names"), {
+    kind: "syncNames",
+  });
   assert.deepEqual(parseTelegramTabCommand("new"), {
     kind: "invalid",
     message: "Usage: /tab new <name>",

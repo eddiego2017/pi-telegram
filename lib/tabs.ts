@@ -51,6 +51,7 @@ export type TelegramTabCommand =
   | { kind: "list" }
   | { kind: "new"; name: string }
   | { kind: "rename"; oldName?: string; newName: string }
+  | { kind: "syncNames" }
   | { kind: "query"; query: string; filters: string[] }
   | { kind: "switch"; name: string }
   | { kind: "close"; name?: string; force: boolean }
@@ -79,6 +80,7 @@ const TELEGRAM_TAB_COMMAND_WORDS = new Set([
   "rename",
   "restart",
   "status",
+  "sync-names",
   "switch",
 ]);
 
@@ -402,6 +404,8 @@ export function parseTelegramTabCommand(args: string): TelegramTabCommand {
       }
       return { kind: "restart", name };
     }
+    case "sync-names":
+      return { kind: "syncNames" };
   }
   return { kind: "usage" };
 }
@@ -417,6 +421,7 @@ export function formatTelegramTabUsage(): string {
     "/tab status [name]",
     "/tab abort [name]",
     "/tab restart <name>",
+    "/tab sync-names",
   ].join("\n");
 }
 

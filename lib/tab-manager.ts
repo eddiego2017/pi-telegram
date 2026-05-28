@@ -833,6 +833,13 @@ function normalizeTelegramTabSessionName(name: string): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function getTelegramTopicSessionName(
+  record: TelegramTabRecord,
+): string | undefined {
+  if (record.source?.kind !== "telegram-topic") return undefined;
+  return normalizeTelegramTabSessionName(record.source.topicTitle ?? "");
+}
+
 function canSwitchTelegramTabModel(record: TelegramTabRecord): boolean {
   return record.status !== "running" && record.status !== "starting";
 }
@@ -1443,6 +1450,10 @@ export function createTelegramTabManager<TContext>(
   };
   const hydrateRuntimeTabs = (tabState: TelegramTabsState): void => {
     for (const record of Object.values(tabState.tabs)) {
+      const topicSessionName = getTelegramTopicSessionName(record);
+      if (topicSessionName && !record.sessionName) {
+        record.sessionName = topicSessionName;
+      }
       if (!runtimeTabs.has(record.name)) {
         runtimeTabs.set(record.name, createRuntimeTab(record));
       }
@@ -2256,6 +2267,9 @@ export function createTelegramTabManager<TContext>(
         childState,
       );
       applyRpcStateToRecord(runtime.record, childState);
+      await syncTopicSessionNameToWorker(runtime, {
+        workerSessionName: childState.sessionName,
+      });
       await persist();
       return backend;
     } catch (error) {
@@ -2280,6 +2294,39 @@ export function createTelegramTabManager<TContext>(
     runtime.unsubscribe?.();
     runtime.unsubscribe = undefined;
     await backend?.dispose();
+  };
+  const syncTopicSessionNameToWorker = async (
+    runtime: RuntimeTab,
+    options: { workerSessionName?: string; forceWorker?: boolean } = {},
+  ): Promise<boolean> => {
+    const topicSessionName = getTelegramTopicSessionName(runtime.record);
+    if (!topicSessionName) return false;
+    let changed = false;
+    if (runtime.record.sessionName !== topicSessionName) {
+      runtime.record.sessionName = topicSessionName;
+      changed = true;
+    }
+    const workerSessionName = normalizeTelegramTabSessionName(
+      options.workerSessionName ?? "",
+    );
+    const hasWorkerSessionName = Object.hasOwn(options, "workerSessionName");
+    const shouldSyncWorker = Boolean(
+      runtime.backend &&
+        (options.forceWorker ||
+          (hasWorkerSessionName && workerSessionName !== topicSessionName)),
+    );
+    if (shouldSyncWorker && runtime.backend) {
+      try {
+        await runtime.backend.setSessionName(topicSessionName);
+        changed = true;
+      } catch (error) {
+        deps.recordRuntimeEvent?.("tabs", error, {
+          tab: runtime.record.name,
+          action: "sync_topic_session_name",
+        });
+      }
+    }
+    return changed;
   };
   const refreshRuntimeState = async (
     runtime: RuntimeTab,
@@ -2328,10 +2375,18 @@ export function createTelegramTabManager<TContext>(
     record: TelegramTabRecord,
     topicTitle: string | undefined,
   ): boolean => {
-    if (!topicTitle || record.source?.kind !== "telegram-topic") return false;
-    if (record.source.topicTitle === topicTitle) return false;
-    record.source = { ...record.source, topicTitle };
-    return true;
+    const sessionName = normalizeTelegramTabSessionName(topicTitle ?? "");
+    if (!sessionName || record.source?.kind !== "telegram-topic") return false;
+    let changed = false;
+    if (record.source.topicTitle !== sessionName) {
+      record.source = { ...record.source, topicTitle: sessionName };
+      changed = true;
+    }
+    if (record.sessionName !== sessionName) {
+      record.sessionName = sessionName;
+      changed = true;
+    }
+    return changed;
   };
   const createTelegramTopicTabRecord = (
     tabState: TelegramTabsState,
@@ -2348,15 +2403,19 @@ export function createTelegramTabManager<TContext>(
         suffix += 1;
       }
     }
+    const topicSessionName = normalizeTelegramTabSessionName(
+      scope.topicTitle ?? "",
+    );
     const source: TelegramTabSourceTelegramTopic = {
       kind: "telegram-topic",
       chatId: scope.chatId,
       messageThreadId: scope.messageThreadId,
-      ...(scope.topicTitle ? { topicTitle: scope.topicTitle } : {}),
+      ...(topicSessionName ? { topicTitle: topicSessionName } : {}),
     };
     return {
       name,
       cwd: deps.getCwd(ctx),
+      ...(topicSessionName ? { sessionName: topicSessionName } : {}),
       createdAt,
       lastUsedAt: createdAt,
       status: "idle",
@@ -2962,6 +3021,28 @@ export function createTelegramTabManager<TContext>(
       const result = await commandHandlers.abortRuntime(tabState, name);
       await deps.sendTextReply(chatId, replyToMessageId, result.message);
     },
+    syncNames: async (
+      tabState: TelegramTabsState,
+      chatId: number,
+      replyToMessageId: number,
+    ) => {
+      let changed = 0;
+      for (const record of Object.values(tabState.tabs)) {
+        if (record.source?.kind !== "telegram-topic") continue;
+        const runtime = getRuntime(tabState, record.name);
+        if (!runtime) continue;
+        const didSync = await syncTopicSessionNameToWorker(runtime, {
+          forceWorker: true,
+        });
+        if (didSync) changed += 1;
+      }
+      if (changed > 0) await persist();
+      await deps.sendTextReply(
+        chatId,
+        replyToMessageId,
+        `Synced ${changed} topic session name${changed === 1 ? "" : "s"}.`,
+      );
+    },
     restart: async (
       tabState: TelegramTabsState,
       name: string,
@@ -3186,16 +3267,24 @@ export function createTelegramTabManager<TContext>(
         const backend = await ensureBackend(runtime, ctx);
         const result = await backend.newSession();
         if (result.cancelled) return { cancelled: true };
+        const topicSessionName = getTelegramTopicSessionName(runtime.record);
+        if (topicSessionName) {
+          await syncTopicSessionNameToWorker(runtime, { forceWorker: true });
+        }
         const childState = await backend.getState();
         applyRpcStateToRecord(runtime.record, childState);
-        const sessionName =
-          typeof childState.sessionName === "string"
-            ? childState.sessionName.trim()
-            : undefined;
-        if (sessionName) {
-          runtime.record.sessionName = sessionName;
+        if (topicSessionName) {
+          runtime.record.sessionName = topicSessionName;
         } else {
-          delete runtime.record.sessionName;
+          const sessionName =
+            typeof childState.sessionName === "string"
+              ? childState.sessionName.trim()
+              : undefined;
+          if (sessionName) {
+            runtime.record.sessionName = sessionName;
+          } else {
+            delete runtime.record.sessionName;
+          }
         }
         runtime.record.lastAssistantText = undefined;
         runtime.record.lastMessageText = undefined;
@@ -3325,6 +3414,10 @@ export function createTelegramTabManager<TContext>(
         if (result.cancelled) {
           throw new Error("switchSession cancelled");
         }
+        const topicSessionName = getTelegramTopicSessionName(runtime.record);
+        if (topicSessionName) {
+          await syncTopicSessionNameToWorker(runtime, { forceWorker: true });
+        }
         stopTabTyping(runtime);
         resetRuntimeTurnBuffers(runtime);
         delete runtime.record.lastAssistantText;
@@ -3358,6 +3451,18 @@ export function createTelegramTabManager<TContext>(
               `Tab ${scope.tabName} did not bind to resumed session ${sessionPath}.`,
             );
           }
+          const topicSessionNameAfterRestart = getTelegramTopicSessionName(
+            runtime.record,
+          );
+          if (topicSessionNameAfterRestart && runtime.backend) {
+            await syncTopicSessionNameToWorker(runtime, { forceWorker: true });
+          }
+        }
+        const topicSessionNameAfterSwitch = getTelegramTopicSessionName(
+          runtime.record,
+        );
+        if (topicSessionNameAfterSwitch) {
+          runtime.record.sessionName = topicSessionNameAfterSwitch;
         }
         runtime.record.lastUsedAt = now();
         await persist();
@@ -3437,6 +3542,9 @@ export function createTelegramTabManager<TContext>(
           return true;
         case "rename":
           await commandHandlers.rename(tabState, command.oldName, command.newName, chatId, replyToMessageId);
+          return true;
+        case "syncNames":
+          await commandHandlers.syncNames(tabState, chatId, replyToMessageId);
           return true;
         case "close":
           await commandHandlers.close(tabState, command.name, command.force, chatId, replyToMessageId);
@@ -3765,6 +3873,10 @@ export function createTelegramTabManager<TContext>(
           messageThreadId,
         );
         if (record && updateTelegramTopicRecordTitle(record, message.forum_topic_edited?.name)) {
+          const runtime = getRuntime(tabState, record.name);
+          if (runtime) {
+            await syncTopicSessionNameToWorker(runtime, { forceWorker: true });
+          }
           await persist();
         }
         return true;

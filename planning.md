@@ -49,8 +49,11 @@ Already implemented and live smoke-tested:
   source.topicTitle
   ```
 
+- Topic titles seed the topic-bound session display name when a topic is created or renamed. New/resumed topic worker sessions are named from the current topic title.
+- `/tab sync-names` reapplies topic titles to topic-bound session names/workers as a repair/backfill command.
+
 - Routing uses `(chatId, message_thread_id)` for non-General topics.
-- Topic title is display metadata only; identity is `chatId + messageThreadId`.
+- Topic title is display metadata and session-name seed only; identity is `chatId + messageThreadId`.
 - Topic prompts route to their topic-bound runtime and do not depend on global `/tab activeTab`.
 - Worker output, typing, tool previews, and final replies return to the originating topic.
 - `forum_topic_created` creates/updates a topic-bound record.
@@ -289,7 +292,7 @@ chatId + messageThreadId
 Topic title:
 
 ```text
-display metadata only
+display metadata and default session display name
 ```
 
 Rename behavior:
@@ -297,8 +300,11 @@ Rename behavior:
 ```text
 Deploy Debug renamed to Prod Debug
 -> same topic-bound record
--> update display title only
+-> update display title
+-> update topic-bound session display name
 ```
+
+The stable identity remains `chatId + messageThreadId`; title/name sync must not be used as identity.
 
 Duplicate topic titles must be allowed.
 
@@ -777,6 +783,78 @@ Tests:
 - Closing topic while worker is running does not send late replies.
 - Session file remains after topic close/delete.
 
+### Phase 3.5 — Topic title → session-name sync
+
+Status: implemented and live-smoke confirmed after `/reload`.
+
+Behavior:
+
+```text
+forum_topic_created / forum_topic_edited
+-> update source.topicTitle
+-> seed/update topic-bound record.sessionName
+```
+
+When a topic worker is hot, the title is also applied through RPC:
+
+```text
+backend.setSessionName(topicTitle)
+```
+
+Session lifecycle hooks:
+
+```text
+/new inside topic    -> create fresh session, then name it from current topic title
+/resume inside topic -> switch session, then name it from current topic title
+worker start         -> if worker session name differs from topic title, sync it
+```
+
+Repair/backfill:
+
+```text
+/tab sync-names
+```
+
+reapplies current topic titles to topic-bound records and hot workers. This is
+operator/repair UI only, not the primary topic workflow.
+
+Important constraints:
+
+- Title/name sync is one-way for now:
+
+  ```text
+  Telegram topic title -> session display name
+  ```
+
+- Do not automatically do the reverse yet:
+
+  ```text
+  /name -> edit Telegram forum topic title
+  ```
+
+  because that needs Bot API `editForumTopic` permission/error handling and may
+  be surprising UX.
+
+- Topic identity remains only:
+
+  ```text
+  chatId + messageThreadId
+  ```
+
+- Duplicate topic titles remain valid; title/name is never identity.
+- Manual `/name` can still set a different session display name, but topic
+  rename, worker start, `/new`, `/resume`, or `/tab sync-names` can reapply the
+  topic title.
+
+Validation for this implementation:
+
+```text
+npm run typecheck: pass
+node --experimental-strip-types --test tests/tab-manager.test.ts tests/tabs.test.ts: pass
+npm test: 691 pass, 0 fail
+git diff --check: pass
+```
+
 ### Phase 4 — Level 1 orphan cleanup and `/topic` repair commands
 
 Level 1 cleanup:
@@ -976,7 +1054,16 @@ npm run pack:check
 git diff --check
 ```
 
-Latest recorded results after Phase 0:
+Latest recorded results after topic-title/session-name sync:
+
+```text
+npm run typecheck: pass
+node --experimental-strip-types --test tests/tab-manager.test.ts tests/tabs.test.ts: pass
+full npm test: 691 pass, 0 fail
+git diff --check: pass
+```
+
+Previous Phase 0 baseline:
 
 ```text
 targeted tests: 82 pass
