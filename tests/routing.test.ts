@@ -63,6 +63,7 @@ function createTestConfigStore(options: { trustedChatIds?: number[] } = {}) {
       workerExtensions: [],
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,

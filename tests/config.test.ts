@@ -105,6 +105,7 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
     workerExtensions: ["/agent/extensions/provider.ts"],
     topicBinding: {
       enabled: false,
+      native: false,
       generalIsDefault: true,
       autoCreate: true,
       closeOnTopicClose: true,
@@ -152,6 +153,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     workerExtensions: [],
     topicBinding: {
       enabled: false,
+      native: false,
       generalIsDefault: true,
       autoCreate: true,
       closeOnTopicClose: true,
@@ -173,6 +175,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       workerExtensions: ["/agent/extensions/provider.ts"],
       topicBinding: {
         enabled: false,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -185,6 +188,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     normalizeTelegramConcurrentTabsConfig({
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: false,
         autoCreate: false,
         closeOnTopicClose: false,
@@ -194,6 +198,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     }).topicBinding,
     {
       enabled: true,
+      native: false,
       generalIsDefault: false,
       autoCreate: false,
       closeOnTopicClose: false,
@@ -209,6 +214,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       workerExtensions: ["/agent/extensions/provider.ts"],
       topicBinding: {
         enabled: true,
+        native: true,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -224,6 +230,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     workerExtensions: ["/agent/extensions/provider.ts"],
     topicBinding: {
       enabled: true,
+      native: true,
       generalIsDefault: true,
       autoCreate: true,
       closeOnTopicClose: true,

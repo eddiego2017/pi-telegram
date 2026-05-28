@@ -555,6 +555,8 @@ Phase 0 tests added/updated:
 
 ### Phase 1 — Forum-native policy and `/tab` lifecycle disable
 
+Status: implemented in code/tests and configured in Eddie's persisted/live runtime config. Needs `/reload` before the running extension uses the new native-mode guard code.
+
 Goal:
 
 ```text
@@ -563,7 +565,7 @@ Make forum-native behavior explicit and stop exposing manual /tab lifecycle as n
 
 #### Config
 
-Add an explicit policy flag under topic binding:
+Implemented explicit policy flag under topic binding:
 
 ```json
 {
@@ -653,9 +655,9 @@ Started tab X    -> Started topic workspace X
 
 Do not overdo wording changes in this phase if they require risky broad refactors. Prioritize disabling unsafe lifecycle actions.
 
-#### Implementation tasks
+#### Implemented behavior
 
-1. Extend config types/normalization:
+1. Config types/normalization now include:
 
    ```text
    TelegramConcurrentTabTopicBindingConfig.native?: boolean
@@ -663,43 +665,47 @@ Do not overdo wording changes in this phase if they require risky broad refactor
    default false
    ```
 
-2. Add helper in tab-manager:
+2. Tab-manager has a `isForumNativeMode()` policy helper.
+
+3. In native mode, state-changing `/tab` subcommands are blocked:
 
    ```text
-   isForumNativeMode(): boolean
+   /tab new
+   /tab switch
+   /tab close
+   /tab rename
    ```
 
-3. In `/tab` command handling, block state-changing subcommands when native mode is enabled:
+4. In native mode, `/tab <name>` no longer implicitly switches tabs; it remains a read-only dashboard/filter query.
+
+5. `/tab` dashboard still works in native mode, but its heading changes to `Forum topics` and `Current` instead of `Tabs`/`Active`.
+
+6. Native dashboard hides switch/close controls:
 
    ```text
-   new
-   switch
-   close
-   rename
+   no tab:switch buttons
+   no Manage 🗑 button
+   no Close button
    ```
 
-4. Keep read-only dashboard/list behavior working.
+7. Old/stale dashboard callback actions for switch/close are blocked with the native-mode guidance message and refresh back to the read-only dashboard.
 
-5. Audit callback handlers for dashboard buttons that call the same disabled actions; either hide them or make them answer with the native-mode message.
-
-6. Keep topic lifecycle behavior unchanged:
+8. Topic lifecycle behavior is unchanged:
 
    ```text
    Create topic -> create/update record
    Close topic  -> close/remove record -> deleteForumTopic when configured
    ```
 
-7. Update local config after implementation:
+9. Eddie's local persisted/live config has been updated with:
 
    ```json
    "native": true
    ```
 
-8. Reload live runtime after validation.
-
 #### Tests for Phase 1
 
-Add/adjust tests:
+Added/updated tests:
 
 - Config normalization defaults `native=false`.
 - Config normalization preserves `native=true`.
@@ -708,18 +714,19 @@ Add/adjust tests:
 - With `native=true`, `/tab switch` does not mutate `activeTab`.
 - With `native=true`, `/tab close` does not close/remove records.
 - With `native=true`, `/tab rename` does not mutate record names.
+- With `native=true`, `/tab <name>` filters instead of switching.
 - `/tab` dashboard/read-only view still works in native mode.
 - Dashboard callback close/switch actions are blocked or hidden in native mode.
 - Topic service lifecycle still works in native mode.
 
-#### Validation target
+#### Validation result
 
-```bash
-node --experimental-strip-types --test tests/config.test.ts tests/tab-manager.test.ts tests/routing.test.ts
-npm run typecheck
-npm test
-npm run pack:check
-git diff --check
+```text
+targeted tests: 61 pass
+npm run typecheck: pass
+full npm test: 693 pass
+npm run pack:check: pass
+git diff --check: pass
 ```
 
 #### Phase 1 non-goals

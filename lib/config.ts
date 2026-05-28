@@ -14,6 +14,7 @@ import type { CommandTemplateObjectConfig } from "./command-templates.ts";
 
 export interface TelegramConcurrentTabTopicBindingConfig {
   enabled?: boolean;
+  native?: boolean;
   generalIsDefault?: boolean;
   autoCreate?: boolean;
   closeOnTopicClose?: boolean;
@@ -23,6 +24,7 @@ export interface TelegramConcurrentTabTopicBindingConfig {
 
 export interface TelegramNormalizedConcurrentTabTopicBindingConfig {
   enabled: boolean;
+  native: boolean;
   generalIsDefault: boolean;
   autoCreate: boolean;
   closeOnTopicClose: boolean;
@@ -226,6 +228,7 @@ export function normalizeTelegramConcurrentTabTopicBindingConfig(
 ): TelegramNormalizedConcurrentTabTopicBindingConfig {
   return {
     enabled: config?.enabled ?? false,
+    native: config?.native ?? false,
     generalIsDefault: config?.generalIsDefault ?? true,
     autoCreate: config?.autoCreate ?? true,
     closeOnTopicClose: config?.closeOnTopicClose ?? true,

@@ -553,6 +553,7 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     workerExtensions: ["/agent/extensions/provider.ts"],
     topicBinding: {
       enabled: false,
+      native: false,
       generalIsDefault: true,
       autoCreate: true,
       closeOnTopicClose: true,
@@ -785,6 +786,7 @@ test("Tab manager routes forum topic prompts to topic-bound tabs without switchi
       workerExtensions: [],
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -917,6 +919,7 @@ test("Tab manager handles forum topic service create, edit, and close events", a
       workerExtensions: [],
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -1010,6 +1013,7 @@ test("Tab manager deletes Telegram forum topics after close when configured", as
       workerExtensions: [],
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -1077,6 +1081,7 @@ test("Tab manager ignores forum topic service events from untrusted chats", asyn
       workerExtensions: [],
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -1150,6 +1155,7 @@ test("Tab manager warns when delete-topic-on-close lacks Telegram rights", async
       workerExtensions: [],
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -1225,6 +1231,7 @@ test("Tab manager syncs forum topic titles into active session names", async () 
       workerExtensions: [],
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -1315,6 +1322,7 @@ test("Tab manager applies forum topic titles to new and resumed sessions", async
       workerExtensions: [],
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -1383,6 +1391,7 @@ test("Tab manager syncs persisted topic session names on demand", async () => {
       workerExtensions: [],
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -1454,6 +1463,7 @@ test("Tab manager scopes active APIs to ambient forum topics", async () => {
       workerExtensions: [],
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -1514,6 +1524,7 @@ test("Tab manager rejects unknown forum topics at max tab capacity", async () =>
       workerExtensions: [],
       topicBinding: {
         enabled: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -1941,6 +1952,180 @@ test("Tab manager closes the active tab with bare close command", async () => {
 
   await manager.handleCommand("status B", 1, 13, "ctx");
   assert.match(replies.at(-1) ?? "", /Unknown tab: B/);
+});
+
+test("Tab manager blocks manual tab lifecycle commands in forum-native mode", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-lifecycle-"));
+  const statePath = join(tempDir, "tabs.json");
+  const replies: string[] = [];
+  const config: TelegramNormalizedConcurrentTabsConfig = {
+    enabled: true,
+    maxTabs: 10,
+    inactiveNotify: true,
+    workerExtensions: [],
+    topicBinding: {
+      enabled: true,
+      native: false,
+      generalIsDefault: true,
+      autoCreate: true,
+      closeOnTopicClose: true,
+      deleteTopicOnClose: false,
+      trustedChatIds: [],
+    },
+  };
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => config,
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.handleCommand("new B", 1, 11, "ctx");
+  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "B");
+  config.topicBinding!.native = true;
+  replies.length = 0;
+
+  await manager.handleCommand("new C", 1, 12, "ctx");
+  assert.match(replies.at(-1) ?? "", /Forum-native mode is enabled/);
+  let saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    activeTab: string;
+    tabs: Record<string, unknown>;
+  };
+  assert.equal(saved.tabs.C, undefined);
+  assert.equal(saved.activeTab, "B");
+
+  await manager.handleCommand("switch A", 1, 13, "ctx");
+  assert.match(replies.at(-1) ?? "", /Forum-native mode is enabled/);
+  saved = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(saved.activeTab, "B");
+
+  await manager.handleCommand("A", 1, 14, "ctx");
+  assert.match(replies.at(-1) ?? "", /Tabs \(2\/3\):/);
+  assert.doesNotMatch(replies.at(-1) ?? "", /Switched to tab A/);
+  saved = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(saved.activeTab, "B");
+
+  await manager.handleCommand("close B --force", 1, 15, "ctx");
+  assert.match(replies.at(-1) ?? "", /Forum-native mode is enabled/);
+  saved = JSON.parse(await readFile(statePath, "utf8"));
+  assert.ok(saved.tabs.B);
+
+  await manager.handleCommand("rename B Beta", 1, 16, "ctx");
+  assert.match(replies.at(-1) ?? "", /Forum-native mode is enabled/);
+  saved = JSON.parse(await readFile(statePath, "utf8"));
+  assert.ok(saved.tabs.B);
+  assert.equal(saved.tabs.Beta, undefined);
+
+  await manager.handleCommand("status B", 1, 17, "ctx");
+  assert.match(replies.at(-1) ?? "", /Tab: B/);
+  await manager.dispose();
+});
+
+test("Tab manager keeps the dashboard read-only in forum-native mode", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-dashboard-"));
+  const statePath = join(tempDir, "tabs.json");
+  const textReplies: string[] = [];
+  const dashboardTexts: string[] = [];
+  const dashboardMarkups: string[] = [];
+  const interactiveEdits: string[] = [];
+  const answers: string[] = [];
+  const config: TelegramNormalizedConcurrentTabsConfig = {
+    enabled: true,
+    maxTabs: 10,
+    inactiveNotify: true,
+    workerExtensions: [],
+    topicBinding: {
+      enabled: true,
+      native: false,
+      generalIsDefault: true,
+      autoCreate: true,
+      closeOnTopicClose: true,
+      deleteTopicOnClose: false,
+      trustedChatIds: [],
+    },
+  };
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => config,
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      textReplies.push(text);
+      return textReplies.length;
+    },
+    sendInteractiveMessage: async (_chatId, text, _mode, markup) => {
+      dashboardTexts.push(text);
+      dashboardMarkups.push(JSON.stringify(markup));
+      return 77;
+    },
+    editInteractiveMessage: async (_chatId, _messageId, text, mode, markup) => {
+      dashboardTexts.push(text);
+      dashboardMarkups.push(JSON.stringify(markup));
+      interactiveEdits.push(`${mode}:${text.split("\n")[0]}`);
+    },
+    answerCallbackQuery: async (_id, text) => {
+      answers.push(text ?? "");
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.handleCommand("new B", 1, 11, "ctx");
+  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "B");
+  config.topicBinding!.native = true;
+
+  await manager.handleCommand("", 1, 12, "ctx");
+  assert.match(dashboardTexts.at(-1) ?? "", /^Forum topics 3\/10/);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /tab:switch:/);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /tab:close/);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /Manage 🗑/);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /Close/);
+
+  await manager.handleCallbackQuery(
+    {
+      id: "cb-switch-native",
+      data: "tab:switch:A",
+      message: { chat: { id: 7 }, message_id: 77 },
+    },
+    "ctx",
+  );
+  assert.match(answers.at(-1) ?? "", /Forum-native mode is enabled/);
+  let saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    activeTab: string;
+    tabs: Record<string, unknown>;
+  };
+  assert.equal(saved.activeTab, "B");
+  assert.match(interactiveEdits.at(-1) ?? "", /^plain:Forum topics 3\/10/);
+
+  await manager.handleCallbackQuery(
+    {
+      id: "cb-close-native",
+      data: "tab:close:do:B",
+      message: { chat: { id: 7 }, message_id: 77 },
+    },
+    "ctx",
+  );
+  assert.match(answers.at(-1) ?? "", /Forum-native mode is enabled/);
+  saved = JSON.parse(await readFile(statePath, "utf8"));
+  assert.ok(saved.tabs.B);
+
+  await manager.handleCallbackQuery(
+    {
+      id: "cb-close-manage-native",
+      data: "tab:close-manage",
+      message: { chat: { id: 7 }, message_id: 77 },
+    },
+    "ctx",
+  );
+  assert.match(answers.at(-1) ?? "", /Forum-native mode is enabled/);
+  assert.match(interactiveEdits.at(-1) ?? "", /^plain:Forum topics 3\/10/);
+  await manager.dispose();
 });
 
 test("Tab manager opens interactive dashboard and handles tab callbacks", async () => {

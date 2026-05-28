@@ -62,6 +62,8 @@ const TELEGRAM_TAB_STREAM_FAILURE_MAX_RETRY_MS = 10 * 60 * 1000;
 const TELEGRAM_TAB_STREAM_MARKDOWN_LIMIT = 3600;
 const TELEGRAM_TAB_TYPING_ACTION_INTERVAL_MS = 8_000;
 const TELEGRAM_TAB_DASHBOARD_STATE_TTL_MS = 10 * 60 * 1000;
+const TELEGRAM_FORUM_NATIVE_TAB_LIFECYCLE_DISABLED_MESSAGE =
+  "Forum-native mode is enabled. Use Telegram topics to create, switch, and close workspaces.";
 
 export interface TelegramTabPromptContent {
   type: string;
@@ -1157,6 +1159,7 @@ function formatTelegramTabDashboardSummary(
   selectedCloseTabs: readonly string[] = [],
   visibleTabs?: readonly TelegramTabRecord[],
   filterTrace: readonly TelegramTabFilterTraceItem[] = [],
+  forumNativeMode = false,
 ): string {
   const allTabs = getSortedTelegramTabRecords(state);
   const tabs = mode === "open" && visibleTabs ? [...visibleTabs] : allTabs;
@@ -1172,18 +1175,20 @@ function formatTelegramTabDashboardSummary(
   const filterSummary = mode === "open"
     ? formatTelegramTabFilterSummary(filterTrace)
     : undefined;
+  const title = forumNativeMode ? "Forum topics" : "Tabs";
+  const currentLabel = forumNativeMode ? "Current" : "Active";
   const lines = [
     filterSummary
-      ? `Tabs ${tabs.length}/${allTabs.length} filtered (${allTabs.length}/${maxTabs} total)`
-      : `Tabs ${allTabs.length}/${maxTabs}`,
+      ? `${title} ${tabs.length}/${allTabs.length} filtered (${allTabs.length}/${maxTabs} total)`
+      : `${title} ${allTabs.length}/${maxTabs}`,
     active
       ? [
-          `Active: ${active.name}`,
+          `${currentLabel}: ${active.name}`,
           formatTelegramTabStatusLabel(active.status),
           `${Math.max(0, active.messageCount ?? 0)}msg`,
           formatTelegramTabDashboardName(active),
         ].join(" · ")
-      : `Active: ${state.activeTab}`,
+      : `${currentLabel}: ${state.activeTab}`,
   ];
   if (active?.currentThinkingLevel) {
     lines.push(`Thinking: ${active.currentThinkingLevel}`);
@@ -1261,6 +1266,7 @@ function buildTelegramTabDashboardReplyMarkup(
   mode: TelegramTabDashboardMode = "open",
   selectedCloseTabs: readonly string[] = [],
   visibleTabs?: readonly TelegramTabRecord[],
+  forumNativeMode = false,
 ): TelegramInlineKeyboardMarkup {
   const rows: TelegramInlineKeyboardMarkup["inline_keyboard"] = [];
   const tabs = mode === "open" && visibleTabs
@@ -1317,7 +1323,7 @@ function buildTelegramTabDashboardReplyMarkup(
         unreadByTab[tab.name] ?? 0,
       ),
       callback_data:
-        tab.name === state.activeTab
+        forumNativeMode || tab.name === state.activeTab
           ? "tab:noop"
           : `tab:switch:${encodeTelegramTabCallbackName(tab.name)}`,
     }));
@@ -1326,15 +1332,17 @@ function buildTelegramTabDashboardReplyMarkup(
   if (visibleTabs) {
     rows.push([{ text: "All tabs", callback_data: "tab:refresh" }]);
   }
-  if (getTelegramTabCloseableNames(state).length > 0) {
+  if (!forumNativeMode && getTelegramTabCloseableNames(state).length > 0) {
     rows.push([{ text: "Manage 🗑", callback_data: "tab:close-manage" }]);
   }
-  rows.push([
-    {
-      text: "Close",
-      callback_data: `tab:close:${encodeTelegramTabCallbackName(state.activeTab)}`,
-    },
-  ]);
+  if (!forumNativeMode) {
+    rows.push([
+      {
+        text: "Close",
+        callback_data: `tab:close:${encodeTelegramTabCallbackName(state.activeTab)}`,
+      },
+    ]);
+  }
   return { inline_keyboard: rows };
 }
 
@@ -1492,6 +1500,8 @@ export function createTelegramTabManager<TContext>(
   const getTopicBindingConfig = () => deps.getConfig().topicBinding;
   const isTopicBindingEnabled = (): boolean =>
     isEnabled() && getTopicBindingConfig()?.enabled === true;
+  const isForumNativeMode = (): boolean => isTopicBindingEnabled() &&
+    getTopicBindingConfig()?.native === true;
   const isTrustedTopicBindingChat = (chatId: unknown): boolean =>
     isTelegramTrustedChat(getTopicBindingConfig()?.trustedChatIds, chatId);
   const isTopicDeliveryActive = (runtime: RuntimeTab): boolean =>
@@ -2625,6 +2635,15 @@ export function createTelegramTabManager<TContext>(
         runtime.unreadEvents,
       ]),
     );
+  const sendForumNativeLifecycleDisabledReply = (
+    chatId: number,
+    replyToMessageId: number,
+  ): Promise<number | undefined> =>
+    deps.sendTextReply(
+      chatId,
+      replyToMessageId,
+      TELEGRAM_FORUM_NATIVE_TAB_LIFECYCLE_DISABLED_MESSAGE,
+    );
   const sendTabDashboard = async (
     tabState: TelegramTabsState,
     chatId: number,
@@ -2633,6 +2652,7 @@ export function createTelegramTabManager<TContext>(
   ): Promise<void> => {
     await refreshDashboardTabRecords(tabState);
     const unreadByTab = getUnreadByTab();
+    const forumNativeMode = isForumNativeMode();
     const filterResult = filterTelegramTabRecords(
       getSortedTelegramTabRecords(tabState),
       filters,
@@ -2662,9 +2682,17 @@ export function createTelegramTabManager<TContext>(
         [],
         visibleTabs,
         filterResult.trace,
+        forumNativeMode,
       ),
       "plain",
-      buildTelegramTabDashboardReplyMarkup(tabState, unreadByTab, "open", [], visibleTabs),
+      buildTelegramTabDashboardReplyMarkup(
+        tabState,
+        unreadByTab,
+        "open",
+        [],
+        visibleTabs,
+        forumNativeMode,
+      ),
     );
     if (messageId !== undefined) {
       setDashboardState({
@@ -2688,7 +2716,8 @@ export function createTelegramTabManager<TContext>(
     await refreshDashboardTabRecords(tabState);
     const unreadByTab = getUnreadByTab();
     const existingState = getDashboardState(messageId);
-    const mode = options.mode ?? existingState?.mode ?? "open";
+    const forumNativeMode = isForumNativeMode();
+    const mode = forumNativeMode ? "open" : options.mode ?? existingState?.mode ?? "open";
     const selectedCloseTabs = normalizeTelegramTabCloseSelection(
       tabState,
       options.selectedCloseTabs ?? existingState?.selectedCloseTabs ?? [],
@@ -2704,6 +2733,9 @@ export function createTelegramTabManager<TContext>(
         now(),
         mode,
         selectedCloseTabs,
+        undefined,
+        [],
+        forumNativeMode,
       ),
       "plain",
       buildTelegramTabDashboardReplyMarkup(
@@ -2711,6 +2743,8 @@ export function createTelegramTabManager<TContext>(
         unreadByTab,
         mode,
         selectedCloseTabs,
+        undefined,
+        forumNativeMode,
       ),
     );
     setDashboardState({
@@ -2770,7 +2804,7 @@ export function createTelegramTabManager<TContext>(
       replyToMessageId: number,
     ) => {
       const name = normalizeTelegramTabName(query);
-      if (getRuntime(tabState, name)) {
+      if (!isForumNativeMode() && getRuntime(tabState, name)) {
         await commandHandlers.switch(tabState, name, chatId, replyToMessageId);
         return;
       }
@@ -3532,21 +3566,37 @@ export function createTelegramTabManager<TContext>(
           await commandHandlers.list(tabState, chatId, replyToMessageId);
           return true;
         case "new":
+          if (isForumNativeMode()) {
+            await sendForumNativeLifecycleDisabledReply(chatId, replyToMessageId);
+            return true;
+          }
           await commandHandlers.new(tabState, command.name, chatId, replyToMessageId, ctx);
           return true;
         case "query":
           await commandHandlers.query(tabState, command.query, command.filters, chatId, replyToMessageId);
           return true;
         case "switch":
+          if (isForumNativeMode()) {
+            await sendForumNativeLifecycleDisabledReply(chatId, replyToMessageId);
+            return true;
+          }
           await commandHandlers.switch(tabState, command.name, chatId, replyToMessageId);
           return true;
         case "rename":
+          if (isForumNativeMode()) {
+            await sendForumNativeLifecycleDisabledReply(chatId, replyToMessageId);
+            return true;
+          }
           await commandHandlers.rename(tabState, command.oldName, command.newName, chatId, replyToMessageId);
           return true;
         case "syncNames":
           await commandHandlers.syncNames(tabState, chatId, replyToMessageId);
           return true;
         case "close":
+          if (isForumNativeMode()) {
+            await sendForumNativeLifecycleDisabledReply(chatId, replyToMessageId);
+            return true;
+          }
           await commandHandlers.close(tabState, command.name, command.force, chatId, replyToMessageId);
           return true;
         case "status":
@@ -3581,6 +3631,20 @@ export function createTelegramTabManager<TContext>(
       }
       const tabState = await ensureState(deps.getCwd(ctx));
       const [, action, rawMode, rawName] = data.split(":");
+      if (
+        isForumNativeMode() &&
+        (action === "switch" || action === "close" || action?.startsWith("close-"))
+      ) {
+        await answerTabCallback(
+          query.id,
+          TELEGRAM_FORUM_NATIVE_TAB_LIFECYCLE_DISABLED_MESSAGE,
+        );
+        await editTabDashboard(tabState, chatId, messageId, {
+          mode: "open",
+          selectedCloseTabs: [],
+        });
+        return true;
+      }
       if (action === "noop") {
         await answerTabCallback(query.id, `Active tab: ${tabState.activeTab}`);
         return true;
@@ -3770,8 +3834,9 @@ export function createTelegramTabManager<TContext>(
         return true;
       }
       if (action === "help") {
-        const text =
-          rawMode === "rename"
+        const text = isForumNativeMode()
+          ? TELEGRAM_FORUM_NATIVE_TAB_LIFECYCLE_DISABLED_MESSAGE
+          : rawMode === "rename"
             ? "Use /tab rename [old-name] <new-name>."
             : "Use /tab new <name>.";
         await answerTabCallback(query.id, text);
