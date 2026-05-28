@@ -26,6 +26,7 @@ import {
 import {
   createDefaultTelegramTabsState,
   filterTelegramTabRecords,
+  findTelegramTabByTopic,
   findTelegramTabNameCaseConflict,
   formatTelegramTabFilterSummary,
   formatTelegramTabList,
@@ -34,19 +35,25 @@ import {
   formatTelegramTabUsage,
   normalizeTelegramTabName,
   normalizeTelegramTabsState,
+  normalizeTelegramTopicTabName,
   parseTelegramTabCommand,
   TELEGRAM_DEFAULT_TAB_NAME,
   truncateTelegramTabText,
   validateTelegramTabName,
   type TelegramTabFilterTraceItem,
   type TelegramTabRecord,
+  type TelegramTabSourceTelegramTopic,
   type TelegramTabsState,
 } from "./tabs.ts";
-import type { TelegramConcurrentTabsConfig } from "./config.ts";
+import type { TelegramNormalizedConcurrentTabsConfig } from "./config.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./model.ts";
 import { getTelegramAgentDir } from "./config.ts";
 import type { TelegramDebugLogger } from "./debug.ts";
 import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
+import {
+  getAmbientTelegramThreadContext,
+  runWithTelegramThreadContext,
+} from "./thread-context.ts";
 
 const TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS = 10_000;
 const TELEGRAM_TAB_STREAM_FAILURE_BASE_RETRY_MS = 30_000;
@@ -62,9 +69,22 @@ export interface TelegramTabPromptContent {
 
 export interface TelegramTabPromptTurn {
   chatId: number;
+  messageThreadId?: number;
   replyToMessageId: number;
   content: readonly TelegramTabPromptContent[];
   statusSummary?: string;
+}
+
+export interface TelegramTabForumTopicServiceMessage {
+  chat: { id?: number };
+  message_id?: number;
+  message_thread_id?: number;
+  forum_topic_created?: { name: string };
+  forum_topic_edited?: { name?: string };
+  forum_topic_closed?: Record<string, never>;
+  forum_topic_reopened?: Record<string, never>;
+  general_forum_topic_hidden?: Record<string, never>;
+  general_forum_topic_unhidden?: Record<string, never>;
 }
 
 export interface TelegramTabBackend {
@@ -118,7 +138,7 @@ export interface TelegramTabTreeBranchResult {
 }
 
 export interface TelegramTabManagerDeps<TContext> {
-  getConfig: () => Required<TelegramConcurrentTabsConfig>;
+  getConfig: () => TelegramNormalizedConcurrentTabsConfig;
   getCwd: (ctx: TContext) => string;
   sendTextReply: (
     chatId: number,
@@ -203,9 +223,12 @@ interface RuntimeTab {
   sentThinkingTexts: Set<string>;
   sentToolCallMessages: Set<string>;
   typingChatId?: number;
+  typingMessageThreadId?: number;
   typingInterval?: ReturnType<typeof setInterval>;
   activeChatId?: number;
+  activeMessageThreadId?: number;
   activeReplyToMessageId?: number;
+  activeTopicDelivery?: boolean;
   activeTurnId?: string;
   promptStartedAt?: number;
   promptSentAt?: number;
@@ -314,6 +337,10 @@ export interface TelegramTabManager<TContext> {
   ) => Promise<boolean>;
   handleCallbackQuery: (
     query: TelegramTabCallbackQuery,
+    ctx: TContext,
+  ) => Promise<boolean>;
+  handleTopicServiceMessage: (
+    message: TelegramTabForumTopicServiceMessage,
     ctx: TContext,
   ) => Promise<boolean>;
   dispatchPrompt: (turn: TelegramTabPromptTurn, ctx: TContext) => Promise<boolean>;
@@ -1006,18 +1033,9 @@ function getRpcAssistantToolCallPreview(
   const assistantEvent = getRpcAssistantMessageEvent(event);
   if (!assistantEvent) return undefined;
   const eventType = assistantEvent.type;
-  if (
-    eventType !== "toolcall_start" &&
-    eventType !== "toolcall_delta" &&
-    eventType !== "toolcall_end"
-  ) {
-    return undefined;
-  }
+  if (eventType !== "toolcall_end") return undefined;
   const index = getRpcAssistantEventContentIndex(assistantEvent);
-  const block =
-    eventType === "toolcall_end"
-      ? assistantEvent.toolCall
-      : getAgentMessageContentBlock(assistantEvent.partial, index);
+  const block = assistantEvent.toolCall;
   const markdown = formatTelegramTabToolCallPreview(block);
   return markdown
     ? { index, markdown, final: eventType === "toolcall_end" }
@@ -1455,6 +1473,34 @@ export function createTelegramTabManager<TContext>(
     runtime.record = record;
     return runtime;
   };
+  const getTopicBindingConfig = () => deps.getConfig().topicBinding;
+  const isTopicBindingEnabled = (): boolean =>
+    isEnabled() && getTopicBindingConfig()?.enabled === true;
+  const isTopicDeliveryActive = (runtime: RuntimeTab): boolean =>
+    runtime.activeTopicDelivery === true;
+  const isRuntimeDeliveryActive = (
+    tabState: TelegramTabsState,
+    tabName: string,
+    runtime: RuntimeTab,
+  ): boolean => isTopicDeliveryActive(runtime) || tabState.activeTab === tabName;
+  const runInTabThreadContext = <T>(runtime: RuntimeTab, fn: () => T): T => {
+    if (runtime.activeChatId === undefined) return fn();
+    return runWithTelegramThreadContext(
+      {
+        chatId: runtime.activeChatId,
+        messageThreadId: runtime.activeMessageThreadId,
+      },
+      fn,
+    );
+  };
+  const sendTurnTextReply = (
+    turn: TelegramTabPromptTurn,
+    text: string,
+  ): Promise<number | undefined> =>
+    runWithTelegramThreadContext(
+      { chatId: turn.chatId, messageThreadId: turn.messageThreadId },
+      () => deps.sendTextReply(turn.chatId, turn.replyToMessageId, text),
+    );
   const sendTabReply = (
     chatId: number | undefined,
     replyToMessageId: number | undefined,
@@ -1505,6 +1551,7 @@ export function createTelegramTabManager<TContext>(
       runtime.typingInterval = undefined;
     }
     runtime.typingChatId = undefined;
+    runtime.typingMessageThreadId = undefined;
   };
   const stopOtherTabTyping = (tabName: string): void => {
     for (const [name, runtime] of runtimeTabs.entries()) {
@@ -1514,18 +1561,28 @@ export function createTelegramTabManager<TContext>(
   const startTabTyping = (tabName: string, runtime: RuntimeTab): void => {
     const chatId = runtime.activeChatId;
     if (!deps.sendTypingAction || chatId === undefined || chatId === 0) return;
-    stopOtherTabTyping(tabName);
-    if (runtime.typingInterval && runtime.typingChatId === chatId) return;
+    if (!isTopicDeliveryActive(runtime)) stopOtherTabTyping(tabName);
+    if (
+      runtime.typingInterval &&
+      runtime.typingChatId === chatId &&
+      runtime.typingMessageThreadId === runtime.activeMessageThreadId
+    ) {
+      return;
+    }
     stopTabTyping(runtime);
     const sendTyping = (): void => {
-      void deps.sendTypingAction?.(chatId).catch((error) => {
+      void Promise.resolve(
+        runInTabThreadContext(runtime, () => deps.sendTypingAction!(chatId)),
+      ).catch((error) => {
         deps.recordRuntimeEvent?.("typing", error, {
           tab: runtime.record.name,
           chatId,
+          messageThreadId: runtime.activeMessageThreadId,
         });
       });
     };
     runtime.typingChatId = chatId;
+    runtime.typingMessageThreadId = runtime.activeMessageThreadId;
     sendTyping();
     runtime.typingInterval = setInterval(sendTyping, typingIntervalMs);
   };
@@ -1644,20 +1701,24 @@ export function createTelegramTabManager<TContext>(
         let delivered = false;
         try {
           if (stream.messageId === undefined) {
-            const messageId = await sendTabStreamMarkdownReply(
-              runtime.activeChatId,
-              runtime.activeReplyToMessageId,
-              markdown,
+            const messageId = await runInTabThreadContext(runtime, () =>
+              sendTabStreamMarkdownReply(
+                runtime.activeChatId,
+                runtime.activeReplyToMessageId,
+                markdown,
+              ),
             );
             if (messageId !== undefined) {
               stream.messageId = messageId;
               delivered = true;
             }
           } else if (deps.editStreamMarkdownMessage) {
-            const messageId = await editTabStreamMarkdownMessage(
-              runtime.activeChatId,
-              stream.messageId,
-              markdown,
+            const messageId = await runInTabThreadContext(runtime, () =>
+              editTabStreamMarkdownMessage(
+                runtime.activeChatId,
+                stream.messageId,
+                markdown,
+              ),
             );
             delivered = true;
             if (messageId !== undefined) stream.messageId = messageId;
@@ -1732,7 +1793,7 @@ export function createTelegramTabManager<TContext>(
     force = false,
     truncate = true,
   ): void => {
-    if (tabState.activeTab !== tabName) return;
+    if (!isRuntimeDeliveryActive(tabState, tabName, runtime)) return;
     stream.markdown = truncate
       ? truncateTelegramTabStreamMarkdown(markdown)
       : markdown.trim();
@@ -1746,7 +1807,7 @@ export function createTelegramTabManager<TContext>(
     force = false,
   ): boolean => {
     const trimmed = text.trim();
-    if (!trimmed || tabState.activeTab !== tabName) return false;
+    if (!trimmed || !isRuntimeDeliveryActive(tabState, tabName, runtime)) return false;
     streamActiveTabMarkdown(
       tabState,
       tabName,
@@ -1812,6 +1873,7 @@ export function createTelegramTabManager<TContext>(
     tab: tabName,
     turnId: runtime.activeTurnId,
     chatId: runtime.activeChatId,
+    messageThreadId: runtime.activeMessageThreadId,
     replyToMessageId: runtime.activeReplyToMessageId,
   });
   const logTabFirstOutput = (
@@ -1878,12 +1940,14 @@ export function createTelegramTabManager<TContext>(
     }
     const markdown = getAgentMessageText(message);
     if (!markdown || runtime.sentToolCallMessages.has(markdown)) return true;
-    if (tabState.activeTab !== tabName) return false;
+    if (!isRuntimeDeliveryActive(tabState, tabName, runtime)) return false;
     runtime.sentToolCallMessages.add(markdown);
-    void sendTabMarkdownReply(
-      runtime.activeChatId,
-      runtime.activeReplyToMessageId,
-      markdown,
+    void runInTabThreadContext(runtime, () =>
+      sendTabMarkdownReply(
+        runtime.activeChatId,
+        runtime.activeReplyToMessageId,
+        markdown,
+      ),
     );
     return true;
   };
@@ -1913,7 +1977,9 @@ export function createTelegramTabManager<TContext>(
       record.status = "running";
       record.lastError = undefined;
       record.lastAgentStartAt = eventNow;
-      if (tabState.activeTab === tabName) startTabTyping(tabName, runtime);
+      if (isRuntimeDeliveryActive(tabState, tabName, runtime)) {
+        startTabTyping(tabName, runtime);
+      }
       void persist();
       return;
     }
@@ -2037,22 +2103,26 @@ export function createTelegramTabManager<TContext>(
         logTabTurnSummary(tabName, runtime, "error", assistantError);
         record.status = "error";
         record.lastError = assistantError;
-        const isActive = tabState.activeTab === tabName;
+        const isActive = isRuntimeDeliveryActive(tabState, tabName, runtime);
         if (!runtime.activeErrorDelivered) {
           runtime.activeErrorDelivered = true;
           if (isActive) {
-            void sendTabReply(
-              runtime.activeChatId,
-              runtime.activeReplyToMessageId,
-              `Tab ${tabName} failed: ${assistantError}`,
+            void runInTabThreadContext(runtime, () =>
+              sendTabReply(
+                runtime.activeChatId,
+                runtime.activeReplyToMessageId,
+                `Tab ${tabName} failed: ${assistantError}`,
+              ),
             );
           } else {
             runtime.unreadEvents += 1;
             if (deps.getConfig().inactiveNotify) {
-              void sendTabReply(
-                runtime.activeChatId,
-                runtime.activeReplyToMessageId,
-                `Tab ${tabName} failed: ${assistantError}`,
+              void runInTabThreadContext(runtime, () =>
+                sendTabReply(
+                  runtime.activeChatId,
+                  runtime.activeReplyToMessageId,
+                  `Tab ${tabName} failed: ${assistantError}`,
+                ),
               );
             }
           }
@@ -2066,7 +2136,7 @@ export function createTelegramTabManager<TContext>(
         runtime.activeAssistantText = runtime.activeBuffer;
         record.lastAssistantText = runtime.activeBuffer;
       }
-      const isActive = tabState.activeTab === tabName;
+      const isActive = isRuntimeDeliveryActive(tabState, tabName, runtime);
       const finalBodyText = latestAssistant
         ? extractAgentBodyText(latestAssistant)
         : runtime.activeBuffer;
@@ -2080,20 +2150,24 @@ export function createTelegramTabManager<TContext>(
         !finalAlreadySentAsToolCall &&
         !finalAlreadyStreamedAsText
       ) {
-        void sendTabMarkdownReply(
-          runtime.activeChatId,
-          runtime.activeReplyToMessageId,
-          runtime.activeAssistantText,
+        void runInTabThreadContext(runtime, () =>
+          sendTabMarkdownReply(
+            runtime.activeChatId,
+            runtime.activeReplyToMessageId,
+            runtime.activeAssistantText!,
+          ),
         );
       } else if (!isActive) {
         runtime.unreadEvents += 1;
         if (deps.getConfig().inactiveNotify) {
           const chatId = runtime.activeChatId;
           const replyToMessageId = runtime.activeReplyToMessageId;
-          void sendTabReply(
-            chatId,
-            replyToMessageId,
-            `Tab ${tabName} finished. Use /tab ${tabName} to view latest reply.`,
+          void runInTabThreadContext(runtime, () =>
+            sendTabReply(
+              chatId,
+              replyToMessageId,
+              `Tab ${tabName} finished. Use /tab ${tabName} to view latest reply.`,
+            ),
           );
         }
       }
@@ -2225,9 +2299,229 @@ export function createTelegramTabManager<TContext>(
       }),
     );
   };
+  const getTelegramTopicServiceKind = (
+    message: TelegramTabForumTopicServiceMessage,
+  ):
+    | "created"
+    | "edited"
+    | "closed"
+    | "reopened"
+    | "general-hidden"
+    | "general-unhidden"
+    | undefined => {
+    if (message.forum_topic_created) return "created";
+    if (message.forum_topic_edited) return "edited";
+    if (message.forum_topic_closed) return "closed";
+    if (message.forum_topic_reopened) return "reopened";
+    if (message.general_forum_topic_hidden) return "general-hidden";
+    if (message.general_forum_topic_unhidden) return "general-unhidden";
+    return undefined;
+  };
+  const updateTelegramTopicRecordTitle = (
+    record: TelegramTabRecord,
+    topicTitle: string | undefined,
+  ): boolean => {
+    if (!topicTitle || record.source?.kind !== "telegram-topic") return false;
+    if (record.source.topicTitle === topicTitle) return false;
+    record.source = { ...record.source, topicTitle };
+    return true;
+  };
+  const createTelegramTopicTabRecord = (
+    tabState: TelegramTabsState,
+    scope: { chatId: number; messageThreadId: number; topicTitle?: string },
+    ctx: TContext,
+  ): TelegramTabRecord => {
+    const createdAt = now();
+    let name = normalizeTelegramTopicTabName(scope.chatId, scope.messageThreadId);
+    if (tabState.tabs[name]) {
+      let suffix = 2;
+      const base = name.slice(0, Math.max(1, 29));
+      while (tabState.tabs[name]) {
+        name = `${base}-${suffix}`.slice(0, 32);
+        suffix += 1;
+      }
+    }
+    const source: TelegramTabSourceTelegramTopic = {
+      kind: "telegram-topic",
+      chatId: scope.chatId,
+      messageThreadId: scope.messageThreadId,
+      ...(scope.topicTitle ? { topicTitle: scope.topicTitle } : {}),
+    };
+    return {
+      name,
+      cwd: deps.getCwd(ctx),
+      createdAt,
+      lastUsedAt: createdAt,
+      status: "idle",
+      source,
+    };
+  };
+  const getOrCreateTopicRuntimeForTurn = async (
+    tabState: TelegramTabsState,
+    turn: TelegramTabPromptTurn,
+    ctx: TContext,
+  ): Promise<RuntimeTab | undefined> => {
+    const topicBinding = getTopicBindingConfig();
+    if (!topicBinding?.enabled) return undefined;
+    if (turn.messageThreadId === undefined && topicBinding.generalIsDefault) {
+      return getRuntime(tabState, TELEGRAM_DEFAULT_TAB_NAME);
+    }
+    if (turn.messageThreadId === undefined) return undefined;
+    const existing = findTelegramTabByTopic(
+      tabState.tabs,
+      turn.chatId,
+      turn.messageThreadId,
+    );
+    if (existing) return getRuntime(tabState, existing.name);
+    if (!topicBinding.autoCreate) return undefined;
+    if (Object.keys(tabState.tabs).length >= deps.getConfig().maxTabs) {
+      await sendTurnTextReply(
+        turn,
+        "Maximum tab count reached. Close another topic/tab first.",
+      );
+      return undefined;
+    }
+    const record = createTelegramTopicTabRecord(
+      tabState,
+      { chatId: turn.chatId, messageThreadId: turn.messageThreadId },
+      ctx,
+    );
+    tabState.tabs[record.name] = record;
+    const runtime = createRuntimeTab(record);
+    runtimeTabs.set(record.name, runtime);
+    await persist();
+    return runtime;
+  };
+  const getRuntimeForPromptTurn = async (
+    tabState: TelegramTabsState,
+    turn: TelegramTabPromptTurn,
+    ctx: TContext,
+  ): Promise<RuntimeTab | undefined> => {
+    if (!isTopicBindingEnabled()) return getRuntime(tabState, tabState.activeTab);
+    if (turn.messageThreadId === undefined) {
+      return getTopicBindingConfig()?.generalIsDefault
+        ? getRuntime(tabState, TELEGRAM_DEFAULT_TAB_NAME)
+        : getRuntime(tabState, tabState.activeTab);
+    }
+    const runtime = await getOrCreateTopicRuntimeForTurn(tabState, turn, ctx);
+    if (runtime) return runtime;
+    if (!getTopicBindingConfig()?.autoCreate) {
+      await sendTurnTextReply(
+        turn,
+        "No tab is bound to this Telegram topic.",
+      );
+    }
+    return undefined;
+  };
+  const upsertTelegramTopicTabRecord = async (
+    tabState: TelegramTabsState,
+    scope: { chatId: number; messageThreadId: number; topicTitle?: string },
+    ctx: TContext,
+    options: { enforceCapacity: boolean },
+  ): Promise<TelegramTabRecord | undefined> => {
+    const existing = findTelegramTabByTopic(
+      tabState.tabs,
+      scope.chatId,
+      scope.messageThreadId,
+    );
+    if (existing) {
+      if (updateTelegramTopicRecordTitle(existing, scope.topicTitle)) {
+        await persist();
+      }
+      return existing;
+    }
+    if (
+      options.enforceCapacity &&
+      Object.keys(tabState.tabs).length >= deps.getConfig().maxTabs
+    ) {
+      return undefined;
+    }
+    const record = createTelegramTopicTabRecord(tabState, scope, ctx);
+    tabState.tabs[record.name] = record;
+    runtimeTabs.set(record.name, createRuntimeTab(record));
+    await persist();
+    return record;
+  };
+  const resolveScopedTopicRuntime = async (
+    tabState: TelegramTabsState,
+    ctx: TContext,
+  ): Promise<{ scoped: boolean; runtime?: RuntimeTab }> => {
+    if (!isTopicBindingEnabled()) return { scoped: false };
+    const scope = getAmbientTelegramThreadContext();
+    if (!scope) return { scoped: false };
+    const topicBinding = getTopicBindingConfig();
+    if (scope.messageThreadId === undefined) {
+      return {
+        scoped: true,
+        runtime: topicBinding?.generalIsDefault
+          ? getRuntime(tabState, TELEGRAM_DEFAULT_TAB_NAME)
+          : undefined,
+      };
+    }
+    const existing = findTelegramTabByTopic(
+      tabState.tabs,
+      scope.chatId,
+      scope.messageThreadId,
+    );
+    if (existing) return { scoped: true, runtime: getRuntime(tabState, existing.name) };
+    if (!topicBinding?.autoCreate) return { scoped: true };
+    const record = await upsertTelegramTopicTabRecord(
+      tabState,
+      { chatId: scope.chatId, messageThreadId: scope.messageThreadId },
+      ctx,
+      { enforceCapacity: true },
+    );
+    return {
+      scoped: true,
+      runtime: record ? getRuntime(tabState, record.name) : undefined,
+    };
+  };
+  const resolveScopedTopicRuntimeSync = (
+    tabState: TelegramTabsState,
+    ctx: TContext,
+  ): { scoped: boolean; runtime?: RuntimeTab } => {
+    if (!isTopicBindingEnabled()) return { scoped: false };
+    const scope = getAmbientTelegramThreadContext();
+    if (!scope) return { scoped: false };
+    const topicBinding = getTopicBindingConfig();
+    if (scope.messageThreadId === undefined) {
+      return {
+        scoped: true,
+        runtime: topicBinding?.generalIsDefault
+          ? getRuntime(tabState, TELEGRAM_DEFAULT_TAB_NAME)
+          : undefined,
+      };
+    }
+    const existing = findTelegramTabByTopic(
+      tabState.tabs,
+      scope.chatId,
+      scope.messageThreadId,
+    );
+    if (existing) return { scoped: true, runtime: getRuntime(tabState, existing.name) };
+    if (!topicBinding?.autoCreate) return { scoped: true };
+    if (Object.keys(tabState.tabs).length >= deps.getConfig().maxTabs) {
+      return { scoped: true };
+    }
+    const record = createTelegramTopicTabRecord(
+      tabState,
+      { chatId: scope.chatId, messageThreadId: scope.messageThreadId },
+      ctx,
+    );
+    tabState.tabs[record.name] = record;
+    const runtime = createRuntimeTab(record);
+    runtimeTabs.set(record.name, runtime);
+    void persist();
+    return { scoped: true, runtime };
+  };
   const getActiveRuntime = async (ctx: TContext): Promise<RuntimeTab | undefined> => {
     const tabState = await ensureState(deps.getCwd(ctx));
-    return getRuntime(tabState, tabState.activeTab);
+    const scoped = await resolveScopedTopicRuntime(tabState, ctx);
+    return scoped.scoped ? scoped.runtime : getRuntime(tabState, tabState.activeTab);
+  };
+  const getActiveRuntimeSync = (ctx: TContext): RuntimeTab | undefined => {
+    const tabState = ensureStateSync(deps.getCwd(ctx));
+    const scoped = resolveScopedTopicRuntimeSync(tabState, ctx);
+    return scoped.scoped ? scoped.runtime : getRuntime(tabState, tabState.activeTab);
   };
   const replyDisabled = (
     chatId: number,
@@ -2691,15 +2985,13 @@ export function createTelegramTabManager<TContext>(
     },
     getActiveSessionReference: (ctx) => {
       if (!isEnabled()) return undefined;
-      const tabState = ensureStateSync(deps.getCwd(ctx));
-      const runtime = getRuntime(tabState, tabState.activeTab);
+      const runtime = getActiveRuntimeSync(ctx);
       if (!runtime) return undefined;
       return getTelegramTabSessionReference(runtime.record, deps.getCwd(ctx));
     },
     getActiveResumeSessionScope: (ctx) => {
       if (!isEnabled()) return undefined;
-      const tabState = ensureStateSync(deps.getCwd(ctx));
-      const runtime = getRuntime(tabState, tabState.activeTab);
+      const runtime = getActiveRuntimeSync(ctx);
       if (!runtime) return undefined;
       const cwd = runtime.record.cwd || deps.getCwd(ctx);
       return {
@@ -2712,8 +3004,7 @@ export function createTelegramTabManager<TContext>(
     },
     getActiveSessionName: (ctx) => {
       if (!isEnabled()) return undefined;
-      const tabState = ensureStateSync(deps.getCwd(ctx));
-      const runtime = getRuntime(tabState, tabState.activeTab);
+      const runtime = getActiveRuntimeSync(ctx);
       return runtime?.record.sessionName;
     },
     canSwitchActiveModel: async (ctx) => {
@@ -2811,8 +3102,7 @@ export function createTelegramTabManager<TContext>(
     },
     compactActive: (ctx, callbacks) => {
       if (!isEnabled()) return false;
-      const tabState = ensureStateSync(deps.getCwd(ctx));
-      const runtime = getRuntime(tabState, tabState.activeTab);
+      const runtime = getActiveRuntimeSync(ctx);
       if (!runtime) return false;
       if (
         runtime.record.status === "running" ||
@@ -2905,7 +3195,10 @@ export function createTelegramTabManager<TContext>(
     deleteActiveSession: async (expectedSessionPath, ctx) => {
       if (!isEnabled()) return undefined;
       const tabState = await ensureState(deps.getCwd(ctx));
-      const runtime = getRuntime(tabState, tabState.activeTab);
+      const scoped = await resolveScopedTopicRuntime(tabState, ctx);
+      const runtime = scoped.scoped
+        ? scoped.runtime
+        : getRuntime(tabState, tabState.activeTab);
       if (!runtime) return undefined;
       await refreshRuntimeState(runtime);
       if (!canSwitchTelegramTabModel(runtime.record)) {
@@ -2981,7 +3274,8 @@ export function createTelegramTabManager<TContext>(
     abortActive: async (ctx) => {
       if (!isEnabled()) return undefined;
       const tabState = await ensureState(deps.getCwd(ctx));
-      return commandHandlers.abortRuntime(tabState, undefined);
+      const scoped = await resolveScopedTopicRuntime(tabState, ctx);
+      return commandHandlers.abortRuntime(tabState, scoped.runtime?.record.name);
     },
     switchSession: async (sessionPath, ctx, scope) => {
       if (!isEnabled() || scope?.kind !== "tab" || !scope.tabName) {
@@ -3398,25 +3692,91 @@ export function createTelegramTabManager<TContext>(
       await answerTabCallback(query.id);
       return true;
     },
+    handleTopicServiceMessage: async (message, ctx) => {
+      const serviceKind = getTelegramTopicServiceKind(message);
+      if (!serviceKind) return false;
+      const chatId = message.chat.id;
+      const messageThreadId = message.message_thread_id;
+      deps.debugLogger?.log("telegram.tab.topic.service", {
+        kind: serviceKind,
+        chatId,
+        messageThreadId,
+        title:
+          message.forum_topic_created?.name ?? message.forum_topic_edited?.name,
+      });
+      if (!isTopicBindingEnabled()) return true;
+      if (typeof chatId !== "number" || typeof messageThreadId !== "number") {
+        return true;
+      }
+      const tabState = await ensureState(deps.getCwd(ctx));
+      if (serviceKind === "created") {
+        await upsertTelegramTopicTabRecord(
+          tabState,
+          {
+            chatId,
+            messageThreadId,
+            topicTitle: message.forum_topic_created?.name,
+          },
+          ctx,
+          { enforceCapacity: true },
+        );
+        return true;
+      }
+      if (serviceKind === "edited") {
+        const record = findTelegramTabByTopic(
+          tabState.tabs,
+          chatId,
+          messageThreadId,
+        );
+        if (record && updateTelegramTopicRecordTitle(record, message.forum_topic_edited?.name)) {
+          await persist();
+        }
+        return true;
+      }
+      if (serviceKind === "closed") {
+        if (!getTopicBindingConfig()?.closeOnTopicClose) return true;
+        const record = findTelegramTabByTopic(
+          tabState.tabs,
+          chatId,
+          messageThreadId,
+        );
+        if (!record || record.name === TELEGRAM_DEFAULT_TAB_NAME) return true;
+        const result = await closeRuntimeTab(tabState, record.name, true);
+        if (result.closed) await persist();
+        return true;
+      }
+      if (serviceKind === "reopened") {
+        if (!getTopicBindingConfig()?.autoCreate) return true;
+        await upsertTelegramTopicTabRecord(
+          tabState,
+          { chatId, messageThreadId },
+          ctx,
+          { enforceCapacity: true },
+        );
+        return true;
+      }
+      return true;
+    },
     dispatchPrompt: async (turn, ctx) => {
       if (!isEnabled()) return false;
       const tabState = await ensureState(deps.getCwd(ctx));
-      const runtime = getRuntime(tabState, tabState.activeTab);
-      if (!runtime) return false;
+      const runtime = await getRuntimeForPromptTurn(tabState, turn, ctx);
+      if (!runtime) return true;
       const promptText = buildTelegramTabPromptText(turn);
       if (!promptText) {
-        await deps.sendTextReply(
-          turn.chatId,
-          turn.replyToMessageId,
-          "Tab prompt is empty.",
-        );
+        await sendTurnTextReply(turn, "Tab prompt is empty.");
         return true;
       }
       const wasRunning = runtime.record.status === "running";
       const promptNow = now();
       runtime.activeChatId = turn.chatId;
+      runtime.activeMessageThreadId = turn.messageThreadId;
       runtime.activeReplyToMessageId = turn.replyToMessageId;
-      runtime.activeTurnId = `tab:${runtime.record.name}:${turn.chatId}:${turn.replyToMessageId}:${promptNow}`;
+      runtime.activeTopicDelivery = isTopicBindingEnabled() &&
+        (turn.messageThreadId !== undefined ||
+          runtime.record.name === TELEGRAM_DEFAULT_TAB_NAME ||
+          runtime.record.source?.kind === "telegram-topic");
+      runtime.activeTurnId = `tab:${runtime.record.name}:${turn.chatId}:${turn.messageThreadId ?? "general"}:${turn.replyToMessageId}:${promptNow}`;
       runtime.promptStartedAt = promptNow;
       runtime.promptSentAt = undefined;
       runtime.agentStartedAt = undefined;
@@ -3426,7 +3786,7 @@ export function createTelegramTabManager<TContext>(
       runtime.record.lastMessageText = promptText;
       runtime.record.lastMessageAt = promptNow;
       await persist();
-      startTabTyping(tabState.activeTab, runtime);
+      startTabTyping(runtime.record.name, runtime);
       try {
         deps.debugLogger?.log(
           "telegram.tab.prompt.start",
@@ -3451,9 +3811,8 @@ export function createTelegramTabManager<TContext>(
         });
         runtime.record.status = "running";
         await persist();
-        await deps.sendTextReply(
-          turn.chatId,
-          turn.replyToMessageId,
+        await sendTurnTextReply(
+          turn,
           wasRunning
             ? `Queued follow-up in tab ${runtime.record.name}.`
             : `Started tab ${runtime.record.name}.`,
@@ -3477,9 +3836,8 @@ export function createTelegramTabManager<TContext>(
           action: "prompt",
         });
         await persist();
-        await deps.sendTextReply(
-          turn.chatId,
-          turn.replyToMessageId,
+        await sendTurnTextReply(
+          turn,
           `Tab ${runtime.record.name} failed: ${getErrorMessage(error)}`,
         );
       }

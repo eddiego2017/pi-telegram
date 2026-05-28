@@ -102,6 +102,18 @@ export interface TelegramSticker {
   emoji?: string;
 }
 
+export interface TelegramForumTopicCreated {
+  name: string;
+  icon_color?: number;
+  icon_custom_emoji_id?: string;
+  is_name_implicit?: true;
+}
+
+export interface TelegramForumTopicEdited {
+  name?: string;
+  icon_custom_emoji_id?: string;
+}
+
 export interface TelegramMessage {
   message_id: number;
   chat: TelegramChat;
@@ -118,6 +130,12 @@ export interface TelegramMessage {
   voice?: TelegramVoice;
   animation?: TelegramAnimation;
   sticker?: TelegramSticker;
+  forum_topic_created?: TelegramForumTopicCreated;
+  forum_topic_edited?: TelegramForumTopicEdited;
+  forum_topic_closed?: Record<string, never>;
+  forum_topic_reopened?: Record<string, never>;
+  general_forum_topic_hidden?: Record<string, never>;
+  general_forum_topic_unhidden?: Record<string, never>;
 }
 
 export interface TelegramCallbackQuery {

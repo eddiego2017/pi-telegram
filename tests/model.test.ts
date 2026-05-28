@@ -387,11 +387,12 @@ test("Model-switch continuation turn stays control-lane and resume-oriented", ()
       allocateControlOrder: () => 6,
     });
   const builtTurn = createContinuationTurn({
-    turn: { chatId: 1, replyToMessageId: 2 },
+    turn: { chatId: 1, messageThreadId: 9, replyToMessageId: 2 },
     selection: createModelTestSelection(),
   });
   assert.equal(builtTurn.queueOrder, 5);
   assert.equal(builtTurn.laneOrder, 6);
+  assert.equal(builtTurn.messageThreadId, 9);
   const turn = buildTelegramModelSwitchContinuationTurn({
     turn: { chatId: 1, replyToMessageId: 2 },
     selection: createModelTestSelection(createModelTestModel(), "high"),

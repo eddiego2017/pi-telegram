@@ -230,6 +230,19 @@ function getTelegramTurnId(chatId: unknown, messageId: unknown): string | undefi
     : undefined;
 }
 
+function isTelegramForumTopicServiceMessage(
+  message: Updates.TelegramUpdateMessage,
+): boolean {
+  return !!(
+    message.forum_topic_created ||
+    message.forum_topic_edited ||
+    message.forum_topic_closed ||
+    message.forum_topic_reopened ||
+    message.general_forum_topic_hidden ||
+    message.general_forum_topic_unhidden
+  );
+}
+
 export function createTelegramInboundRouteRuntime<
   TUpdate extends Updates.TelegramUpdateFlow & {
     message?: TMessage;
@@ -377,6 +390,7 @@ export function createTelegramInboundRouteRuntime<
             deps.queueMutationRuntime.append(
               OutboundHandlers.createTelegramButtonPromptTurn({
                 chatId,
+                messageThreadId: buttonQuery.message?.message_thread_id,
                 replyToMessageId: messageId,
                 queueOrder,
                 action,
@@ -759,6 +773,11 @@ export function createTelegramInboundRouteRuntime<
         message,
       );
       try {
+        if (isTelegramForumTopicServiceMessage(message)) {
+          const handledByTopic =
+            await deps.tabManager?.handleTopicServiceMessage(message, ctx);
+          if (handledByTopic !== false) return;
+        }
         const handledByTree = await deps.treeMenuMessageHandler?.(message, ctx);
         if (handledByTree) return;
         await textDispatch.handleMessage(message, ctx);

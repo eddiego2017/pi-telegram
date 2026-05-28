@@ -59,6 +59,7 @@ export interface TelegramMediaMessage {
 export interface TelegramMediaGroupMessage {
   message_id: number;
   chat: { id: number };
+  message_thread_id?: number;
   media_group_id?: string;
 }
 
@@ -251,7 +252,7 @@ export function getTelegramMediaGroupKey(
   message: TelegramMediaGroupMessage,
 ): string | undefined {
   if (!message.media_group_id) return undefined;
-  return `${message.chat.id}:${message.media_group_id}`;
+  return `${message.chat.id}:${message.message_thread_id ?? "general"}:${message.media_group_id}`;
 }
 
 export function removePendingTelegramMediaGroupMessages<

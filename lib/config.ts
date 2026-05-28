@@ -12,11 +12,31 @@ import { join, resolve } from "node:path";
 import type { TelegramInboundHandlerConfig } from "./inbound-handlers.ts";
 import type { CommandTemplateObjectConfig } from "./command-templates.ts";
 
+export interface TelegramConcurrentTabTopicBindingConfig {
+  enabled?: boolean;
+  generalIsDefault?: boolean;
+  autoCreate?: boolean;
+  closeOnTopicClose?: boolean;
+}
+
+export interface TelegramNormalizedConcurrentTabTopicBindingConfig {
+  enabled: boolean;
+  generalIsDefault: boolean;
+  autoCreate: boolean;
+  closeOnTopicClose: boolean;
+}
+
 export interface TelegramConcurrentTabsConfig {
   enabled?: boolean;
   maxTabs?: number;
   inactiveNotify?: boolean;
   workerExtensions?: string[];
+  topicBinding?: TelegramConcurrentTabTopicBindingConfig;
+}
+
+export interface TelegramNormalizedConcurrentTabsConfig
+  extends Required<Omit<TelegramConcurrentTabsConfig, "topicBinding">> {
+  topicBinding?: TelegramNormalizedConcurrentTabTopicBindingConfig;
 }
 
 export interface TelegramDebugConfig {
@@ -70,7 +90,7 @@ export interface TelegramConfigStore {
   getInboundHandlers: () => TelegramInboundHandlerConfig[] | undefined;
   getAttachmentHandlers: () => TelegramInboundHandlerConfig[] | undefined;
   getOutboundHandlers: () => TelegramOutboundHandlerConfig[] | undefined;
-  getConcurrentTabsConfig: () => Required<TelegramConcurrentTabsConfig>;
+  getConcurrentTabsConfig: () => TelegramNormalizedConcurrentTabsConfig;
   setAllowedUserId: (userId: number) => void;
   load: () => Promise<void>;
   persist: (config?: TelegramConfig) => Promise<void>;
@@ -178,9 +198,20 @@ export function createTelegramConfigStore(
   };
 }
 
+export function normalizeTelegramConcurrentTabTopicBindingConfig(
+  config?: TelegramConcurrentTabTopicBindingConfig,
+): TelegramNormalizedConcurrentTabTopicBindingConfig {
+  return {
+    enabled: config?.enabled ?? false,
+    generalIsDefault: config?.generalIsDefault ?? true,
+    autoCreate: config?.autoCreate ?? true,
+    closeOnTopicClose: config?.closeOnTopicClose ?? true,
+  };
+}
+
 export function normalizeTelegramConcurrentTabsConfig(
   config?: TelegramConcurrentTabsConfig,
-): Required<TelegramConcurrentTabsConfig> {
+): TelegramNormalizedConcurrentTabsConfig {
   const maxTabs =
     typeof config?.maxTabs === "number" &&
     Number.isInteger(config.maxTabs) &&
@@ -196,12 +227,15 @@ export function normalizeTelegramConcurrentTabsConfig(
           (path): path is string => typeof path === "string" && path.length > 0,
         )
       : [],
+    topicBinding: normalizeTelegramConcurrentTabTopicBindingConfig(
+      config?.topicBinding,
+    ),
   };
 }
 
 export function createTelegramConcurrentTabsConfigGetter(
   configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
-): () => Required<TelegramConcurrentTabsConfig> {
+): () => TelegramNormalizedConcurrentTabsConfig {
   return () => configStore.getConcurrentTabsConfig();
 }
 

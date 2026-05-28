@@ -724,6 +724,7 @@ test("Button prompt turns use Telegram prompt content", () => {
   assert.deepEqual(
     createTelegramButtonPromptTurn({
       chatId: 7,
+      messageThreadId: 44,
       replyToMessageId: 22,
       queueOrder: 3,
       action: { text: "Continue", prompt: "Continue now" },
@@ -731,6 +732,7 @@ test("Button prompt turns use Telegram prompt content", () => {
     {
       kind: "prompt",
       chatId: 7,
+      messageThreadId: 44,
       replyToMessageId: 22,
       sourceMessageIds: [22],
       queueOrder: 3,

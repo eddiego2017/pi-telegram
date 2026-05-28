@@ -17,6 +17,15 @@ export interface TelegramTabsState {
   tabs: Record<string, TelegramTabRecord>;
 }
 
+export interface TelegramTabSourceTelegramTopic {
+  kind: "telegram-topic";
+  chatId: number;
+  messageThreadId?: number;
+  topicTitle?: string;
+}
+
+export type TelegramTabSource = TelegramTabSourceTelegramTopic;
+
 export interface TelegramTabRecord {
   name: string;
   cwd: string;
@@ -35,6 +44,7 @@ export interface TelegramTabRecord {
   lastMessageText?: string;
   lastMessageAt?: number;
   messageCount?: number;
+  source?: TelegramTabSource;
 }
 
 export type TelegramTabCommand =
@@ -53,6 +63,7 @@ export type TelegramTabCommand =
 export const TELEGRAM_DEFAULT_TAB_NAME = "default";
 export const TELEGRAM_TAB_NAME_PATTERN = /^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$/;
 export const TELEGRAM_TAB_NAME_MAX_LENGTH = 32;
+const TELEGRAM_TOPIC_TAB_HASH_MODULUS = 36 ** 6;
 
 export interface TelegramTabFilterTraceItem {
   filter: string;
@@ -115,6 +126,55 @@ export function findTelegramTabNameCaseConflict(
   );
 }
 
+function hashTelegramTopicChatId(chatId: number): string {
+  let hash = 2166136261;
+  const input = String(chatId);
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return (hash % TELEGRAM_TOPIC_TAB_HASH_MODULUS)
+    .toString(36)
+    .padStart(6, "0");
+}
+
+export function normalizeTelegramTopicTabName(
+  chatId: number,
+  messageThreadId: number,
+): string {
+  return `tg-${hashTelegramTopicChatId(chatId)}-${messageThreadId.toString(36)}`;
+}
+
+export function findTelegramTabByTopic(
+  tabs: Record<string, TelegramTabRecord>,
+  chatId: number,
+  messageThreadId: number,
+): TelegramTabRecord | undefined {
+  return Object.values(tabs).find(
+    (tab) =>
+      tab.source?.kind === "telegram-topic" &&
+      tab.source.chatId === chatId &&
+      tab.source.messageThreadId === messageThreadId,
+  );
+}
+
+export function isTelegramTopicTabRecord(
+  tab: TelegramTabRecord,
+): boolean {
+  return tab.source?.kind === "telegram-topic";
+}
+
+export function formatTelegramTabTopicLabel(
+  tab: TelegramTabRecord,
+): string | undefined {
+  if (tab.source?.kind !== "telegram-topic") return undefined;
+  const title = tab.source.topicTitle?.trim();
+  const topic = tab.source.messageThreadId === undefined
+    ? "General"
+    : `topic #${tab.source.messageThreadId}`;
+  return title ? `${title} · ${topic}` : topic;
+}
+
 export function createTelegramDefaultTabRecord(
   cwd: string,
   now: number,
@@ -138,6 +198,32 @@ export function createDefaultTelegramTabsState(
     tabs: {
       [TELEGRAM_DEFAULT_TAB_NAME]: createTelegramDefaultTabRecord(cwd, now),
     },
+  };
+}
+
+function isTelegramTabSource(value: unknown): value is TelegramTabSource {
+  if (typeof value !== "object" || value === null) return false;
+  const source = value as Record<string, unknown>;
+  return (
+    source.kind === "telegram-topic" &&
+    typeof source.chatId === "number" &&
+    (source.messageThreadId === undefined ||
+      typeof source.messageThreadId === "number") &&
+    (source.topicTitle === undefined || typeof source.topicTitle === "string")
+  );
+}
+
+function normalizeTelegramTabSource(
+  source: unknown,
+): TelegramTabSource | undefined {
+  if (!isTelegramTabSource(source)) return undefined;
+  return {
+    kind: "telegram-topic",
+    chatId: source.chatId,
+    ...(source.messageThreadId !== undefined
+      ? { messageThreadId: source.messageThreadId }
+      : {}),
+    ...(source.topicTitle ? { topicTitle: source.topicTitle } : {}),
   };
 }
 
@@ -176,10 +262,13 @@ export function normalizeTelegramTabsState(
       ) {
         continue;
       }
+      const source = normalizeTelegramTabSource(record.source);
+      const { source: _discardedSource, ...rest } = record;
       tabs[name] = {
-        ...record,
+        ...rest,
         name,
         status: record.status === "running" ? "exited" : record.status,
+        ...(source ? { source } : {}),
       };
     }
   }
@@ -213,6 +302,18 @@ function buildTelegramTabRecordSearchText(tab: TelegramTabRecord): string {
       tab.currentModel ? `${tab.currentModel.provider}/${tab.currentModel.id}` : undefined,
       tab.lastMessageText,
       tab.lastAssistantText,
+      tab.source?.kind === "telegram-topic"
+        ? [
+            "telegram-topic",
+            String(tab.source.chatId),
+            tab.source.messageThreadId === undefined
+              ? "general"
+              : String(tab.source.messageThreadId),
+            tab.source.topicTitle,
+          ]
+            .filter(Boolean)
+            .join(" ")
+        : undefined,
     ]
       .filter(Boolean)
       .join("\n"),
@@ -365,11 +466,13 @@ export function formatTelegramTabList(
   const rows = visibleTabs.map((tab) => {
     const active = tab.name === state.activeTab ? " *" : "";
     const unread = unreadByTab[tab.name] ? " unread" : "";
+    const topic = formatTelegramTabTopicLabel(tab);
+    const topicSuffix = topic ? ` · ${topic}` : "";
     const age = tab.lastAgentStartAt
       ? ` ${formatTelegramTabAge(now - tab.lastAgentStartAt)}`
       : "";
     const error = tab.lastError ? ` (${tab.lastError})` : "";
-    return `- ${tab.name}${active} ${formatTelegramTabStatusLabel(tab.status)}${age}${unread}${error}`;
+    return `- ${tab.name}${active}${topicSuffix} ${formatTelegramTabStatusLabel(tab.status)}${age}${unread}${error}`;
   });
   const title = filterSummary
     ? `Tabs (${visibleTabs.length}/${allTabs.length}):`
@@ -392,6 +495,8 @@ export function formatTelegramTabStatus(
     `Cwd: ${tab.cwd}`,
     `Unread events: ${unreadCount}`,
   ];
+  const topic = formatTelegramTabTopicLabel(tab);
+  if (topic) lines.push(`Topic: ${topic}`);
   if (tab.sessionFile) lines.push(`Session: ${tab.sessionFile}`);
   if (tab.sessionName) lines.push(`Name: ${tab.sessionName}`);
   if (tab.lastAgentStartAt) {

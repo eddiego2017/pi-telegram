@@ -13,6 +13,10 @@ import * as Queue from "../lib/queue.ts";
 import * as Routing from "../lib/routing.ts";
 import * as Runtime from "../lib/runtime.ts";
 import * as TextGroups from "../lib/text-groups.ts";
+import {
+  getAmbientTelegramThreadContext,
+  runWithTelegramThreadContext,
+} from "../lib/thread-context.ts";
 import type { TelegramTabManager } from "../lib/tab-manager.ts";
 import type * as Updates from "../lib/updates.ts";
 
@@ -252,6 +256,161 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
   }
 });
 
+test("Routing runtime forwards forum topic service messages only to the tab manager", async () => {
+  const events: string[] = [];
+  const bridgeRuntime = Runtime.createTelegramBridgeRuntime();
+  const activeTurnRuntime = Queue.createTelegramActiveTurnStore();
+  const telegramQueueStore = Queue.createTelegramQueueStore<TestContext>();
+  const queueMutationRuntime = Queue.createTelegramQueueMutationController({
+    ...telegramQueueStore,
+    updateStatus: () => events.push("status"),
+  });
+  const model: TestModel = { provider: "test", id: "model" };
+  const currentModelRuntime = Model.createCurrentModelRuntime<
+    TestContext,
+    TestModel
+  >({
+    getContextModel: () => model,
+    updateStatus: () => events.push("status"),
+  });
+  const modelSwitchController =
+    Model.createTelegramModelSwitchControllerRuntime<
+      TestContext,
+      Model.ScopedTelegramModel<TestModel>
+    >({
+      isIdle: () => true,
+      getPendingModelSwitch: () => undefined,
+      setPendingModelSwitch: () => undefined,
+      getActiveTurn: activeTurnRuntime.get,
+      getAbortHandler: bridgeRuntime.abort.getHandler,
+      hasAbortHandler: bridgeRuntime.abort.hasHandler,
+      getActiveToolExecutions: bridgeRuntime.lifecycle.getActiveToolExecutions,
+      allocateItemOrder: bridgeRuntime.queue.allocateItemOrder,
+      allocateControlOrder: bridgeRuntime.queue.allocateControlOrder,
+      appendQueuedItem: queueMutationRuntime.append,
+      updateStatus: () => events.push("status"),
+    });
+  const tabManager: TelegramTabManager<TestContext> = {
+    isEnabled: () => true,
+    getActiveModel: async () => model,
+    getActiveThinkingLevel: async () => undefined,
+    getActiveSessionReference: () => undefined,
+    getActiveResumeSessionScope: () => undefined,
+    getActiveSessionName: () => undefined,
+    canSwitchActiveModel: async () => true,
+    selectActiveModel: async () => true,
+    setActiveThinkingLevel: async (level) => level,
+    setActiveSessionName: async () => true,
+    compactActive: () => false,
+    newActiveSession: async () => undefined,
+    deleteActiveSession: async () => undefined,
+    abortActive: async () => undefined,
+    switchSession: async () => false,
+    createActiveTreeBranch: async () => undefined,
+    handleCommand: async () => {
+      events.push("unexpected:tab-command");
+      return true;
+    },
+    handleCallbackQuery: async () => false,
+    handleTopicServiceMessage: async (message) => {
+      events.push(
+        `topic:${message.chat.id}:${message.message_thread_id}:${message.forum_topic_created?.name}`,
+      );
+      events.push(`scope:${JSON.stringify(getAmbientTelegramThreadContext())}`);
+      return true;
+    },
+    dispatchPrompt: async () => {
+      events.push("unexpected:prompt");
+      return true;
+    },
+    dispose: async () => undefined,
+  };
+  const routeRuntime = Routing.createTelegramInboundRouteRuntime<
+    TestUpdate,
+    TestMessage,
+    TestCallbackQuery,
+    TestContext,
+    TestModel
+  >({
+    configStore: {
+      getAllowedUserId: () => 7,
+      setAllowedUserId: () => undefined,
+      persist: async () => undefined,
+    },
+    bridgeRuntime,
+    activeTurnRuntime,
+    mediaGroupRuntime: Media.createTelegramMediaGroupController<
+      TestMessage,
+      TestContext
+    >(),
+    textGroupRuntime: TextGroups.createTelegramTextGroupController<
+      TestMessage,
+      TestContext
+    >(),
+    telegramQueueStore,
+    queueMutationRuntime,
+    modelMenuRuntime: Menu.createTelegramModelMenuRuntime<TestModel>(),
+    currentModelRuntime,
+    modelSwitchController,
+    menuActions: {
+      updateModelMenuMessage: async () => undefined,
+      updateThinkingMenuMessage: async () => undefined,
+      updateStatusMessage: async () => undefined,
+      sendStatusMessage: async () => undefined,
+      openModelMenu: async () => undefined,
+      openThinkingMenu: async () => undefined,
+    },
+    openQueueMenu: async () => undefined,
+    queueMenuCallbackHandler: async () => false,
+    inboundHandlerRuntime: {
+      process: async (files, rawText) => ({
+        rawText,
+        promptFiles: files,
+        handlerOutputs: [],
+        handledFiles: [],
+      }),
+    },
+    updateStatus: () => events.push("status"),
+    dispatchNextQueuedTelegramTurn: () => events.push("dispatch"),
+    answerCallbackQuery: async () => undefined,
+    answerGuestQuery: async () => undefined,
+    sendTextReply: async () => undefined,
+    setMyCommands: async () => undefined,
+    getCommands: () => [],
+    downloadFile: async (_fileId, fileName) => `/tmp/${fileName}`,
+    getThinkingLevel: () => "high",
+    setThinkingLevel: () => undefined,
+    setModel: async () => true,
+    listAvailableModels: () => [],
+    findActiveModelByIdentity: () => undefined,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    compact: () => undefined,
+    injectNewSession: async () => true,
+    injectClone: async () => undefined,
+    getSessionName: () => undefined,
+    setSessionName: () => undefined,
+    tabManager,
+  });
+  await routeRuntime.handleUpdate(
+    {
+      message: {
+        message_id: 20,
+        chat: { id: -10042, type: "private" },
+        from: { id: 7, is_bot: false },
+        message_thread_id: 77,
+        forum_topic_created: { name: "Deploy Debug" },
+      },
+    },
+    { cwd: "/repo" },
+  );
+  assert.deepEqual(events, [
+    "topic:-10042:77:Deploy Debug",
+    'scope:{"chatId":-10042,"messageThreadId":77}',
+  ]);
+  assert.deepEqual(telegramQueueStore.getQueuedItems(), []);
+});
+
 test("Routing runtime applies model menu picks to the active tab when enabled", async () => {
   const events: string[] = [];
   const selectedModels: string[] = [];
@@ -333,6 +492,7 @@ test("Routing runtime applies model menu picks to the active tab when enabled", 
     createActiveTreeBranch: async () => undefined,
     handleCommand: async () => true,
     handleCallbackQuery: async () => false,
+    handleTopicServiceMessage: async () => false,
     dispatchPrompt: async () => false,
     dispose: async () => undefined,
   };

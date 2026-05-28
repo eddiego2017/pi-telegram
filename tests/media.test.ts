@@ -173,14 +173,23 @@ test("Media helpers infer image media types from file paths", () => {
   assert.equal(guessMediaType("/tmp/demo.txt"), undefined);
 });
 
-test("Media helpers key messages by chat and media group", () => {
+test("Media helpers key messages by chat, topic, and media group", () => {
   assert.equal(
     getTelegramMediaGroupKey({
       message_id: 1,
       chat: { id: 7 },
       media_group_id: "album",
     }),
-    "7:album",
+    "7:general:album",
+  );
+  assert.equal(
+    getTelegramMediaGroupKey({
+      message_id: 1,
+      chat: { id: 7 },
+      message_thread_id: 11,
+      media_group_id: "album",
+    }),
+    "7:11:album",
   );
   assert.equal(
     getTelegramMediaGroupKey({ message_id: 1, chat: { id: 7 } }),
@@ -328,7 +337,7 @@ test("Media helpers remove pending groups by message id", () => {
     string,
     TelegramMediaGroupState<{ message_id: number; chat: { id: number } }>
   >();
-  groups.set("7:album", {
+  groups.set("7:general:album", {
     messages: [
       { message_id: 1, chat: { id: 7 } },
       { message_id: 2, chat: { id: 7 } },

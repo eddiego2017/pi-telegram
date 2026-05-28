@@ -11,6 +11,7 @@ const TELEGRAM_TEXT_GROUP_MAX_MESSAGE_ID_GAP = 10;
 export interface TelegramTextGroupMessage {
   message_id: number;
   media_group_id?: string;
+  message_thread_id?: number;
   chat: { id: number };
   from?: { id: number; is_bot?: boolean };
   text?: string;
@@ -70,7 +71,7 @@ function getTelegramTextGroupKey(
   if (message.media_group_id) return undefined;
   if (!message.from || message.from.is_bot) return undefined;
   if (typeof message.text !== "string") return undefined;
-  return `${message.chat.id}:${message.from.id}`;
+  return `${message.chat.id}:${message.message_thread_id ?? "general"}:${message.from.id}`;
 }
 
 function canStartTelegramTextGroup(

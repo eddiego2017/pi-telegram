@@ -102,6 +102,12 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
     maxTabs: 2,
     inactiveNotify: false,
     workerExtensions: ["/agent/extensions/provider.ts"],
+    topicBinding: {
+      enabled: false,
+      generalIsDefault: true,
+      autoCreate: true,
+      closeOnTopicClose: true,
+    },
   });
   store.setAllowedUserId(43);
   assert.equal(store.getAllowedUserId(), 43);
@@ -141,6 +147,12 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     maxTabs: 10,
     inactiveNotify: true,
     workerExtensions: [],
+    topicBinding: {
+      enabled: false,
+      generalIsDefault: true,
+      autoCreate: true,
+      closeOnTopicClose: true,
+    },
   });
   assert.deepEqual(
     normalizeTelegramConcurrentTabsConfig({
@@ -154,6 +166,28 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       maxTabs: 10,
       inactiveNotify: false,
       workerExtensions: ["/agent/extensions/provider.ts"],
+      topicBinding: {
+        enabled: false,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+      },
+    },
+  );
+  assert.deepEqual(
+    normalizeTelegramConcurrentTabsConfig({
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: false,
+        autoCreate: false,
+        closeOnTopicClose: false,
+      },
+    }).topicBinding,
+    {
+      enabled: true,
+      generalIsDefault: false,
+      autoCreate: false,
+      closeOnTopicClose: false,
     },
   );
   const getConfig = createTelegramConcurrentTabsConfigGetter({
@@ -162,6 +196,12 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       maxTabs: 8,
       inactiveNotify: false,
       workerExtensions: ["/agent/extensions/provider.ts"],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+      },
     }),
   });
   assert.deepEqual(getConfig(), {
@@ -169,6 +209,12 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     maxTabs: 8,
     inactiveNotify: false,
     workerExtensions: ["/agent/extensions/provider.ts"],
+    topicBinding: {
+      enabled: true,
+      generalIsDefault: true,
+      autoCreate: true,
+      closeOnTopicClose: true,
+    },
   });
 });
 

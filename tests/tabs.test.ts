@@ -9,10 +9,12 @@ import test from "node:test";
 import {
   createDefaultTelegramTabsState,
   filterTelegramTabRecords,
+  findTelegramTabByTopic,
   findTelegramTabNameCaseConflict,
   formatTelegramTabList,
   formatTelegramTabStatus,
   normalizeTelegramTabsState,
+  normalizeTelegramTopicTabName,
   parseTelegramTabCommand,
   truncateTelegramTabText,
   validateTelegramTabName,
@@ -111,6 +113,31 @@ test("Tab command parser handles MVP command forms", () => {
   });
 });
 
+test("Tab topic helpers build stable names and find topic-bound records", () => {
+  const name = normalizeTelegramTopicTabName(-1001234567890, 123);
+  assert.match(name, /^tg-[a-z0-9]{6}-3f$/);
+  assert.equal(name.length <= 32, true);
+  const state = createDefaultTelegramTabsState("/repo", 1000);
+  state.tabs[name] = {
+    name,
+    cwd: "/repo",
+    createdAt: 1000,
+    lastUsedAt: 1000,
+    status: "idle",
+    source: {
+      kind: "telegram-topic",
+      chatId: -1001234567890,
+      messageThreadId: 123,
+      topicTitle: "Deploy Debug",
+    },
+  };
+  assert.equal(
+    findTelegramTabByTopic(state.tabs, -1001234567890, 123)?.name,
+    name,
+  );
+  assert.equal(findTelegramTabByTopic(state.tabs, -1001234567890, 124), undefined);
+});
+
 test("Tab state normalization preserves records and marks stale running tabs exited", () => {
   assert.deepEqual(normalizeTelegramTabsState(undefined, "/repo", 1000), {
     version: 1,
@@ -145,6 +172,35 @@ test("Tab state normalization preserves records and marks stale running tabs exi
   assert.equal(normalized.activeTab, "A");
   assert.equal(normalized.tabs.A?.status, "exited");
   assert.equal(normalized.tabs.default?.status, "idle");
+  const normalizedWithSource = normalizeTelegramTabsState(
+    {
+      version: 1,
+      activeTab: "tg-topic",
+      tabs: {
+        "tg-topic": {
+          name: "tg-topic",
+          cwd: "/repo",
+          createdAt: 1,
+          lastUsedAt: 2,
+          status: "idle",
+          source: {
+            kind: "telegram-topic",
+            chatId: -1001,
+            messageThreadId: 77,
+            topicTitle: "Ops",
+          },
+        },
+      },
+    },
+    "/repo",
+    1000,
+  );
+  assert.deepEqual(normalizedWithSource.tabs["tg-topic"]?.source, {
+    kind: "telegram-topic",
+    chatId: -1001,
+    messageThreadId: 77,
+    topicTitle: "Ops",
+  });
 });
 
 test("Tab filters apply multiple tokens like resume filters", () => {
@@ -189,6 +245,28 @@ test("Tab formatters keep list and status compact", () => {
     /A \* running 1s unread/,
   );
   assert.match(formatTelegramTabStatus(state.tabs.A!, 1, 1500), /Last reply:\nhello/);
+  const topicName = normalizeTelegramTopicTabName(-10042, 77);
+  state.tabs[topicName] = {
+    name: topicName,
+    cwd: "/repo",
+    createdAt: 1300,
+    lastUsedAt: 1300,
+    status: "idle",
+    source: {
+      kind: "telegram-topic",
+      chatId: -10042,
+      messageThreadId: 77,
+      topicTitle: "Deploy Debug",
+    },
+  };
+  assert.match(
+    formatTelegramTabList(state, {}, 1500),
+    new RegExp(`${topicName} · Deploy Debug · topic #77 idle`),
+  );
+  assert.match(
+    formatTelegramTabStatus(state.tabs[topicName]!, 0, 1500),
+    /Topic: Deploy Debug · topic #77/,
+  );
 });
 
 test("Tab text truncation does not split surrogate pairs", () => {

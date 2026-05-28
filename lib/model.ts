@@ -441,7 +441,7 @@ export function buildTelegramModelSwitchContinuationText<
 export function buildTelegramModelSwitchContinuationTurn<
   TModel extends MenuModel,
 >(options: {
-  turn: Pick<PendingTelegramTurn, "chatId" | "replyToMessageId">;
+  turn: Pick<PendingTelegramTurn, "chatId" | "messageThreadId" | "replyToMessageId">;
   selection: ScopedTelegramModel<TModel>;
   telegramPrefix?: string;
   queueOrder: number;
@@ -454,6 +454,9 @@ export function buildTelegramModelSwitchContinuationTurn<
   return {
     kind: "prompt",
     chatId: options.turn.chatId,
+    ...(options.turn.messageThreadId !== undefined
+      ? { messageThreadId: options.turn.messageThreadId }
+      : {}),
     replyToMessageId: options.turn.replyToMessageId,
     sourceMessageIds: [],
     queueOrder: options.queueOrder,
@@ -482,7 +485,7 @@ export function createTelegramModelSwitchContinuationTurnBuilder<
   allocateItemOrder: () => number;
   allocateControlOrder: () => number;
 }): (options: {
-  turn: Pick<PendingTelegramTurn, "chatId" | "replyToMessageId">;
+  turn: Pick<PendingTelegramTurn, "chatId" | "messageThreadId" | "replyToMessageId">;
   selection: ScopedTelegramModel<TModel>;
 }) => PendingTelegramTurn {
   return (options) =>
@@ -499,7 +502,7 @@ export function createTelegramModelSwitchContinuationQueue<
   TSelection extends ScopedTelegramModel,
 >(deps: {
   createContinuationTurn: (options: {
-    turn: Pick<PendingTelegramTurn, "chatId" | "replyToMessageId">;
+    turn: Pick<PendingTelegramTurn, "chatId" | "messageThreadId" | "replyToMessageId">;
     selection: TSelection;
   }) => PendingTelegramTurn;
   appendQueuedItem: (item: PendingTelegramTurn, ctx: TContext) => void;

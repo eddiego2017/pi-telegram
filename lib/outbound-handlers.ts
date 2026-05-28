@@ -67,6 +67,7 @@ export interface TelegramVoiceExecResult {
 
 export interface TelegramVoiceReplyTurnView {
   chatId: number;
+  messageThreadId?: number;
   replyToMessageId: number;
 }
 
@@ -1011,6 +1012,7 @@ export interface TelegramButtonCallbackQuery {
   data?: string;
   message?: {
     message_id?: number;
+    message_thread_id?: number;
     chat?: { id?: number };
   };
 }
@@ -1188,6 +1190,7 @@ export function createTelegramOutboundReplyArtifactSender(
 
 export function createTelegramButtonPromptTurn(options: {
   chatId: number;
+  messageThreadId?: number;
   replyToMessageId: number;
   queueOrder: number;
   action: TelegramOutboundButtonAction;
@@ -1196,6 +1199,9 @@ export function createTelegramButtonPromptTurn(options: {
   return {
     kind: "prompt",
     chatId: options.chatId,
+    ...(options.messageThreadId !== undefined
+      ? { messageThreadId: options.messageThreadId }
+      : {}),
     replyToMessageId: options.replyToMessageId,
     sourceMessageIds: [options.replyToMessageId],
     queueOrder: options.queueOrder,

@@ -5,6 +5,7 @@
  */
 
 import type { TelegramDebugLogger } from "./debug.ts";
+import { runWithTelegramThreadContext } from "./thread-context.ts";
 
 // --- Queue Items ---
 
@@ -412,6 +413,7 @@ export function createTelegramDispatchReadinessChecker<TContext>(
 
 export function buildPendingTelegramControlItem<TContext = unknown>(options: {
   chatId: number;
+  messageThreadId?: number;
   replyToMessageId: number;
   controlType: PendingTelegramControlItem<TContext>["controlType"];
   queueOrder: number;
@@ -423,6 +425,9 @@ export function buildPendingTelegramControlItem<TContext = unknown>(options: {
     kind: "control",
     controlType: options.controlType,
     chatId: options.chatId,
+    ...(options.messageThreadId !== undefined
+      ? { messageThreadId: options.messageThreadId }
+      : {}),
     replyToMessageId: options.replyToMessageId,
     queueOrder: options.queueOrder,
     queueLane: "control",
@@ -441,6 +446,7 @@ export function createTelegramControlItemBuilder<TContext = unknown>(
   deps: TelegramControlItemBuilderDeps,
 ): (options: {
   chatId: number;
+  messageThreadId?: number;
   replyToMessageId: number;
   controlType: PendingTelegramControlItem<TContext>["controlType"];
   statusSummary: string;
@@ -1040,8 +1046,15 @@ export async function handleTelegramAgentEndRuntime<
   const replyMarkup = outboundReply?.replyMarkup;
   deps.resetRuntimeState();
   deps.updateStatus();
+  const deliverInTurnThreadContext = <T>(fn: () => T): T => {
+    if (!turn) return fn();
+    return runWithTelegramThreadContext(
+      { chatId: turn.chatId, messageThreadId: turn.messageThreadId },
+      fn,
+    );
+  };
   if (deps.isCurrentOwner && !deps.isCurrentOwner()) {
-    if (turn) await deps.clearPreview(turn.chatId);
+    if (turn) await deliverInTurnThreadContext(() => deps.clearPreview(turn.chatId));
     return;
   }
   const endPlan = buildTelegramAgentEndPlan({
@@ -1095,35 +1108,43 @@ export async function handleTelegramAgentEndRuntime<
     return;
   }
   if (endPlan.shouldClearPreview) {
-    await deps.clearPreview(turn.chatId);
+    await deliverInTurnThreadContext(() => deps.clearPreview(turn.chatId));
   }
   if (endPlan.shouldSendErrorMessage) {
-    await deps.sendTextReply(
-      turn.chatId,
-      turn.replyToMessageId,
-      assistant.errorMessage ||
-        "Telegram bridge: π failed while processing the request.",
+    await deliverInTurnThreadContext(() =>
+      deps.sendTextReply(
+        turn.chatId,
+        turn.replyToMessageId,
+        assistant.errorMessage ||
+          "Telegram bridge: π failed while processing the request.",
+      ),
     );
     if (endPlan.shouldDispatchNext) deps.dispatchNextQueuedTelegramTurn();
     return;
   }
   if (finalText) deps.setPreviewPendingText(finalText);
-  if (!finalText && hasOutboundArtifacts) await deps.clearPreview(turn.chatId);
+  if (!finalText && hasOutboundArtifacts) {
+    await deliverInTurnThreadContext(() => deps.clearPreview(turn.chatId));
+  }
   if (endPlan.kind === "text" && finalText) {
     try {
-      const finalized = await deps.finalizeMarkdownPreview(
-        turn.chatId,
-        finalText,
-        turn.replyToMessageId,
-        { replyMarkup, displayFooter: deps.displayFooter },
+      const finalized = await deliverInTurnThreadContext(() =>
+        deps.finalizeMarkdownPreview(
+          turn.chatId,
+          finalText,
+          turn.replyToMessageId,
+          { replyMarkup, displayFooter: deps.displayFooter },
+        ),
       );
       if (!finalized) {
-        await deps.clearPreview(turn.chatId);
-        await deps.sendMarkdownReply(
-          turn.chatId,
-          turn.replyToMessageId,
-          finalText,
-          { replyMarkup, displayFooter: deps.displayFooter },
+        await deliverInTurnThreadContext(() => deps.clearPreview(turn.chatId));
+        await deliverInTurnThreadContext(() =>
+          deps.sendMarkdownReply(
+            turn.chatId,
+            turn.replyToMessageId,
+            finalText,
+            { replyMarkup, displayFooter: deps.displayFooter },
+          ),
         );
       }
     } catch (error) {
@@ -1135,18 +1156,22 @@ export async function handleTelegramAgentEndRuntime<
     }
   }
   if (outboundReply && deps.sendOutboundReplyArtifacts) {
-    await deps.sendOutboundReplyArtifacts(turn, outboundReply, {
-      replyToPrompt: !finalText,
-    });
-  }
-  if (endPlan.shouldSendAttachmentNotice) {
-    await deps.sendTextReply(
-      turn.chatId,
-      turn.replyToMessageId,
-      "Attached requested file(s).",
+    await deliverInTurnThreadContext(() =>
+      deps.sendOutboundReplyArtifacts!(turn, outboundReply, {
+        replyToPrompt: !finalText,
+      }),
     );
   }
-  await deps.sendQueuedAttachments(turn);
+  if (endPlan.shouldSendAttachmentNotice) {
+    await deliverInTurnThreadContext(() =>
+      deps.sendTextReply(
+        turn.chatId,
+        turn.replyToMessageId,
+        "Attached requested file(s).",
+      ),
+    );
+  }
+  await deliverInTurnThreadContext(() => deps.sendQueuedAttachments(turn));
   if (endPlan.shouldDispatchNext) deps.dispatchNextQueuedTelegramTurn();
 }
 
@@ -1714,10 +1739,14 @@ export async function executeTelegramControlItemRuntime<TContext>(
       chatId: item.chatId,
       replyToMessageId: item.replyToMessageId,
     });
-    await deps.sendTextReply(
-      item.chatId,
-      item.replyToMessageId,
-      `Telegram control action failed: ${message}`,
+    await runWithTelegramThreadContext(
+      { chatId: item.chatId, messageThreadId: item.messageThreadId },
+      () =>
+        deps.sendTextReply(
+          item.chatId,
+          item.replyToMessageId,
+          `Telegram control action failed: ${message}`,
+        ),
     );
   } finally {
     deps.debugLogger?.log("telegram.queue.dispatch.control.end", {
@@ -1805,7 +1834,7 @@ export interface TelegramDispatchRuntimeDeps<TContext = unknown> {
       TelegramQueueDispatchAction,
       { kind: "prompt" }
     >["item"]["content"],
-  ) => void;
+  ) => void | Promise<void>;
   onPromptDispatchFailure: (message: string) => void;
   onIdle: () => void;
   debugLogger?: TelegramDebugLogger;
@@ -1832,7 +1861,7 @@ export interface TelegramQueueDispatchController<TContext = unknown> {
 export function executeTelegramQueueDispatchPlan<TContext = unknown>(
   plan: TelegramQueueDispatchAction<TContext>,
   deps: TelegramDispatchRuntimeDeps<TContext>,
-): void {
+): void | Promise<void> {
   if (plan.kind === "none") {
     deps.onIdle();
     return;
@@ -1846,6 +1875,7 @@ export function executeTelegramQueueDispatchPlan<TContext = unknown>(
     {
       turnId: `tg:${plan.item.chatId}:${plan.item.replyToMessageId}`,
       chatId: plan.item.chatId,
+      messageThreadId: plan.item.messageThreadId,
       replyToMessageId: plan.item.replyToMessageId,
       queueLane: plan.item.queueLane,
       queueOrder: plan.item.queueOrder,
@@ -1854,7 +1884,16 @@ export function executeTelegramQueueDispatchPlan<TContext = unknown>(
   );
   deps.onPromptDispatchStart(plan.item.chatId);
   try {
-    deps.sendUserMessage(plan.item.content);
+    const result = runWithTelegramThreadContext(
+      { chatId: plan.item.chatId, messageThreadId: plan.item.messageThreadId },
+      () => deps.sendUserMessage(plan.item.content),
+    );
+    if (result && typeof result === "object" && "then" in result) {
+      return Promise.resolve(result).catch((error) => {
+        const message = getTelegramQueueErrorMessage(error);
+        deps.onPromptDispatchFailure(message);
+      });
+    }
   } catch (error) {
     const message = getTelegramQueueErrorMessage(error);
     deps.onPromptDispatchFailure(message);

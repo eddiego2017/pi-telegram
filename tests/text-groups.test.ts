@@ -174,6 +174,41 @@ test("Text group helper ignores commands, bots, media groups, and non-contiguous
   );
 });
 
+test("Text group helper keeps forum topic split messages isolated", () => {
+  const groups = new Map<
+    string,
+    TextGroups.TelegramTextGroupState<TestMessage, string>
+  >();
+  const timers: Array<() => void> = [];
+  const dispatched: string[] = [];
+  const queue = (message: TestMessage, context: string) =>
+    TextGroups.queueTelegramTextGroupMessage({
+      message,
+      context,
+      groups,
+      debounceMs: 10,
+      minSplitLength: 8,
+      setTimer: (callback) => {
+        timers.push(callback);
+        return callback as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimer: () => {},
+      dispatchMessages: (messages, ctx) => {
+        dispatched.push(
+          `${ctx}:${messages.map((item) => item.text).join("|")}`,
+        );
+      },
+    });
+
+  assert.equal(queue(createMessage(1, "long-enough", { message_thread_id: 11 }), "a"), true);
+  assert.equal(queue(createMessage(2, "other-long", { message_thread_id: 12 }), "b"), true);
+  assert.equal(queue(createMessage(3, "tail-a", { message_thread_id: 11 }), "a"), true);
+  assert.equal(queue(createMessage(4, "tail-b", { message_thread_id: 12 }), "b"), true);
+  timers.at(-2)?.();
+  timers.at(-1)?.();
+  assert.deepEqual(dispatched.sort(), ["a:long-enough|tail-a", "b:other-long|tail-b"]);
+});
+
 test("Text group helper appends many split tails with wider id gaps", () => {
   const groups = new Map<
     string,

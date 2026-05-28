@@ -63,6 +63,7 @@ import {
   type PendingTelegramTurn,
   type TelegramQueueItem,
 } from "../lib/queue.ts";
+import { getAmbientTelegramThreadContext } from "../lib/thread-context.ts";
 
 function createQueueTestModel() {
   return { provider: "openai", id: "gpt-5" };
@@ -838,6 +839,65 @@ test("Agent end runtime resets state, finalizes replies, sends attachments, and 
     "clear:1",
     "markdown:final",
     "attachments:1",
+    "dispatch",
+  ]);
+});
+
+test("Agent end runtime delivers topic turns under their message_thread_id", async () => {
+  const events: unknown[] = [];
+  const turn: PendingTelegramTurn = createQueueTestPromptTurn({
+    chatId: -10042,
+    messageThreadId: 77,
+    replyToMessageId: 9,
+    queuedAttachments: [{ path: "/tmp/demo.txt", fileName: "demo.txt" }],
+  });
+  await handleTelegramAgentEndRuntime({
+    turn,
+    assistant: { text: "final" },
+    preserveQueuedTurnsAsHistory: false,
+    resetRuntimeState: () => {
+      events.push("reset");
+    },
+    updateStatus: () => {
+      events.push("status");
+    },
+    dispatchNextQueuedTelegramTurn: () => {
+      events.push("dispatch");
+    },
+    clearPreview: async () => {
+      events.push({ kind: "clear", scope: getAmbientTelegramThreadContext() });
+    },
+    setPreviewPendingText: (text) => {
+      events.push(`preview:${text}`);
+    },
+    finalizeMarkdownPreview: async () => {
+      events.push({ kind: "finalize", scope: getAmbientTelegramThreadContext() });
+      return false;
+    },
+    sendMarkdownReply: async () => {
+      events.push({ kind: "markdown", scope: getAmbientTelegramThreadContext() });
+    },
+    sendTextReply: async () => {
+      events.push({ kind: "text", scope: getAmbientTelegramThreadContext() });
+    },
+    sendQueuedAttachments: async () => {
+      events.push({ kind: "attachments", scope: getAmbientTelegramThreadContext() });
+    },
+    planOutboundReply: () => ({ markdown: "final", voiceText: "voice" }),
+    sendOutboundReplyArtifacts: async () => {
+      events.push({ kind: "voice", scope: getAmbientTelegramThreadContext() });
+    },
+  });
+  const scope = { chatId: -10042, messageThreadId: 77 };
+  assert.deepEqual(events, [
+    "reset",
+    "status",
+    "preview:final",
+    { kind: "finalize", scope },
+    { kind: "clear", scope },
+    { kind: "markdown", scope },
+    { kind: "voice", scope },
+    { kind: "attachments", scope },
     "dispatch",
   ]);
 });
@@ -1945,12 +2005,13 @@ test("Control runtime runs the control item and always settles", async () => {
 });
 
 test("Control runtime reports failures before settling", async () => {
-  const events: string[] = [];
+  const events: unknown[] = [];
   await executeTelegramControlItemRuntime(
     {
       kind: "control",
       controlType: "model",
       chatId: 3,
+      messageThreadId: 44,
       replyToMessageId: 4,
       queueOrder: 2,
       queueLane: "control",
@@ -1963,7 +2024,7 @@ test("Control runtime reports failures before settling", async () => {
     {
       ctx: {},
       sendTextReply: async (_chatId, _replyToMessageId, text) => {
-        events.push(text);
+        events.push({ text, scope: getAmbientTelegramThreadContext() });
         return undefined;
       },
       recordRuntimeEvent: (category, error, details) => {
@@ -1977,7 +2038,10 @@ test("Control runtime reports failures before settling", async () => {
   );
   assert.deepEqual(events, [
     "control:boom:model",
-    "Telegram control action failed: boom",
+    {
+      text: "Telegram control action failed: boom",
+      scope: { chatId: 3, messageThreadId: 44 },
+    },
     "settled",
   ]);
 });
@@ -2101,13 +2165,14 @@ test("Dispatch runtime idles on none and executes control items directly", () =>
 });
 
 test("Dispatch runtime reports prompt dispatch failures after starting", () => {
-  const events: string[] = [];
+  const events: unknown[] = [];
   executeTelegramQueueDispatchPlan(
     {
       kind: "prompt",
       item: {
         kind: "prompt",
         chatId: 2,
+        messageThreadId: 77,
         replyToMessageId: 3,
         sourceMessageIds: [3],
         queueOrder: 2,
@@ -2128,6 +2193,7 @@ test("Dispatch runtime reports prompt dispatch failures after starting", () => {
         events.push(`start:${chatId}`);
       },
       sendUserMessage: () => {
+        events.push({ scope: getAmbientTelegramThreadContext() });
         throw new Error("boom");
       },
       onPromptDispatchFailure: (message) => {
@@ -2138,7 +2204,62 @@ test("Dispatch runtime reports prompt dispatch failures after starting", () => {
       },
     },
   );
-  assert.deepEqual(events, ["start:2", "error:boom"]);
+  assert.deepEqual(events, [
+    "start:2",
+    { scope: { chatId: 2, messageThreadId: 77 } },
+    "error:boom",
+  ]);
+});
+
+test("Dispatch runtime preserves thread scope for async prompt dispatch failures", async () => {
+  const events: unknown[] = [];
+  await executeTelegramQueueDispatchPlan(
+    {
+      kind: "prompt",
+      item: {
+        kind: "prompt",
+        chatId: 2,
+        messageThreadId: 77,
+        replyToMessageId: 3,
+        sourceMessageIds: [3],
+        queueOrder: 2,
+        queueLane: "default",
+        laneOrder: 2,
+        queuedAttachments: [],
+        content: [{ type: "text", text: "prompt" }],
+        historyText: "prompt",
+        statusSummary: "prompt",
+      },
+      remainingItems: [],
+    },
+    {
+      executeControlItem: () => {
+        events.push("control");
+      },
+      onPromptDispatchStart: (chatId) => {
+        events.push(`start:${chatId}`);
+      },
+      sendUserMessage: async () => {
+        events.push({ startScope: getAmbientTelegramThreadContext() });
+        await new Promise((resolve) => setImmediate(resolve));
+        events.push({ asyncScope: getAmbientTelegramThreadContext() });
+        throw new Error("async boom");
+      },
+      onPromptDispatchFailure: (message) => {
+        events.push(`error:${message}`);
+      },
+      onIdle: () => {
+        events.push("idle");
+      },
+    },
+  );
+  const scope = { chatId: 2, messageThreadId: 77 };
+  assert.deepEqual(events, [
+    "start:2",
+    { startScope: scope },
+    { asyncScope: scope },
+    "error:async boom",
+  ]);
 });
 
 test("Queue dispatch controller plans prompts and reports dispatch failures", () => {

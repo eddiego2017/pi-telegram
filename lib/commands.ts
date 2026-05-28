@@ -682,11 +682,13 @@ export type TelegramControlCommandType =
 export interface TelegramCommandRuntimeMessage {
   chat: { id: number };
   message_id: number;
+  message_thread_id?: number;
   from?: { id?: number };
 }
 
 export interface TelegramCommandMessageTarget {
   chatId: number;
+  messageThreadId?: number;
   replyToMessageId: number;
 }
 
@@ -771,6 +773,9 @@ export function getTelegramCommandMessageTarget(
 ): TelegramCommandMessageTarget {
   return {
     chatId: message.chat.id,
+    ...(message.message_thread_id !== undefined
+      ? { messageThreadId: message.message_thread_id }
+      : {}),
     replyToMessageId: message.message_id,
   };
 }
@@ -778,6 +783,7 @@ export function getTelegramCommandMessageTarget(
 export interface TelegramCommandControlQueueRuntimeDeps<TContext> {
   createControlItem: (options: {
     chatId: number;
+    messageThreadId?: number;
     replyToMessageId: number;
     controlType: TelegramControlCommandType;
     statusSummary: string;
@@ -806,6 +812,7 @@ export function createTelegramCommandControlQueueRuntime<TContext>(
 export function createTelegramCommandControlEnqueueAdapter<TContext>(deps: {
   createControlItem: (options: {
     chatId: number;
+    messageThreadId?: number;
     replyToMessageId: number;
     controlType: TelegramControlCommandType;
     statusSummary: string;

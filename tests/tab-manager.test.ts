@@ -24,7 +24,12 @@ import type {
   RpcChildBackendEvent,
   RpcChildSessionState,
 } from "../lib/rpc-child.ts";
-import type { TelegramConcurrentTabsConfig } from "../lib/config.ts";
+import type { TelegramNormalizedConcurrentTabsConfig } from "../lib/config.ts";
+import {
+  getAmbientTelegramThreadContext,
+  runWithTelegramThreadContext,
+} from "../lib/thread-context.ts";
+import { normalizeTelegramTopicTabName } from "../lib/tabs.ts";
 
 class FakeTabBackend implements TelegramTabBackend {
   readonly prompts: string[] = [];
@@ -186,6 +191,7 @@ function makeResumePortTabManager(
     createActiveTreeBranch: async () => undefined,
     handleCommand: async () => false,
     handleCallbackQuery: async () => false,
+    handleTopicServiceMessage: async () => false,
     dispatchPrompt: async () => false,
     dispose: async () => undefined,
     ...overrides,
@@ -537,11 +543,17 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
   const replies: string[] = [];
   const backends = new Map<string, FakeTabBackend>();
   let currentTime = 1000;
-  const config: Required<TelegramConcurrentTabsConfig> = {
+  const config: TelegramNormalizedConcurrentTabsConfig = {
     enabled: true,
     maxTabs: 4,
     inactiveNotify: true,
     workerExtensions: ["/agent/extensions/provider.ts"],
+    topicBinding: {
+      enabled: false,
+      generalIsDefault: true,
+      autoCreate: true,
+      closeOnTopicClose: true,
+    },
   };
   const backendOptions: unknown[] = [];
   const branchCalls: Array<{ tabName: string; sessionFile?: string; entryId: string }> = [];
@@ -740,6 +752,350 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
 
   await manager.handleCommand("abort A", 1, 50, "ctx");
   assert.deepEqual(backends.get("A")?.aborts, ["A"]);
+});
+
+test("Tab manager routes forum topic prompts to topic-bound tabs without switching active tab", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-routing-"));
+  const statePath = join(tempDir, "tabs.json");
+  const textReplies: string[] = [];
+  const streamReplies: Array<{
+    chatId: number;
+    replyToMessageId: number | undefined;
+    markdown: string;
+    scope: ReturnType<typeof getAmbientTelegramThreadContext>;
+  }> = [];
+  const streamEdits: Array<{
+    chatId: number;
+    messageId: number;
+    markdown: string;
+    scope: ReturnType<typeof getAmbientTelegramThreadContext>;
+  }> = [];
+  const typingScopes: Array<ReturnType<typeof getAmbientTelegramThreadContext>> = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 5,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      textReplies.push(text);
+      return textReplies.length;
+    },
+    sendTypingAction: async () => {
+      typingScopes.push(getAmbientTelegramThreadContext());
+    },
+    sendStreamMarkdownReply: async (chatId, replyToMessageId, markdown) => {
+      streamReplies.push({
+        chatId,
+        replyToMessageId,
+        markdown,
+        scope: getAmbientTelegramThreadContext(),
+      });
+      return 100 + streamReplies.length;
+    },
+    editStreamMarkdownMessage: async (chatId, messageId, markdown) => {
+      streamEdits.push({
+        chatId,
+        messageId,
+        markdown,
+        scope: getAmbientTelegramThreadContext(),
+      });
+      return messageId;
+    },
+    streamEditThrottleMs: 0,
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
+
+  await manager.dispatchPrompt(
+    {
+      chatId: -10042,
+      replyToMessageId: 20,
+      content: [{ type: "text", text: "general prompt" }],
+    },
+    "ctx",
+  );
+  assert.deepEqual(backends.get("default")?.prompts, ["general prompt"]);
+  assert.match(textReplies.at(-1) ?? "", /Started tab default/);
+  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
+
+  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  await manager.dispatchPrompt(
+    {
+      chatId: -10042,
+      messageThreadId: 77,
+      replyToMessageId: 21,
+      content: [{ type: "text", text: "topic prompt" }],
+    },
+    "ctx",
+  );
+  assert.deepEqual(backends.get(topicTab)?.prompts, ["topic prompt"]);
+  assert.match(textReplies.at(-1) ?? "", new RegExp(`Started tab ${topicTab}`));
+  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
+  assert.deepEqual(typingScopes.at(-1), {
+    chatId: -10042,
+    messageThreadId: 77,
+  });
+
+  const topicBackend = backends.get(topicTab);
+  assert.ok(topicBackend);
+  topicBackend.emit({ type: "agent_start" });
+  topicBackend.emit({
+    type: "message_update",
+    assistantMessageEvent: { type: "text_delta", delta: "topic answer" },
+  });
+  await waitForTabStreamFlush();
+  assert.deepEqual(streamReplies.at(-1), {
+    chatId: -10042,
+    replyToMessageId: 21,
+    markdown: "topic answer",
+    scope: { chatId: -10042, messageThreadId: 77 },
+  });
+  topicBackend.emit({
+    type: "agent_end",
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "topic answer final" }] },
+    ],
+  });
+  await waitForTabStreamFlush();
+  assert.equal(streamEdits.at(-1)?.chatId, -10042);
+  assert.equal(streamEdits.at(-1)?.messageId, 101);
+  assert.equal(streamEdits.at(-1)?.markdown, "topic answer final");
+  assert.deepEqual(streamEdits.at(-1)?.scope, {
+    chatId: -10042,
+    messageThreadId: 77,
+  });
+  assert.equal(textReplies.some((reply) => reply.includes("finished")), false);
+
+  const saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    activeTab: string;
+    tabs: Record<string, { source?: unknown }>;
+  };
+  assert.equal(saved.activeTab, "A");
+  assert.deepEqual(saved.tabs[topicTab]?.source, {
+    kind: "telegram-topic",
+    chatId: -10042,
+    messageThreadId: 77,
+  });
+  await manager.dispose();
+});
+
+test("Tab manager handles forum topic service create, edit, and close events", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-service-"));
+  const statePath = join(tempDir, "tabs.json");
+  const disposed: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 5,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      const originalDispose = backend.dispose.bind(backend);
+      backend.dispose = async () => {
+        disposed.push(options.tabName);
+        await originalDispose();
+      };
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async () => undefined,
+  });
+
+  assert.equal(
+    await manager.handleTopicServiceMessage(
+      {
+        chat: { id: -10042 },
+        message_id: 20,
+        message_thread_id: 77,
+        forum_topic_created: { name: "Deploy Debug" },
+      },
+      "ctx",
+    ),
+    true,
+  );
+  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  let saved: { tabs: Record<string, { source?: { topicTitle?: string } } | undefined> } =
+    JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(saved.tabs[topicTab]?.source?.topicTitle, "Deploy Debug");
+  assert.equal(backends.size, 0);
+
+  await manager.handleTopicServiceMessage(
+    {
+      chat: { id: -10042 },
+      message_id: 21,
+      message_thread_id: 77,
+      forum_topic_edited: { name: "Deploy Debug 2" },
+    },
+    "ctx",
+  );
+  saved = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(saved.tabs[topicTab]?.source?.topicTitle, "Deploy Debug 2");
+
+  await manager.dispatchPrompt(
+    {
+      chatId: -10042,
+      messageThreadId: 77,
+      replyToMessageId: 22,
+      content: [{ type: "text", text: "start worker" }],
+    },
+    "ctx",
+  );
+  assert.ok(backends.get(topicTab));
+  await manager.handleTopicServiceMessage(
+    {
+      chat: { id: -10042 },
+      message_id: 23,
+      message_thread_id: 77,
+      forum_topic_closed: {},
+    },
+    "ctx",
+  );
+  saved = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(saved.tabs[topicTab], undefined);
+  assert.deepEqual(disposed, [topicTab]);
+  await manager.dispose();
+});
+
+test("Tab manager scopes active APIs to ambient forum topics", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-active-api-"));
+  const statePath = join(tempDir, "tabs.json");
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 5,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async () => undefined,
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
+
+  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  await runWithTelegramThreadContext(
+    { chatId: -10042, messageThreadId: 77 },
+    async () => {
+      assert.equal(manager.getActiveSessionReference("ctx")?.tabName, topicTab);
+      assert.equal(await manager.setActiveSessionName("topic session", "ctx"), true);
+      assert.equal(manager.getActiveSessionName("ctx"), "topic session");
+      assert.equal(manager.getActiveSessionReference("ctx")?.tabName, topicTab);
+      assert.equal(manager.getActiveResumeSessionScope("ctx")?.tabName, topicTab);
+      assert.deepEqual(await manager.newActiveSession("ctx"), { cancelled: false });
+    },
+  );
+  assert.equal(backends.get(topicTab)?.newSessions.length, 1);
+  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
+
+  const saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    tabs: Record<string, { source?: unknown; sessionName?: string }>;
+  };
+  assert.deepEqual(saved.tabs[topicTab]?.source, {
+    kind: "telegram-topic",
+    chatId: -10042,
+    messageThreadId: 77,
+  });
+  await manager.dispose();
+});
+
+test("Tab manager rejects unknown forum topics at max tab capacity", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-max-"));
+  const statePath = join(tempDir, "tabs.json");
+  const replies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 1,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  assert.equal(
+    await manager.dispatchPrompt(
+      {
+        chatId: -10042,
+        messageThreadId: 77,
+        replyToMessageId: 21,
+        content: [{ type: "text", text: "topic prompt" }],
+      },
+      "ctx",
+    ),
+    true,
+  );
+  assert.equal(
+    replies.at(-1),
+    "Maximum tab count reached. Close another topic/tab first.",
+  );
+  assert.equal(backends.size, 0);
+  const saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    tabs: Record<string, unknown>;
+  };
+  assert.deepEqual(Object.keys(saved.tabs), ["default"]);
 });
 
 test("Tab manager reports worker API errors instead of replaying stale text", async () => {
@@ -1568,6 +1924,8 @@ test("Tab manager relays active worker thinking and tool call output", async () 
     1,
   );
 
+  const streamReplyCountBeforeTool = streamReplies.length;
+  const streamEditCountBeforeTool = streamEdits.length;
   backend.emit({
     type: "message_update",
     assistantMessageEvent: {
@@ -1589,7 +1947,8 @@ test("Tab manager relays active worker thinking and tool call output", async () 
     },
   });
   await waitForTabStreamFlush();
-  assert.match(streamReplies.at(-1) ?? "", /🔧 `bash`/);
+  assert.equal(streamReplies.length, streamReplyCountBeforeTool);
+  assert.equal(streamEdits.length, streamEditCountBeforeTool);
 
   backend.emit({
     type: "message_update",
@@ -1612,8 +1971,8 @@ test("Tab manager relays active worker thinking and tool call output", async () 
     },
   });
   await waitForTabStreamFlush();
-  assert.match(streamEdits.at(-1) ?? "", /102:🔧 `bash`/);
-  assert.match(streamEdits.at(-1) ?? "", /"command": "pwd"/);
+  assert.equal(streamReplies.length, streamReplyCountBeforeTool);
+  assert.equal(streamEdits.length, streamEditCountBeforeTool);
 
   backend.emit({
     type: "message_update",
@@ -1629,6 +1988,10 @@ test("Tab manager relays active worker thinking and tool call output", async () 
     },
   });
   await waitForTabStreamFlush();
+  assert.equal(streamReplies.length, streamReplyCountBeforeTool + 1);
+  assert.match(streamReplies.at(-1) ?? "", /🔧 `bash`/);
+  assert.match(streamReplies.at(-1) ?? "", /"command": "pwd"/);
+  assert.equal(streamEdits.length, streamEditCountBeforeTool);
 
   backend.emit({
     type: "message_update",
@@ -1676,10 +2039,11 @@ test("Tab manager relays active worker thinking and tool call output", async () 
     1,
   );
   assert.equal(markdownReplies.some((reply) => reply.includes("🔧 `bash`")), false);
-  assert.ok(
+  assert.equal(
     [...streamReplies, ...streamEdits].filter((reply) =>
       reply.includes("🔧 `bash`"),
-    ).length >= 2,
+    ).length,
+    1,
   );
   assert.equal(
     markdownReplies.some((reply) => reply.includes("I'll check")),
@@ -1913,9 +2277,24 @@ test("Tab manager does not reuse finalized thinking or tool streams", async () =
     },
   });
   await waitForTabStreamFlush();
+  assert.equal(streamReplies.length, 3);
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: {
+        type: "toolCall",
+        id: "tool-2",
+        name: "bash",
+        arguments: { command: "ls" },
+      },
+    },
+  });
+  await waitForTabStreamFlush();
 
   assert.equal(streamReplies.length, 4);
-  assert.match(streamReplies[2] ?? "", /🔧 `bash`/);
+  assert.match(streamReplies[2] ?? "", /"command": "pwd"/);
   assert.match(streamReplies[3] ?? "", /"command": "ls"/);
   assert.equal(
     streamEdits.some(

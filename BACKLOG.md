@@ -2,6 +2,10 @@
 
 ## Open Work
 
+- [ ] Smoke-test and polish Telegram forum topic tabs in a real forum supergroup.
+  - Priority: Medium.
+  - Idea: Validate Bot API service-message shapes, callback `message_thread_id`, General-topic behavior, topic typing actions, and dashboard labels against live Telegram before broadening the UX.
+  - Exit: Real Telegram smoke test covers General plus two topics, create/edit/close/reopen lifecycle, command/menu scoping, and documents any operational caveats or config changes.
 - [ ] Explore always-available outbound Telegram tools for queued artifacts and controls.
   - Priority: Low.
   - Idea: Provide tools such as `telegram_attach_file` and `telegram_attach_button` that can be called outside an active Telegram turn, using the paired chat/session as the delivery target when safe.
