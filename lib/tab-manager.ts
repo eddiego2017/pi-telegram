@@ -1785,8 +1785,11 @@ export function createTelegramTabManager<TContext>(
     turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
   ): "topic" | "workspace" | undefined => {
     if (!isForumNativeMode()) return undefined;
-    const chatId = runtime.activeChatId ?? turn?.chatId;
-    const messageThreadId = runtime.activeMessageThreadId ?? turn?.messageThreadId;
+    const ambientThread = getAmbientTelegramThreadContext();
+    const chatId = runtime.activeChatId ?? turn?.chatId ?? ambientThread?.chatId;
+    const messageThreadId = runtime.activeMessageThreadId ??
+      turn?.messageThreadId ??
+      ambientThread?.messageThreadId;
     if (
       messageThreadId !== undefined ||
       runtime.record.source?.kind === "telegram-topic" ||
@@ -3856,7 +3859,9 @@ export function createTelegramTabManager<TContext>(
         return {
           tabName: targetName,
           aborted: false,
-          message: `No active worker for tab ${formatTelegramTabDisplayName(targetName)}.`,
+          message: runtime
+            ? `No active worker for ${formatRuntimeUserScopeTarget(runtime)}.`
+            : `No active worker for tab ${formatTelegramTabDisplayName(targetName)}.`,
         };
       }
       await runtime.backend.abort();
@@ -3873,7 +3878,7 @@ export function createTelegramTabManager<TContext>(
       return {
         tabName: targetName,
         aborted: true,
-        message: `Aborted tab ${formatTelegramTabDisplayName(targetName)}.`,
+        message: `Aborted ${formatRuntimeUserScopeTarget(runtime)}.`,
       };
     },
     abort: async (

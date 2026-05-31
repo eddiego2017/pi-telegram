@@ -2234,6 +2234,18 @@ test("Tab manager uses current-topic wording for native prompt replies", async (
   );
   assert.equal(replies.at(-1), "Topic prompt is empty.");
 
+  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  await runWithTelegramThreadContext(
+    { chatId: -10042, messageThreadId: 77 },
+    async () => {
+      assert.deepEqual(await manager.abortActive("ctx"), {
+        tabName: topicTab,
+        aborted: false,
+        message: "No active worker for current topic.",
+      });
+    },
+  );
+
   await manager.dispatchPrompt(
     {
       chatId: -10042,
@@ -2256,7 +2268,6 @@ test("Tab manager uses current-topic wording for native prompt replies", async (
   );
   assert.equal(replies.at(-1), "Queued follow-up in current topic.");
 
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
   const backend = backends.get(topicTab);
   assert.ok(backend);
   assert.deepEqual(backend.prompts, ["first"]);
@@ -2274,6 +2285,22 @@ test("Tab manager uses current-topic wording for native prompt replies", async (
     ],
   });
   assert.equal(replies.at(-1), "Current topic failed: native boom");
+  await runWithTelegramThreadContext(
+    { chatId: -10042, messageThreadId: 77 },
+    async () => {
+      assert.deepEqual(await manager.abortActive("ctx"), {
+        tabName: topicTab,
+        aborted: true,
+        message: "Aborted current topic.",
+      });
+      assert.deepEqual(backend.aborts, [topicTab]);
+      assert.deepEqual(await manager.abortActive("ctx"), {
+        tabName: topicTab,
+        aborted: true,
+        message: "Aborted current topic.",
+      });
+    },
+  );
   await manager.dispose();
 });
 
