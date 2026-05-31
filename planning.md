@@ -950,7 +950,7 @@ Goal:
 Telegram forum-native UX should no longer expose independent tabs.
 ```
 
-Status: initial user-facing command/help cleanup implemented; broad internal refactor intentionally deferred.
+Status: implemented and validated for the bounded forum-native UX cleanup; broad internal refactor intentionally deferred.
 
 Implemented:
 
@@ -960,23 +960,29 @@ Implemented:
 - In `topicBinding.native` mode, `/compact`, `/new`, `/clone`, and less-common worker lifecycle errors describe the current topic/workspace session instead of a generic hidden tab-backed session.
 - `/tab` remains routable as a hidden operator/debug dashboard; this preserves diagnostics and avoids removing emergency tooling.
 
-Remaining tasks:
+Final audit:
 
-- Continue replacing user-facing wording where it appears in less common topic flows:
+- Remaining `Tab` / `/tab` / `default` wording is limited to non-native/manual tab mode, the hidden `/tab` operator/debug dashboard, debug/runtime event names, internal types/filenames, tests, or docs that describe compatibility internals.
+- No further broad wording sweep is needed for Phase 5.
 
-  ```text
-  tab -> topic/workspace
-  default -> General
-  active tab -> current topic
-  ```
+Validation after `8a96d38 feat: use topic wording for native completion notices`:
 
-- Continue internal refactor gradually, only after behavior stays stable:
+```text
+npm run typecheck: pass
+PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test tests/commands.test.ts tests/tab-manager.test.ts tests/config.test.ts tests/routing.test.ts tests/invariants.test.ts: pass, 132 pass
+git diff --check: pass
+live runtime reloaded through 8a96d38 after /reload
+```
 
-  ```text
-  TelegramTabRecord -> TelegramTopicRecord / WorkspaceRecord
-  tab-manager -> topic-runtime-manager
-  RuntimeTab -> TopicRuntime / WorkspaceRuntime
-  ```
+Deferred to later phases:
+
+```text
+TelegramTabRecord -> TelegramTopicRecord / WorkspaceRecord
+tab-manager -> topic-runtime-manager
+RuntimeTab -> TopicRuntime / WorkspaceRuntime
+internal default -> general migration
+optional deeper /session, /tree, and /resume wording pass
+```
 
 Do not start broad internal refactor yet.
 
@@ -1163,7 +1169,15 @@ npm run pack:check
 git diff --check
 ```
 
-Latest recorded results after Phase 6 worker-pool initial cut:
+Latest recorded results after Phase 5 final validation:
+
+```text
+npm run typecheck: pass
+PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test tests/commands.test.ts tests/tab-manager.test.ts tests/config.test.ts tests/routing.test.ts tests/invariants.test.ts: pass, 132 pass
+git diff --check: pass
+```
+
+Previous full-suite result after Phase 6 worker-pool initial cut:
 
 ```text
 npm run typecheck: pass
@@ -1194,5 +1208,5 @@ Persisted/live config now includes:
 - concurrentTabs.topicBinding.deleteTopicOnClose: true
 - concurrentTabs.topicBinding.trustedChatIds: [-1003961592045]
 
-Live runtime has loaded through commit 8ee92e5 after /reload.
+Live runtime has loaded through commit 8a96d38 after /reload.
 ```
