@@ -70,14 +70,17 @@ Already implemented and live smoke-tested:
   result: pi topic-bound record removed, Telegram topic deleted
   ```
 
-Eddie's current local desired config:
+Eddie's current local desired/live config:
 
 ```json
 {
   "concurrentTabs": {
     "enabled": true,
+    "maxTabs": 20,
+    "maxWorkers": 20,
     "topicBinding": {
       "enabled": true,
+      "native": true,
       "generalIsDefault": true,
       "autoCreate": true,
       "closeOnTopicClose": true,
@@ -975,9 +978,9 @@ Do not start this refactor until behavior is stable.
 
 ### Phase 6 — Worker pool model
 
-Status: started.
+Status: implemented through the initial worker-pool cut and loaded in Eddie's live runtime after `/reload`.
 
-Implemented in the first cut:
+Implemented:
 
 - Added optional `concurrentTabs.maxWorkers` separate from durable topic record count.
 - `maxWorkers` defaults to `maxTabs` when unset for backward compatibility.
@@ -987,9 +990,37 @@ Implemented in the first cut:
 - Running/starting workers are never auto-evicted; if no idle worker is available, the new worker start fails fast with a capacity message.
 - Evicted workers are reloaded from their persisted session file on the next message.
 
-Remaining future performance/scalability work:
+Validation result:
+
+```text
+commit fa84665 feat: add Telegram worker capacity limit
+commit 8ee92e5 feat: evict idle Telegram workers
+npm run typecheck: pass
+PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test tests/tab-manager.test.ts tests/config.test.ts: pass, 69 pass
+PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts: pass, 710 pass
+git diff --check: pass
+```
+
+Live `/reload` validation after `8ee92e5`:
+
+```text
+maxTabs: 20
+maxWorkers: 20
+topicBinding.native: true
+deleteTopicOnClose: true
+lastUpdateId present
+tab records/open records: 17
+capacity remaining: 3
+statuses: idle 15, exited 1, running 1
+duplicate open session keys: 0
+8-second persistence check: unchanged
+recent Telegram logs: no error/warn/rate/backoff/drop/worker-capacity/evict anomalies
+```
+
+Remaining future performance/scalability/UX work:
 
 - Add richer dashboard visibility for hot/evicted worker state.
+- Show worker capacity in `/tab` dashboard, e.g. `Workers: hot/maxWorkers`.
 - Tune eviction policy beyond oldest `lastUsedAt` if needed.
 
 ### Phase 7 — Internal `default -> general` migration
@@ -1078,9 +1109,9 @@ These should not block Phase 0.
 
 7. Should `lastUpdateId` remain in `telegram.json`?
 
-   Known issue: live in-memory config can overwrite manual file edits when polling persists offsets.
+   Current mitigation implemented and live: config persistence now merges runtime-mutated fields such as `lastUpdateId` with the latest on-disk config, and updates the long-lived in-memory config object in place. This prevented `concurrentTabs.maxTabs` / `maxWorkers` operator edits from being overwritten during polling persistence.
 
-   Eddie preference: avoid adding a new settings file for now. Revisit later. Possible future mitigation without new file: persist offset by merging latest file config instead of overwriting from stale memory.
+   Eddie preference: avoid adding a new settings file for now. Revisit later only if offset persistence continues to create operational friction.
 
 ## Review Checklist
 
@@ -1125,12 +1156,12 @@ npm run pack:check
 git diff --check
 ```
 
-Latest recorded results after topic-title/session-name sync:
+Latest recorded results after Phase 6 worker-pool initial cut:
 
 ```text
 npm run typecheck: pass
-node --experimental-strip-types --test tests/tab-manager.test.ts tests/tabs.test.ts: pass
-full npm test: 691 pass, 0 fail
+node --experimental-strip-types --test tests/tab-manager.test.ts tests/config.test.ts: pass, 69 pass
+PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts: pass, 710 pass
 git diff --check: pass
 ```
 
@@ -1147,6 +1178,14 @@ git diff --check: pass
 Deployment note:
 
 ```text
-Persisted/live config now includes trustedChatIds: [-1003961592045].
-Operator should run /reload when ready so the live extension loads the new guard code.
+Persisted/live config now includes:
+- concurrentTabs.enabled: true
+- concurrentTabs.maxTabs: 20
+- concurrentTabs.maxWorkers: 20
+- concurrentTabs.topicBinding.enabled: true
+- concurrentTabs.topicBinding.native: true
+- concurrentTabs.topicBinding.deleteTopicOnClose: true
+- concurrentTabs.topicBinding.trustedChatIds: [-1003961592045]
+
+Live runtime has loaded through commit 8ee92e5 after /reload.
 ```
