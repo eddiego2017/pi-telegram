@@ -1313,19 +1313,30 @@ function formatTelegramTabDashboardLastMessage(record: TelegramTabRecord): strin
   return text ? truncateTelegramTabText(text, 96) : "No messages yet.";
 }
 
+type TelegramTabDashboardWorkerState = "hot" | "cold";
+
+function formatTelegramTabDashboardWorkerLabel(
+  workerState: TelegramTabDashboardWorkerState | undefined,
+): string | undefined {
+  if (!workerState) return undefined;
+  return workerState === "hot" ? "worker hot" : "no worker";
+}
+
 function formatTelegramTabDashboardMeta(
   record: TelegramTabRecord,
   nowMs: number,
+  workerState?: TelegramTabDashboardWorkerState,
 ): string {
   const age = formatTelegramTabDashboardAge(nowMs - record.createdAt);
   const messageCount = Math.max(0, record.messageCount ?? 0);
   return [
     formatTelegramTabRecordDisplayName(record),
     formatTelegramTabStatusLabel(record.status),
+    formatTelegramTabDashboardWorkerLabel(workerState),
     age,
     `${messageCount}msg`,
     formatTelegramTabDashboardName(record),
-  ].join(" · ");
+  ].filter((part): part is string => Boolean(part)).join(" · ");
 }
 
 function getTelegramTabCloseableNames(state: TelegramTabsState): string[] {
@@ -1357,6 +1368,7 @@ function formatTelegramTabDashboardSummary(
   filterTrace: readonly TelegramTabFilterTraceItem[] = [],
   forumNativeMode = false,
   workerCapacity?: { hot: number; max: number },
+  workerStateByTab: Readonly<Record<string, TelegramTabDashboardWorkerState>> = {},
 ): string {
   const allTabs = getSortedTelegramTabRecords(state);
   const tabs = mode === "open" && visibleTabs ? [...visibleTabs] : allTabs;
@@ -1429,7 +1441,7 @@ function formatTelegramTabDashboardSummary(
         ? " · protected"
         : "";
     lines.push(
-      `${closePrefix}${marker} ${formatTelegramTabDashboardMeta(tab, nowMs)}${unread}${protectedLabel}`,
+      `${closePrefix}${marker} ${formatTelegramTabDashboardMeta(tab, nowMs, workerStateByTab[tab.name])}${unread}${protectedLabel}`,
       `  ↳ ${formatTelegramTabDashboardLastMessage(tab)}`,
     );
   }
@@ -3342,6 +3354,15 @@ export function createTelegramTabManager<TContext>(
         runtime.unreadEvents,
       ]),
     );
+  const getDashboardWorkerStateByTab = (
+    tabState: TelegramTabsState,
+  ): Record<string, TelegramTabDashboardWorkerState> =>
+    Object.fromEntries(
+      Object.keys(tabState.tabs).map((name) => [
+        name,
+        hasHotWorker(runtimeTabs.get(name)) ? "hot" : "cold",
+      ]),
+    );
   const sendForumNativeLifecycleDisabledReply = (
     chatId: number,
     replyToMessageId: number,
@@ -3359,6 +3380,7 @@ export function createTelegramTabManager<TContext>(
   ): Promise<void> => {
     await refreshDashboardTabRecords(tabState);
     const unreadByTab = getUnreadByTab();
+    const workerStateByTab = getDashboardWorkerStateByTab(tabState);
     const forumNativeMode = isForumNativeMode();
     const filterResult = filterTelegramTabRecords(
       getSortedTelegramTabRecords(tabState),
@@ -3391,6 +3413,7 @@ export function createTelegramTabManager<TContext>(
         filterResult.trace,
         forumNativeMode,
         { hot: getHotWorkerCount(), max: getConfiguredMaxWorkers() },
+        workerStateByTab,
       ),
       "plain",
       buildTelegramTabDashboardReplyMarkup(
@@ -3423,6 +3446,7 @@ export function createTelegramTabManager<TContext>(
   ): Promise<void> => {
     await refreshDashboardTabRecords(tabState);
     const unreadByTab = getUnreadByTab();
+    const workerStateByTab = getDashboardWorkerStateByTab(tabState);
     const existingState = getDashboardState(messageId);
     const forumNativeMode = isForumNativeMode();
     const mode = forumNativeMode ? "open" : options.mode ?? existingState?.mode ?? "open";
@@ -3445,6 +3469,7 @@ export function createTelegramTabManager<TContext>(
         [],
         forumNativeMode,
         { hot: getHotWorkerCount(), max: getConfiguredMaxWorkers() },
+        workerStateByTab,
       ),
       "plain",
       buildTelegramTabDashboardReplyMarkup(
