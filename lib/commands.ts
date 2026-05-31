@@ -717,6 +717,7 @@ export interface TelegramCompactCommandDeps extends TelegramRuntimeEventRecorder
     onError: (error: unknown) => void;
   }) => void;
   sendTextReply: (text: string) => Promise<void>;
+  textOptions?: TelegramScopedCommandTextOptions;
 }
 
 /**
@@ -1337,6 +1338,40 @@ function getTelegramScopedCloneSessionFailureMessage(
     : `Clone failed: ${errorMessage}`;
 }
 
+function getTelegramScopedCompactionBusyMessage(
+  options: TelegramScopedCommandTextOptions | undefined,
+): string {
+  const target = getTelegramScopedCommandTarget(options);
+  if (target) {
+    return `Cannot compact ${target} while π or the Telegram queue is busy. Wait for queued turns to finish or send /abort first.`;
+  }
+  return "Cannot compact while π or the Telegram queue is busy. Wait for queued turns to finish or send /abort first.";
+}
+
+function getTelegramScopedCompactionStartedMessage(
+  options: TelegramScopedCommandTextOptions | undefined,
+): string {
+  const target = getTelegramScopedCommandTarget(options);
+  return target ? `Compaction started for ${target}.` : "Compaction started.";
+}
+
+function getTelegramScopedCompactionCompletedMessage(
+  options: TelegramScopedCommandTextOptions | undefined,
+): string {
+  const target = getTelegramScopedCommandTarget(options);
+  return target ? `Compaction completed for ${target}.` : "Compaction completed.";
+}
+
+function getTelegramScopedCompactionFailedMessage(
+  options: TelegramScopedCommandTextOptions | undefined,
+  errorMessage: string,
+): string {
+  const target = getTelegramScopedCommandTarget(options);
+  return target
+    ? `Compaction failed for ${target}: ${errorMessage}`
+    : `Compaction failed: ${errorMessage}`;
+}
+
 function getTelegramScopedCommandTextOptions(
   forumNativeMode: boolean,
 ): TelegramScopedCommandTextOptions {
@@ -1526,7 +1561,7 @@ export async function handleTelegramCompactCommand(
     deps.isCompactionInProgress()
   ) {
     await deps.sendTextReply(
-      "Cannot compact while π or the Telegram queue is busy. Wait for queued turns to finish or send /abort first.",
+      getTelegramScopedCompactionBusyMessage(deps.textOptions),
     );
     return;
   }
@@ -1541,7 +1576,9 @@ export async function handleTelegramCompactCommand(
         deps.setCompactionInProgress(false);
         deps.updateStatus();
         dispatchNextQueuedTelegramTurnAfterCompact(deps);
-        void deps.sendTextReply("Compaction completed.");
+        void deps.sendTextReply(
+          getTelegramScopedCompactionCompletedMessage(deps.textOptions),
+        );
       },
       onError: (error) => {
         compactionStillInProgress = false;
@@ -1551,7 +1588,12 @@ export async function handleTelegramCompactCommand(
         dispatchNextQueuedTelegramTurnAfterCompact(deps);
         deps.recordRuntimeEvent?.("compact", error);
         const errorMessage = getTelegramCommandErrorMessage(error);
-        void deps.sendTextReply(`Compaction failed: ${errorMessage}`);
+        void deps.sendTextReply(
+          getTelegramScopedCompactionFailedMessage(
+            deps.textOptions,
+            errorMessage,
+          ),
+        );
       },
     });
   } catch (error) {
@@ -1561,10 +1603,14 @@ export async function handleTelegramCompactCommand(
     deps.updateStatus();
     deps.recordRuntimeEvent?.("compact", error);
     const errorMessage = getTelegramCommandErrorMessage(error);
-    await deps.sendTextReply(`Compaction failed: ${errorMessage}`);
+    await deps.sendTextReply(
+      getTelegramScopedCompactionFailedMessage(deps.textOptions, errorMessage),
+    );
     return;
   }
-  await deps.sendTextReply("Compaction started.");
+  await deps.sendTextReply(
+    getTelegramScopedCompactionStartedMessage(deps.textOptions),
+  );
   if (compactionStillInProgress) deps.startTypingLoop?.();
 }
 
@@ -2237,6 +2283,7 @@ async function handleTelegramCommandRuntime<
             : undefined,
           stopTypingLoop: deps.stopTypingLoop,
           sendTextReply: sendReplyFor(nextMessage),
+          textOptions: getTextOptions(),
           recordRuntimeEvent: deps.recordRuntimeEvent,
         });
       },

@@ -914,6 +914,57 @@ test("Command helpers guard and complete compact command flow", async () => {
     },
   });
   complete?.();
+  await handleTelegramCompactCommand({
+    textOptions: { forumNativeMode: true, scope: "topic" },
+    isIdle: () => false,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    setCompactionInProgress: (inProgress) => {
+      events.push(`unexpected-set:${inProgress}`);
+    },
+    updateStatus: () => {
+      events.push("unexpected-status");
+    },
+    dispatchNextQueuedTelegramTurn: () => {
+      events.push("unexpected-dispatch");
+    },
+    compact: () => {
+      events.push("unexpected:compact");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+  let topicComplete: (() => void) | undefined;
+  await handleTelegramCompactCommand({
+    textOptions: { forumNativeMode: true, scope: "topic" },
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    setCompactionInProgress: (inProgress) => {
+      events.push(`topic-set:${inProgress}`);
+    },
+    updateStatus: () => {
+      events.push("topic-status");
+    },
+    dispatchNextQueuedTelegramTurn: () => {
+      events.push("topic-dispatch");
+    },
+    compact: (callbacks) => {
+      events.push("topic-compact");
+      topicComplete = callbacks.onComplete;
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+  topicComplete?.();
   assert.deepEqual(events, [
     "reply:Cannot compact while π or the Telegram queue is busy. Wait for queued turns to finish or send /abort first.",
     "set:true",
@@ -926,6 +977,15 @@ test("Command helpers guard and complete compact command flow", async () => {
     "status",
     "dispatch",
     "reply:Compaction completed.",
+    "reply:Cannot compact current topic while π or the Telegram queue is busy. Wait for queued turns to finish or send /abort first.",
+    "topic-set:true",
+    "topic-status",
+    "topic-compact",
+    "reply:Compaction started for current topic.",
+    "topic-set:false",
+    "topic-status",
+    "topic-dispatch",
+    "reply:Compaction completed for current topic.",
   ]);
 });
 
@@ -1024,6 +1084,7 @@ test("Command helpers report compact errors", async () => {
   });
   fail?.(new Error("boom"));
   await handleTelegramCompactCommand({
+    textOptions: { forumNativeMode: true, scope: "topic" },
     isIdle: () => true,
     hasPendingMessages: () => false,
     hasActiveTelegramTurn: () => false,
@@ -1031,20 +1092,20 @@ test("Command helpers report compact errors", async () => {
     hasQueuedTelegramItems: () => false,
     isCompactionInProgress: () => false,
     setCompactionInProgress: (inProgress) => {
-      events.push(`throw-set:${inProgress}`);
+      events.push(`topic-throw-set:${inProgress}`);
     },
     updateStatus: () => {
-      events.push("throw-status");
+      events.push("topic-throw-status");
     },
     dispatchNextQueuedTelegramTurn: () => {},
     compact: () => {
       throw new Error("sync boom");
     },
     startTypingLoop: () => {
-      events.push("throw-typing:start");
+      events.push("topic-throw-typing:start");
     },
     stopTypingLoop: () => {
-      events.push("throw-typing:stop");
+      events.push("topic-throw-typing:stop");
     },
     sendTextReply: async (text) => {
       events.push(`reply:${text}`);
@@ -1063,13 +1124,13 @@ test("Command helpers report compact errors", async () => {
     "dispatch",
     "event:compact:boom",
     "reply:Compaction failed: boom",
-    "throw-set:true",
-    "throw-status",
-    "throw-typing:stop",
-    "throw-set:false",
-    "throw-status",
+    "topic-throw-set:true",
+    "topic-throw-status",
+    "topic-throw-typing:stop",
+    "topic-throw-set:false",
+    "topic-throw-status",
     "event:compact:sync boom",
-    "reply:Compaction failed: sync boom",
+    "reply:Compaction failed for current topic: sync boom",
   ]);
 });
 
