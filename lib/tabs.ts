@@ -62,6 +62,7 @@ export type TelegramTabCommand =
   | { kind: "invalid"; message: string };
 
 export const TELEGRAM_DEFAULT_TAB_NAME = "default";
+export const TELEGRAM_GENERAL_TAB_DISPLAY_NAME = "General";
 export const TELEGRAM_TAB_NAME_PATTERN = /^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$/;
 export const TELEGRAM_TAB_NAME_MAX_LENGTH = 32;
 const TELEGRAM_TOPIC_TAB_HASH_MODULUS = 36 ** 6;
@@ -94,6 +95,16 @@ function normalizeTelegramTabFilterText(s: string): string {
 
 export function normalizeTelegramTabName(name: string): string {
   return cleanTelegramTabText(name);
+}
+
+export function formatTelegramTabDisplayName(name: string): string {
+  return name === TELEGRAM_DEFAULT_TAB_NAME ? TELEGRAM_GENERAL_TAB_DISPLAY_NAME : name;
+}
+
+export function formatTelegramTabRecordDisplayName(
+  tab: Pick<TelegramTabRecord, "name">,
+): string {
+  return formatTelegramTabDisplayName(tab.name);
 }
 
 export function isValidTelegramTabName(name: string): boolean {
@@ -469,6 +480,7 @@ export function formatTelegramTabList(
   const visibleTabs = options.tabs ? [...options.tabs] : allTabs;
   const filterSummary = formatTelegramTabFilterSummary(options.filterTrace ?? []);
   const rows = visibleTabs.map((tab) => {
+    const displayName = formatTelegramTabRecordDisplayName(tab);
     const active = tab.name === state.activeTab ? " *" : "";
     const unread = unreadByTab[tab.name] ? " unread" : "";
     const topic = formatTelegramTabTopicLabel(tab);
@@ -477,7 +489,7 @@ export function formatTelegramTabList(
       ? ` ${formatTelegramTabAge(now - tab.lastAgentStartAt)}`
       : "";
     const error = tab.lastError ? ` (${tab.lastError})` : "";
-    return `- ${tab.name}${active}${topicSuffix} ${formatTelegramTabStatusLabel(tab.status)}${age}${unread}${error}`;
+    return `- ${displayName}${active}${topicSuffix} ${formatTelegramTabStatusLabel(tab.status)}${age}${unread}${error}`;
   });
   const title = filterSummary
     ? `Tabs (${visibleTabs.length}/${allTabs.length}):`
@@ -495,7 +507,7 @@ export function formatTelegramTabStatus(
   now: number,
 ): string {
   const lines = [
-    `Tab: ${tab.name}`,
+    `Tab: ${formatTelegramTabRecordDisplayName(tab)}`,
     `Status: ${formatTelegramTabStatusLabel(tab.status)}`,
     `Cwd: ${tab.cwd}`,
     `Unread events: ${unreadCount}`,

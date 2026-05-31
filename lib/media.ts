@@ -7,6 +7,10 @@
 import { basename, dirname } from "node:path";
 
 import { stripTelegramContextUsageFooter } from "./context-usage.ts";
+import {
+  formatTelegramForumThreadKey,
+  normalizeTelegramForumThread,
+} from "./thread-context.ts";
 
 const TELEGRAM_MEDIA_GROUP_DEBOUNCE_MS = 1200;
 const TELEGRAM_REPLY_CONTEXT_MAX_LENGTH = 1000;
@@ -252,7 +256,9 @@ export function getTelegramMediaGroupKey(
   message: TelegramMediaGroupMessage,
 ): string | undefined {
   if (!message.media_group_id) return undefined;
-  return `${message.chat.id}:${message.message_thread_id ?? "general"}:${message.media_group_id}`;
+  return `${message.chat.id}:${formatTelegramForumThreadKey(
+    normalizeTelegramForumThread(message),
+  )}:${message.media_group_id}`;
 }
 
 export function removePendingTelegramMediaGroupMessages<

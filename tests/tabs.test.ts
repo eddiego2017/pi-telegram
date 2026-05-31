@@ -232,6 +232,10 @@ test("Tab filters apply multiple tokens like resume filters", () => {
 });
 
 test("Tab formatters keep list and status compact", () => {
+  const defaultState = createDefaultTelegramTabsState("/repo", 1000);
+  assert.match(formatTelegramTabList(defaultState, {}, 1000), /- General \* idle/);
+  assert.match(formatTelegramTabStatus(defaultState.tabs.default!, 0, 1000), /Tab: General/);
+
   const state = createDefaultTelegramTabsState("/repo", 1000);
   state.tabs.A = {
     name: "A",

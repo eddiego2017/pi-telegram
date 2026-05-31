@@ -4,6 +4,11 @@
  * Owns conservative delayed grouping for Telegram text messages that look like automatic long-message splits
  */
 
+import {
+  formatTelegramForumThreadKey,
+  normalizeTelegramForumThread,
+} from "./thread-context.ts";
+
 const TELEGRAM_TEXT_GROUP_DEBOUNCE_MS = 1000;
 const TELEGRAM_TEXT_GROUP_MIN_SPLIT_LENGTH = 3600;
 const TELEGRAM_TEXT_GROUP_MAX_MESSAGE_ID_GAP = 10;
@@ -71,7 +76,9 @@ function getTelegramTextGroupKey(
   if (message.media_group_id) return undefined;
   if (!message.from || message.from.is_bot) return undefined;
   if (typeof message.text !== "string") return undefined;
-  return `${message.chat.id}:${message.message_thread_id ?? "general"}:${message.from.id}`;
+  return `${message.chat.id}:${formatTelegramForumThreadKey(
+    normalizeTelegramForumThread(message),
+  )}:${message.from.id}`;
 }
 
 function canStartTelegramTextGroup(

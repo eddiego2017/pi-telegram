@@ -20,6 +20,10 @@ import {
   guessMediaType,
   type TelegramMediaMessage,
 } from "./media.ts";
+import {
+  getTelegramForumThreadMessageThreadId,
+  normalizeTelegramForumThread,
+} from "./thread-context.ts";
 import type {
   PendingTelegramTurn,
   TelegramPromptContent,
@@ -408,7 +412,9 @@ export async function buildTelegramPromptTurn(
   return {
     kind: "prompt",
     chatId: firstMessage.chat.id,
-    messageThreadId: firstMessage.message_thread_id,
+    messageThreadId: getTelegramForumThreadMessageThreadId(
+      normalizeTelegramForumThread(firstMessage),
+    ),
     replyToMessageId: firstMessage.message_id,
     sourceMessageIds: collectTelegramMessageIds(options.messages),
     queueOrder: options.queueOrder,

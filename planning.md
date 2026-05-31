@@ -746,49 +746,105 @@ Those are later phases.
 
 ### Phase 2 — General UX and thread normalization
 
-Tasks:
+Status: implemented in code/tests/docs and loaded in the live runtime after `/reload`.
 
-- Display legacy `default` as `General`.
-- Keep internal name `default` for now.
-- Add a central thread normalization helper:
+Implemented behavior:
+
+- Legacy internal `default` remains unchanged in persisted/runtime state.
+- User-facing formatters and dashboard controls display `default` as:
 
   ```text
+  General
+  ```
+
+- Central thread normalization helper added in `lib/thread-context.ts`:
+
+  ```text
+  normalizeTelegramForumThread(message)
   normalizeForumThread(message)
   -> { kind: "general" }
   -> { kind: "topic", messageThreadId }
   ```
 
-- Initial behavior:
+- Initial normalization behavior:
 
   ```text
-  undefined message_thread_id -> General
+  missing/undefined message_thread_id -> General
   number -> non-General topic
   ```
 
-- Leave room for a future known `generalThreadId` if Telegram/Bot API behavior requires it.
+- Helper leaves room for a future known `generalThreadId`:
+
+  ```text
+  normalizeTelegramForumThread(message, { generalThreadId })
+  ```
+
+- Thread normalization is now used by ambient update scope, prompt-turn building, command targets, button callbacks, media/text grouping keys, debug metadata, and topic service lifecycle.
+
+- Docs updated in `README.md` and `docs/architecture.md`.
+
+Validation result:
+
+```text
+npm run typecheck: pass
+node --experimental-strip-types --test tests/thread-context.test.ts tests/tabs.test.ts tests/tab-manager.test.ts tests/updates.test.ts tests/turns.test.ts tests/commands.test.ts tests/media.test.ts tests/text-groups.test.ts: pass, 145 pass
+full npm test: pass, 694 pass
+npm run pack:check: pass
+git diff --check: pass
+```
 
 ### Phase 3 — Session ownership and close-running-worker correctness
 
-Tasks:
+Status: implemented in code/tests and loaded in the live runtime after `/reload`.
 
-- Enforce one session per open topic/workspace.
-- Detect session conflicts by canonical `sessionFile`, with `sessionId` fallback.
-- Refresh/check live runtime state where practical.
-- Add close-running-worker guard:
+Implemented behavior:
+
+- One session can be attached to only one open workspace at a time.
+- Session conflicts are detected by canonical `sessionFile`:
+
+  ```text
+  resolve(path), then realpath when the file exists
+  ```
+
+- `sessionId` is used as a fallback when both records/states do not have comparable session files.
+- Before `/resume` applies a worker session switch, the tab-manager refreshes other hot worker states and blocks if another open workspace already owns that session.
+- Before prompt dispatch into a topic/workspace, the tab-manager refreshes the selected worker and checks other hot workers so live state conflicts are caught even if persisted records are stale.
+- Closing a forum topic now performs a closing dispose path:
 
   ```text
   mark closing
-  dispose backend
   stop typing
-  ignore late events
+  clear stream/thinking/tool buffers and pending flush timers
+  unregister backend listener
+  dispose/abort backend
+  remove topic-bound record
+  ignore late worker events
   preserve session JSONL
   ```
 
-Tests:
+- The single-owner conflict message tells the user which workspace owns the session and suggests closing that workspace or branching/cloning.
 
-- Cannot resume same session in two open topics.
-- Closing topic while worker is running does not send late replies.
-- Session file remains after topic close/delete.
+Tests added/covered:
+
+- Cannot resume the same real session file into two open topics, including a symlink/canonical-path case.
+- Prompt dispatch is blocked when live worker state shows another open topic already owns the session.
+- Closing a running topic stops typing/disposes the worker and ignores late stream/final/tool events.
+- Closing/deleting a topic preserves the session JSONL.
+
+Validation result:
+
+```text
+npm run typecheck: pass
+node --experimental-strip-types --test tests/tab-manager.test.ts: pass, 48 pass
+PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts: pass, 708 pass
+live /reload validation: maxTabs 20 persisted after polling, 14 tab records, capacity remaining 6, duplicate open session keys 0
+```
+
+Related config persistence fix:
+
+- `telegram.json` persistence now merges runtime-mutated fields such as `lastUpdateId` with the latest on-disk config instead of overwriting unrelated disk edits from stale memory.
+- The in-memory config object is updated in place after persist so long-lived polling references do not later rewrite stale values.
+- This was live-validated by setting `concurrentTabs.maxTabs` to 20, reloading, waiting for polling persistence, and confirming it stayed 20.
 
 ### Phase 3.5 — Topic title → session-name sync
 

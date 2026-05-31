@@ -56,6 +56,49 @@ test("Telegram config helpers persist and reload config", async () => {
   );
 });
 
+test("Telegram config store preserves external file edits when persisting offsets", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-telegram-store-merge-"));
+  const configPath = join(agentDir, "telegram.json");
+  const initialConfig: TelegramConfig = {
+    botToken: "initial",
+    lastUpdateId: 1,
+    concurrentTabs: {
+      enabled: true,
+      maxTabs: 10,
+      inactiveNotify: true,
+      workerExtensions: [],
+    },
+  };
+  await writeTelegramConfig(agentDir, configPath, initialConfig);
+  const store = createTelegramConfigStore({ agentDir, configPath });
+  await store.load();
+  const pollingConfigRef = store.get();
+
+  await writeTelegramConfig(agentDir, configPath, {
+    ...initialConfig,
+    concurrentTabs: {
+      ...initialConfig.concurrentTabs,
+      maxTabs: 20,
+    },
+  });
+  pollingConfigRef.lastUpdateId = 2;
+  await store.persist();
+
+  assert.deepEqual(await readTelegramConfig(configPath), {
+    botToken: "initial",
+    lastUpdateId: 2,
+    concurrentTabs: {
+      enabled: true,
+      maxTabs: 20,
+      inactiveNotify: true,
+      workerExtensions: [],
+    },
+  });
+  assert.strictEqual(store.get(), pollingConfigRef);
+  assert.equal(store.getConcurrentTabsConfig().maxTabs, 20);
+  assert.equal(pollingConfigRef.concurrentTabs?.maxTabs, 20);
+});
+
 test("Telegram config store owns load, mutation, and persistence", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-telegram-store-"));
   const configPath = join(agentDir, "telegram.json");
@@ -111,6 +154,7 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
       closeOnTopicClose: true,
       deleteTopicOnClose: false,
       trustedChatIds: [],
+      defaultModel: undefined,
     },
   });
   store.setAllowedUserId(43);
@@ -159,6 +203,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       closeOnTopicClose: true,
       deleteTopicOnClose: false,
       trustedChatIds: [],
+      defaultModel: undefined,
     },
   });
   assert.deepEqual(
@@ -181,6 +226,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
         closeOnTopicClose: true,
         deleteTopicOnClose: false,
         trustedChatIds: [],
+        defaultModel: undefined,
       },
     },
   );
@@ -204,6 +250,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       closeOnTopicClose: false,
       deleteTopicOnClose: true,
       trustedChatIds: [-10042],
+      defaultModel: undefined,
     },
   );
   const getConfig = createTelegramConcurrentTabsConfigGetter({
@@ -220,6 +267,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
         closeOnTopicClose: true,
         deleteTopicOnClose: true,
         trustedChatIds: [-10042],
+        defaultModel: undefined,
       },
     }),
   });
@@ -236,6 +284,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       closeOnTopicClose: true,
       deleteTopicOnClose: true,
       trustedChatIds: [-10042],
+      defaultModel: undefined,
     },
   });
   assert.equal(isTelegramTrustedChat([], -10042), true);

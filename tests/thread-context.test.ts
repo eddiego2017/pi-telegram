@@ -9,8 +9,43 @@ import {
   createTelegramActiveTurnThreadContextGetter,
   createTelegramMessageThreadIdResolver,
   getAmbientTelegramThreadContext,
+  getTelegramForumThreadMessageThreadId,
+  getTelegramForumTopicMessageThreadId,
+  normalizeTelegramForumThread,
   runWithTelegramThreadContext,
 } from "../lib/thread-context.ts";
+
+test("Forum thread normalizer maps missing thread ids to General", () => {
+  assert.deepEqual(normalizeTelegramForumThread(undefined), { kind: "general" });
+  assert.deepEqual(normalizeTelegramForumThread({}), { kind: "general" });
+  assert.deepEqual(
+    normalizeTelegramForumThread({ message_thread_id: "77" }),
+    { kind: "general" },
+  );
+  assert.deepEqual(
+    normalizeTelegramForumThread({ message_thread_id: 77 }),
+    { kind: "topic", messageThreadId: 77 },
+  );
+  assert.deepEqual(
+    normalizeTelegramForumThread(
+      { message_thread_id: 1 },
+      { generalThreadId: 1 },
+    ),
+    { kind: "general", messageThreadId: 1 },
+  );
+  assert.equal(
+    getTelegramForumThreadMessageThreadId(
+      normalizeTelegramForumThread({ message_thread_id: 1 }, { generalThreadId: 1 }),
+    ),
+    1,
+  );
+  assert.equal(
+    getTelegramForumTopicMessageThreadId(
+      normalizeTelegramForumThread({ message_thread_id: 1 }, { generalThreadId: 1 }),
+    ),
+    undefined,
+  );
+});
 
 test("Thread context exposes the running scope and isolates async runs", async () => {
   assert.equal(getAmbientTelegramThreadContext(), undefined);

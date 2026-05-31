@@ -20,6 +20,7 @@ export interface TelegramConcurrentTabTopicBindingConfig {
   closeOnTopicClose?: boolean;
   deleteTopicOnClose?: boolean;
   trustedChatIds?: number[];
+  defaultModel?: string;
 }
 
 export interface TelegramNormalizedConcurrentTabTopicBindingConfig {
@@ -30,6 +31,7 @@ export interface TelegramNormalizedConcurrentTabTopicBindingConfig {
   closeOnTopicClose: boolean;
   deleteTopicOnClose: boolean;
   trustedChatIds: number[];
+  defaultModel?: string;
 }
 
 export interface TelegramConcurrentTabsConfig {
@@ -166,10 +168,53 @@ export async function writeTelegramConfig(
   await chmod(configPath, 0o600);
 }
 
+function cloneTelegramConfig(config: TelegramConfig): TelegramConfig {
+  return JSON.parse(JSON.stringify(config)) as TelegramConfig;
+}
+
+function isSameTelegramConfigValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function mergeTelegramConfigForPersist(
+  diskConfig: TelegramConfig,
+  memoryConfig: TelegramConfig,
+  memoryBaseConfig: TelegramConfig,
+): TelegramConfig {
+  const merged = cloneTelegramConfig(memoryConfig);
+  if (Object.keys(diskConfig).length === 0) return merged;
+  const keys = new Set<keyof TelegramConfig>([
+    ...(Object.keys(diskConfig) as Array<keyof TelegramConfig>),
+    ...(Object.keys(memoryBaseConfig) as Array<keyof TelegramConfig>),
+  ]);
+  for (const key of keys) {
+    if (key === "lastUpdateId") continue;
+    if (isSameTelegramConfigValue(memoryConfig[key], memoryBaseConfig[key])) {
+      if (key in diskConfig) {
+        (merged as Record<string, unknown>)[key] = diskConfig[key];
+      } else {
+        delete (merged as Record<string, unknown>)[key];
+      }
+    }
+  }
+  return merged;
+}
+
+function replaceTelegramConfigContents(
+  target: TelegramConfig,
+  source: TelegramConfig,
+): void {
+  for (const key of Object.keys(target) as Array<keyof TelegramConfig>) {
+    delete target[key];
+  }
+  Object.assign(target, cloneTelegramConfig(source));
+}
+
 export function createTelegramConfigStore(
   options: TelegramConfigStoreOptions = {},
 ): TelegramConfigStore {
   let config: TelegramConfig = options.initialConfig ?? {};
+  let lastLoadedConfig: TelegramConfig = cloneTelegramConfig(config);
   const agentDir = options.agentDir ?? getTelegramAgentDir();
   const configPath = options.configPath ?? getConfigPath();
   return {
@@ -197,9 +242,22 @@ export function createTelegramConfigStore(
     },
     load: async () => {
       config = await readTelegramConfig(configPath);
+      lastLoadedConfig = cloneTelegramConfig(config);
     },
     persist: async (nextConfig = config) => {
-      await writeTelegramConfig(agentDir, configPath, nextConfig);
+      const diskConfig = await readTelegramConfig(configPath);
+      const mergedConfig = mergeTelegramConfigForPersist(
+        diskConfig,
+        nextConfig,
+        lastLoadedConfig,
+      );
+      await writeTelegramConfig(agentDir, configPath, mergedConfig);
+      if (nextConfig === config) {
+        replaceTelegramConfigContents(config, mergedConfig);
+      } else {
+        config = cloneTelegramConfig(mergedConfig);
+      }
+      lastLoadedConfig = cloneTelegramConfig(mergedConfig);
     },
   };
 }
@@ -234,6 +292,7 @@ export function normalizeTelegramConcurrentTabTopicBindingConfig(
     closeOnTopicClose: config?.closeOnTopicClose ?? true,
     deleteTopicOnClose: config?.deleteTopicOnClose ?? false,
     trustedChatIds: normalizeTelegramTrustedChatIds(config?.trustedChatIds),
+    defaultModel: config?.defaultModel || undefined,
   };
 }
 

@@ -8,6 +8,10 @@ import { unlink } from "node:fs/promises";
 
 import { pairTelegramUserIfNeeded } from "./config.ts";
 import {
+  getTelegramForumThreadMessageThreadId,
+  normalizeTelegramForumThread,
+} from "./thread-context.ts";
+import {
   parseTelegramDumpTurnLimit,
   type TelegramDumpMenuRuntime,
 } from "./menu-dump.ts";
@@ -771,11 +775,12 @@ export interface TelegramCommandTargetRuntime<
 export function getTelegramCommandMessageTarget(
   message: TelegramCommandRuntimeMessage,
 ): TelegramCommandMessageTarget {
+  const messageThreadId = getTelegramForumThreadMessageThreadId(
+    normalizeTelegramForumThread(message),
+  );
   return {
     chatId: message.chat.id,
-    ...(message.message_thread_id !== undefined
-      ? { messageThreadId: message.message_thread_id }
-      : {}),
+    ...(messageThreadId !== undefined ? { messageThreadId } : {}),
     replyToMessageId: message.message_id,
   };
 }

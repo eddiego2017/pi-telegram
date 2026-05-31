@@ -29,6 +29,10 @@ import type {
 } from "./tab-manager.ts";
 import * as TextGroups from "./text-groups.ts";
 import * as Turns from "./turns.ts";
+import {
+  getTelegramForumThreadMessageThreadId,
+  normalizeTelegramForumThread,
+} from "./thread-context.ts";
 import type { TelegramUser } from "./updates.ts";
 import * as Updates from "./updates.ts";
 
@@ -428,7 +432,9 @@ export function createTelegramInboundRouteRuntime<
             deps.queueMutationRuntime.append(
               OutboundHandlers.createTelegramButtonPromptTurn({
                 chatId,
-                messageThreadId: buttonQuery.message?.message_thread_id,
+                messageThreadId: getTelegramForumThreadMessageThreadId(
+                  normalizeTelegramForumThread(buttonQuery.message),
+                ),
                 replyToMessageId: messageId,
                 queueOrder,
                 action,
@@ -816,7 +822,9 @@ export function createTelegramInboundRouteRuntime<
             turnId: getTelegramTurnId(message.chat?.id, message.message_id),
             chatId: message.chat?.id,
             messageId: message.message_id,
-            messageThreadId: message.message_thread_id,
+            messageThreadId: getTelegramForumThreadMessageThreadId(
+              normalizeTelegramForumThread(message),
+            ),
             fromUserId: message.from?.id,
           });
           return;
@@ -826,7 +834,9 @@ export function createTelegramInboundRouteRuntime<
             deps.debugLogger?.log("telegram.route.topic_service.untrusted_chat", {
               chatId: message.chat?.id,
               messageId: message.message_id,
-              messageThreadId: message.message_thread_id,
+              messageThreadId: getTelegramForumThreadMessageThreadId(
+                normalizeTelegramForumThread(message),
+              ),
               hasFrom: !!message.from,
             });
             return;
@@ -853,7 +863,9 @@ export function createTelegramInboundRouteRuntime<
           turnId: getTelegramTurnId(message.chat?.id, message.message_id),
           chatId: message.chat?.id,
           messageId: message.message_id,
-          messageThreadId: message.message_thread_id,
+          messageThreadId: getTelegramForumThreadMessageThreadId(
+            normalizeTelegramForumThread(message),
+          ),
           fromUserId: message.from?.id,
         });
         return;

@@ -10,7 +10,11 @@ import {
   type TelegramAuthorizationState,
   type TelegramUserPairingRuntimeDeps,
 } from "./config.ts";
-import { runWithTelegramThreadContext } from "./thread-context.ts";
+import {
+  getTelegramForumThreadMessageThreadId,
+  normalizeTelegramForumThread,
+  runWithTelegramThreadContext,
+} from "./thread-context.ts";
 
 // --- Extraction ---
 
@@ -600,7 +604,9 @@ function getTelegramPlanThreadContextScope<
     if (!msg || typeof msg.chat.id !== "number") return undefined;
     return {
       chatId: msg.chat.id,
-      messageThreadId: msg.message_thread_id,
+      messageThreadId: getTelegramForumThreadMessageThreadId(
+        normalizeTelegramForumThread(msg),
+      ),
     };
   };
   switch (plan.kind) {
