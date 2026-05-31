@@ -982,14 +982,15 @@ Implemented in the first cut:
 - Added optional `concurrentTabs.maxWorkers` separate from durable topic record count.
 - `maxWorkers` defaults to `maxTabs` when unset for backward compatibility.
 - Topic service create/edit/reopen still records workspace metadata up to `maxTabs` without starting a worker.
-- Starting a new hot worker checks current live backend count and fails fast with a capacity message when `maxWorkers` is reached.
+- Starting a new hot worker checks current live backend count.
+- If `maxWorkers` is reached, the tab manager refreshes candidate worker state, evicts the oldest idle hot worker, persists state, and then starts the requested worker.
+- Running/starting workers are never auto-evicted; if no idle worker is available, the new worker start fails fast with a capacity message.
+- Evicted workers are reloaded from their persisted session file on the next message.
 
 Remaining future performance/scalability work:
 
-- Evict only idle workers.
-- Never evict running workers automatically.
-- Persist latest runtime state before unloading a worker.
-- Reload worker from session file on next message.
+- Add richer dashboard visibility for hot/evicted worker state.
+- Tune eviction policy beyond oldest `lastUsedAt` if needed.
 
 ### Phase 7 — Internal `default -> general` migration
 

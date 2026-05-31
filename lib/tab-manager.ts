@@ -1722,14 +1722,51 @@ export function createTelegramTabManager<TContext>(
     [...runtimeTabs.values()].filter((runtime) => hasHotWorker(runtime)).length;
   const getConfiguredMaxWorkers = (): number =>
     deps.getConfig().maxWorkers ?? deps.getConfig().maxTabs;
-  const assertWorkerCapacity = (runtime: RuntimeTab): void => {
+  const getIdleWorkerEvictionCandidates = (
+    targetRuntime: RuntimeTab,
+  ): RuntimeTab[] =>
+    [...runtimeTabs.values()]
+      .filter(
+        (runtime) =>
+          runtime !== targetRuntime &&
+          hasHotWorker(runtime) &&
+          runtime.closing !== true,
+      )
+      .sort((a, b) => a.record.lastUsedAt - b.record.lastUsedAt);
+  const evictIdleWorkerForCapacity = async (
+    targetRuntime: RuntimeTab,
+    maxWorkers: number,
+  ): Promise<boolean> => {
+    const skipped = new Set<RuntimeTab>();
+    while (getHotWorkerCount() >= maxWorkers) {
+      const candidate = getIdleWorkerEvictionCandidates(targetRuntime).find(
+        (runtime) => !skipped.has(runtime),
+      );
+      if (!candidate) return false;
+      await refreshRuntimeState(candidate);
+      if (!hasHotWorker(candidate)) continue;
+      if (!canSwitchTelegramTabModel(candidate.record)) {
+        skipped.add(candidate);
+        continue;
+      }
+      deps.debugLogger?.log("telegram.tab.worker.evict", {
+        tab: candidate.record.name,
+        reason: "worker_capacity",
+        maxWorkers,
+      });
+      await disposeRuntimeBackend(candidate);
+      await persist();
+    }
+    return true;
+  };
+  const ensureWorkerCapacity = async (runtime: RuntimeTab): Promise<void> => {
     if (hasHotWorker(runtime)) return;
     const maxWorkers = getConfiguredMaxWorkers();
-    if (getHotWorkerCount() >= maxWorkers) {
-      throw new Error(
-        `Worker capacity reached (${maxWorkers}). Wait for another workspace to finish or restart it later.`,
-      );
-    }
+    if (getHotWorkerCount() < maxWorkers) return;
+    if (await evictIdleWorkerForCapacity(runtime, maxWorkers)) return;
+    throw new Error(
+      `Worker capacity reached (${maxWorkers}). Wait for another workspace to finish or restart it later.`,
+    );
   };
   const runInTabThreadContext = <T>(runtime: RuntimeTab, fn: () => T): T => {
     if (runtime.activeChatId === undefined) return fn();
@@ -2843,7 +2880,7 @@ export function createTelegramTabManager<TContext>(
     ctx: TContext,
   ): Promise<TelegramTabBackend> => {
     if (runtime.backend) return runtime.backend;
-    assertWorkerCapacity(runtime);
+    await ensureWorkerCapacity(runtime);
     runtime.record.status = "starting";
     runtime.record.lastError = undefined;
     const cwd = runtime.record.cwd || deps.getCwd(ctx);
