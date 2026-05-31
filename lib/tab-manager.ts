@@ -1829,6 +1829,15 @@ export function createTelegramTabManager<TContext>(
     errorMessage: string,
     turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
   ): string => `${formatRuntimeUserScopeTitle(runtime, turn)} failed: ${errorMessage}`;
+  const formatRuntimeFinishedNotice = (runtime: RuntimeTab, tabName: string): string => {
+    const forumNativeScope = getForumNativeRuntimeScope(runtime);
+    if (forumNativeScope) {
+      const title = forumNativeScope.charAt(0).toUpperCase() + forumNativeScope.slice(1);
+      return `${title} finished. Open this ${forumNativeScope} to view the latest reply.`;
+    }
+    const displayName = formatTelegramTabDisplayName(tabName);
+    return `Tab ${displayName} finished. Use /tab ${displayName} to view latest reply.`;
+  };
   const formatRuntimeBusyMessage = (runtime: RuntimeTab): string => {
     const forumNativeScope = getForumNativeRuntimeScope(runtime);
     if (forumNativeScope) {
@@ -2991,7 +3000,7 @@ export function createTelegramTabManager<TContext>(
             sendTabReply(
               chatId,
               replyToMessageId,
-              `Tab ${formatTelegramTabDisplayName(tabName)} finished. Use /tab ${formatTelegramTabDisplayName(tabName)} to view latest reply.`,
+              formatRuntimeFinishedNotice(runtime, tabName),
             ),
           );
         }

@@ -2304,6 +2304,72 @@ test("Tab manager uses current-topic wording for native prompt replies", async (
   await manager.dispose();
 });
 
+test("Tab manager uses workspace wording for native inactive completion notices", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-inactive-notice-"));
+  const replies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const config: TelegramNormalizedConcurrentTabsConfig = {
+    enabled: true,
+    maxTabs: 4,
+    inactiveNotify: true,
+    workerExtensions: [],
+    topicBinding: {
+      enabled: false,
+      native: false,
+      generalIsDefault: true,
+      autoCreate: true,
+      closeOnTopicClose: true,
+      deleteTopicOnClose: false,
+      trustedChatIds: [],
+    },
+  };
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => config,
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 30, "ctx");
+  await manager.dispatchPrompt(
+    {
+      chatId: 1,
+      replyToMessageId: 21,
+      content: [{ type: "text", text: "workspace prompt" }],
+    },
+    "ctx",
+  );
+  await manager.handleCommand("new B", 1, 31, "ctx");
+  config.topicBinding!.enabled = true;
+  config.topicBinding!.native = true;
+
+  const backend = backends.get("A");
+  assert.ok(backend);
+  backend.emit({ type: "agent_start" });
+  backend.emit({
+    type: "agent_end",
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "workspace answer" }] },
+    ],
+  });
+
+  assert.equal(
+    replies.at(-1),
+    "Workspace finished. Open this workspace to view the latest reply.",
+  );
+  assert.doesNotMatch(replies.at(-1) ?? "", /Tab|\/tab|tg-/);
+  await manager.dispose();
+});
+
 test("Tab manager uses current-topic wording for native worker lifecycle errors", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-worker-wording-"));
   const backends = new Map<string, FakeTabBackend>();
