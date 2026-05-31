@@ -2,10 +2,6 @@
 
 ## Open Work
 
-- [ ] Smoke-test Telegram forum orphan-proof cleanup in a real forum supergroup.
-  - Priority: Medium.
-  - Idea: Validate the Bot API error strings produced after a Telegram topic is manually deleted, confirm they create conservative orphan proofs, and verify `/topic cleanup` removes only proven local records while preserving session JSONL.
-  - Exit: A deleted topic produces a proven `/topic orphans` row with proof method/error evidence, `/topic cleanup` removes only that proven record, and cold/errored no-proof records remain untouched.
 - [ ] Explore a Phase 6+ topic/workspace internal rename after forum-native UX stays stable.
   - Priority: Low.
   - Idea: De-tab internal names gradually without breaking non-native/manual tab compatibility: `TelegramTabRecord -> TelegramTopicRecord / WorkspaceRecord`, `tab-manager -> topic-runtime-manager`, `RuntimeTab -> TopicRuntime / WorkspaceRuntime`, plus the later internal `default -> general` migration.

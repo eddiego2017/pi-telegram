@@ -923,7 +923,7 @@ git diff --check: pass
 
 ### Phase 4 — Level 1 orphan cleanup and `/topic` repair commands
 
-Status: implemented for clear Bot API missing-topic proofs.
+Status: implemented and live-validated for clear Bot API missing-topic proofs.
 
 Implemented:
 
@@ -935,9 +935,23 @@ Implemented:
 - `/topic cleanup` removes only records with recorded missing-topic proofs, disposes any worker, preserves session JSONL, clears the proof, and leaves merely suspected/cold records untouched.
 - `/topic` is intentionally not in the visible Bot Commands menu and does not create, switch, or close topics.
 
+Live validation after `8a96d38` reload:
+
+```text
+OpenClaw Telethon user API created/deleted a temporary topic in the trusted Pi forum.
+Bot API missing-topic delivery recorded a proof for topic 8419 with method sendMessage.
+/topic orphans showed Proven orphans: 1 for topic 8419.
+/topic cleanup replied: Cleaned 1 proven topic orphan. Session files are kept.
+telegram-tabs.json no longer contained topic 8419 after cleanup.
+The preserved session JSONL still existed on disk.
+/topic orphans then showed Proven orphans: 0.
+Cold/no-proof deleted test records remained suspected-only and were not removed.
+Temporary Telegram test topics were deleted after the smoke test.
+```
+
 Remaining possible polish:
 
-- Expand the conservative missing-topic matcher only after live Bot API evidence.
+- Expand the conservative missing-topic matcher only after more live Bot API evidence.
 - Surface proof timestamps/last error detail more compactly if needed.
 
 No MTProto reconciler in this phase.
@@ -1169,12 +1183,13 @@ npm run pack:check
 git diff --check
 ```
 
-Latest recorded results after Phase 5 final validation:
+Latest recorded results after Phase 4 live orphan-cleanup validation and Phase 5 final validation:
 
 ```text
 npm run typecheck: pass
 PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test tests/commands.test.ts tests/tab-manager.test.ts tests/config.test.ts tests/routing.test.ts tests/invariants.test.ts: pass, 132 pass
 git diff --check: pass
+live orphan cleanup smoke: pass; proven topic 8419 removed, session JSONL preserved, no-proof records untouched
 ```
 
 Previous full-suite result after Phase 6 worker-pool initial cut:
