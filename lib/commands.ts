@@ -204,16 +204,26 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
 
 export const TELEGRAM_BOT_COMMANDS = TELEGRAM_BUILTIN_BOT_COMMANDS;
 
+export function getTelegramBotCommands(options: {
+  forumNativeMode?: boolean;
+} = {}): readonly TelegramBotCommandDefinition[] {
+  if (!options.forumNativeMode) return TELEGRAM_BOT_COMMANDS;
+  return TELEGRAM_BOT_COMMANDS.filter((command) => command.command !== "tab");
+}
+
 export interface TelegramBotCommandRegistrationDeps {
   setMyCommands: (
     commands: readonly TelegramBotCommandDefinition[],
   ) => Promise<unknown>;
+  isForumNativeMode?: () => boolean;
 }
 
 export async function registerTelegramBotCommands(
   deps: TelegramBotCommandRegistrationDeps,
 ): Promise<void> {
-  await deps.setMyCommands(TELEGRAM_BOT_COMMANDS);
+  await deps.setMyCommands(getTelegramBotCommands({
+    forumNativeMode: deps.isForumNativeMode?.() ?? false,
+  }));
 }
 
 export function createTelegramBotCommandRegistrar(
@@ -1074,6 +1084,7 @@ export interface TelegramCommandRuntimeDeps<
   getAllowedUserId: () => number | undefined;
   setAllowedUserId: (userId: number) => void;
   registerBotCommands: () => Promise<void>;
+  isForumNativeMode?: () => boolean;
   getPromptTemplateCommands?: () => readonly TelegramPromptTemplateMenuCommand[];
   persistConfig: () => Promise<void>;
   sendTextReply: (message: TMessage, text: string) => Promise<void>;
@@ -1100,6 +1111,26 @@ export const TELEGRAM_APP_MENU_INTRO_HTML = [
   `${formatTelegramCommandEmojiPrefix("stop")}/stop — Abort π & Clear queue`,
 ].join("\n");
 
+export const TELEGRAM_FORUM_NATIVE_APP_MENU_INTRO_HTML = [
+  "<b>π Telegram</b>",
+  "",
+  `${formatTelegramCommandEmojiPrefix("start")}/start — Open menu / Pair bridge`,
+  `${formatTelegramCommandEmojiPrefix("compact")}/compact — Compact current topic`,
+  `${formatTelegramCommandEmojiPrefix("reload")}/reload — Reload π runtime`,
+  `${formatTelegramCommandEmojiPrefix("new")}/new — Start a new session in this topic`,
+  `${formatTelegramCommandEmojiPrefix("clone")}/clone — Clone current session at current position`,
+  `${formatTelegramCommandEmojiPrefix("resume")}/resume — Resume/manage previous sessions`,
+  `${formatTelegramCommandEmojiPrefix("session")}/session — Show current topic session`,
+  `${formatTelegramCommandEmojiPrefix("tree")}/tree — Rewind current session tree`,
+  `${formatTelegramCommandEmojiPrefix("dump")}/dump [N] — Export visible transcript`,
+  `${formatTelegramCommandEmojiPrefix("name")}/name — Set current session name`,
+  `${formatTelegramCommandEmojiPrefix("llm")}/llm — List available LLM models`,
+  `${formatTelegramCommandEmojiPrefix("next")}/next — Force next turn`,
+  `${formatTelegramCommandEmojiPrefix("continue")}/continue — Queue continue prompt`,
+  `${formatTelegramCommandEmojiPrefix("abort")}/abort — Abort current topic`,
+  `${formatTelegramCommandEmojiPrefix("stop")}/stop — Abort current topic & Clear queue`,
+].join("\n");
+
 function escapeTelegramCommandMenuHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -1119,22 +1150,28 @@ function buildTelegramPromptTemplateMenuHtml(
 export function buildTelegramAppMenuHtml(
   statusHtml: string,
   promptTemplates: readonly TelegramPromptTemplateMenuCommand[] = [],
+  options: { forumNativeMode?: boolean } = {},
 ): string {
   const promptTemplateHtml =
     buildTelegramPromptTemplateMenuHtml(promptTemplates);
+  const introHtml = options.forumNativeMode
+    ? TELEGRAM_FORUM_NATIVE_APP_MENU_INTRO_HTML
+    : TELEGRAM_APP_MENU_INTRO_HTML;
   if (!promptTemplateHtml)
-    return `${TELEGRAM_APP_MENU_INTRO_HTML}\n\n${statusHtml}`;
-  return `${TELEGRAM_APP_MENU_INTRO_HTML}\n\n${promptTemplateHtml}\n\n${statusHtml}`;
+    return `${introHtml}\n\n${statusHtml}`;
+  return `${introHtml}\n\n${promptTemplateHtml}\n\n${statusHtml}`;
 }
 
 export function createTelegramAppMenuHtmlBuilder<TContext>(deps: {
   buildStatusHtml: (ctx: TContext) => string;
   getPromptTemplateCommands?: () => readonly TelegramPromptTemplateMenuCommand[];
+  isForumNativeMode?: () => boolean;
 }): (ctx: TContext) => string {
   return function buildTelegramAppMenuHtmlForContext(ctx) {
     return buildTelegramAppMenuHtml(
       deps.buildStatusHtml(ctx),
       deps.getPromptTemplateCommands?.(),
+      { forumNativeMode: deps.isForumNativeMode?.() ?? false },
     );
   };
 }
@@ -1785,6 +1822,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     setAllowedUserId: deps.setAllowedUserId,
     registerBotCommands: createTelegramBotCommandRegistrar({
       setMyCommands: deps.setMyCommands,
+      isForumNativeMode: deps.isForumNativeMode,
     }),
     persistConfig: deps.persistConfig,
     sendTextReply: commandTargetRuntime.sendTextReply,

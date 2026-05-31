@@ -950,11 +950,17 @@ Goal:
 Telegram forum-native UX should no longer expose independent tabs.
 ```
 
-Tasks:
+Status: initial user-facing command/help cleanup implemented; broad internal refactor intentionally deferred.
 
-- Hide `/tab` from bot command list in native mode if safe.
-- Keep `/tab` only as legacy/operator/debug fallback, or remove later.
-- Replace user-facing wording:
+Implemented:
+
+- In `topicBinding.native` mode, `/tab` is hidden from the visible Bot Commands menu registered by `/start`.
+- In `topicBinding.native` mode, `/start` help omits `/tab` and uses current-topic wording for scoped controls such as `/compact`, `/new`, `/session`, `/abort`, and `/stop`.
+- `/tab` remains routable as a hidden operator/debug dashboard; this preserves diagnostics and avoids removing emergency tooling.
+
+Remaining tasks:
+
+- Continue replacing user-facing wording where it appears in normal topic flows:
 
   ```text
   tab -> topic/workspace
@@ -962,7 +968,7 @@ Tasks:
   active tab -> current topic
   ```
 
-- Continue internal refactor gradually:
+- Continue internal refactor gradually, only after behavior stays stable:
 
   ```text
   TelegramTabRecord -> TelegramTopicRecord / WorkspaceRecord
@@ -970,7 +976,7 @@ Tasks:
   RuntimeTab -> TopicRuntime / WorkspaceRuntime
   ```
 
-Do not start this refactor until behavior is stable.
+Do not start broad internal refactor yet.
 
 ### Phase 6 — Worker pool model
 

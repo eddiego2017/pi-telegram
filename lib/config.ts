@@ -335,6 +335,24 @@ export function createTelegramConcurrentTabsConfigGetter(
   return () => configStore.getConcurrentTabsConfig();
 }
 
+export function isTelegramForumNativeModeEnabled(
+  config: Pick<TelegramNormalizedConcurrentTabsConfig, "enabled" | "topicBinding">,
+): boolean {
+  return (
+    config.enabled === true &&
+    config.topicBinding?.enabled === true &&
+    config.topicBinding.native === true
+  );
+}
+
+export function createTelegramForumNativeModeChecker(
+  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
+): () => boolean {
+  return () => isTelegramForumNativeModeEnabled(
+    configStore.getConcurrentTabsConfig(),
+  );
+}
+
 export function createTelegramDebugConfigGetter(
   configStore: Pick<TelegramConfigStore, "get">,
 ): () => TelegramDebugConfig | undefined {

@@ -70,6 +70,8 @@ export default function (pi: Pi.ExtensionAPI) {
     Config.createTelegramProactivePushChecker(configStore);
   const getConcurrentTabsConfig =
     Config.createTelegramConcurrentTabsConfigGetter(configStore);
+  const isForumNativeMode =
+    Config.createTelegramForumNativeModeChecker(configStore);
   const setProactivePushEnabled =
     Config.createTelegramProactivePushSetter(configStore);
   const lockRuntime = Locks.createTelegramLockRuntime<Pi.ExtensionContext>();
@@ -448,6 +450,7 @@ export default function (pi: Pi.ExtensionAPI) {
     Commands.createTelegramAppMenuHtmlBuilder<Pi.ExtensionContext>({
       buildStatusHtml,
       getPromptTemplateCommands,
+      isForumNativeMode,
     });
   const getTabAwareThinkingLevel = TabManager.createTelegramTabAwareThinkingLevelGetter({
     tabManager,

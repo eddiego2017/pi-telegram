@@ -7,6 +7,7 @@
 import { readFile } from "node:fs/promises";
 import * as Commands from "./commands.ts";
 import {
+  isTelegramForumNativeModeEnabled,
   isTelegramTrustedChat,
   type TelegramConfigStore,
 } from "./config.ts";
@@ -636,6 +637,9 @@ export function createTelegramInboundRouteRuntime<
     getAllowedUserId: deps.configStore.getAllowedUserId,
     setAllowedUserId: deps.configStore.setAllowedUserId,
     setMyCommands: deps.setMyCommands,
+    isForumNativeMode: () => isTelegramForumNativeModeEnabled(
+      deps.configStore.getConcurrentTabsConfig(),
+    ),
     getPromptTemplateCommands,
     persistConfig: deps.configStore.persist,
     sendTextReply: deps.sendTextReply,

@@ -14,6 +14,7 @@ import {
   createTelegramAppMenuHtmlBuilder,
   createTelegramBotCommandRegistrar,
   createTelegramCommandControlEnqueueAdapter,
+  getTelegramBotCommands,
   createTelegramCommandControlQueueRuntime,
   createTelegramCommandHandler,
   createTelegramCommandHandlerTargetRuntime,
@@ -42,6 +43,7 @@ import {
   TELEGRAM_BOT_COMMANDS,
   TELEGRAM_COMMAND_ACTIONS,
   TELEGRAM_COMMAND_EMOJI,
+  TELEGRAM_FORUM_NATIVE_APP_MENU_INTRO_HTML,
   TELEGRAM_RESERVED_COMMAND_NAMES,
 } from "../lib/commands.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "../lib/pi.ts";
@@ -137,6 +139,10 @@ test("Command helpers expose Telegram bot command definitions", () => {
     },
   ];
   assert.deepEqual(TELEGRAM_BOT_COMMANDS, expectedBuiltins);
+  assert.deepEqual(
+    getTelegramBotCommands({ forumNativeMode: true }),
+    expectedBuiltins.filter((command) => command.command !== "tab"),
+  );
 });
 
 test("Command helpers register Telegram bot commands through deps", async () => {
@@ -151,7 +157,17 @@ test("Command helpers register Telegram bot commands through deps", async () => 
       calls.push(commands);
     },
   })();
-  assert.deepEqual(calls, [TELEGRAM_BOT_COMMANDS, TELEGRAM_BOT_COMMANDS]);
+  await registerTelegramBotCommands({
+    isForumNativeMode: () => true,
+    setMyCommands: async (commands) => {
+      calls.push(commands);
+    },
+  });
+  assert.deepEqual(calls, [
+    TELEGRAM_BOT_COMMANDS,
+    TELEGRAM_BOT_COMMANDS,
+    getTelegramBotCommands({ forumNativeMode: true }),
+  ]);
 });
 
 test("Command helpers register pi setup, status, and reload commands", async () => {
@@ -1117,6 +1133,19 @@ test("Command helpers build the unified app menu from commands and status", () =
   assert.equal(
     buildAppMenuHtml("ctx"),
     `${TELEGRAM_APP_MENU_INTRO_HTML}\n\n<b>Status ctx</b>`,
+  );
+  assert.equal(
+    buildTelegramAppMenuHtml("<b>Status:</b> <code>idle</code>", [], {
+      forumNativeMode: true,
+    }),
+    `${TELEGRAM_FORUM_NATIVE_APP_MENU_INTRO_HTML}\n\n<b>Status:</b> <code>idle</code>`,
+  );
+  assert.equal(
+    createTelegramAppMenuHtmlBuilder({
+      buildStatusHtml: (ctx: string) => `<b>Status ${ctx}</b>`,
+      isForumNativeMode: () => true,
+    })("ctx"),
+    `${TELEGRAM_FORUM_NATIVE_APP_MENU_INTRO_HTML}\n\n<b>Status ctx</b>`,
   );
 });
 

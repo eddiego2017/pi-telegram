@@ -13,8 +13,10 @@ import type { TelegramConfig } from "../lib/config.ts";
 import {
   createTelegramConfigStore,
   createTelegramConcurrentTabsConfigGetter,
+  createTelegramForumNativeModeChecker,
   createTelegramUserPairingRuntime,
   getTelegramAuthorizationState,
+  isTelegramForumNativeModeEnabled,
   isTelegramTrustedChat,
   normalizeTelegramConcurrentTabsConfig,
   pairTelegramUserIfNeeded,
@@ -300,6 +302,17 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       defaultModel: undefined,
     },
   });
+  assert.equal(
+    isTelegramForumNativeModeEnabled(normalizeTelegramConcurrentTabsConfig()),
+    false,
+  );
+  assert.equal(isTelegramForumNativeModeEnabled(getConfig()), true);
+  assert.equal(
+    createTelegramForumNativeModeChecker({
+      getConcurrentTabsConfig: getConfig,
+    })(),
+    true,
+  );
   assert.equal(isTelegramTrustedChat([], -10042), true);
   assert.equal(isTelegramTrustedChat(undefined, -10042), true);
   assert.equal(isTelegramTrustedChat([-10042], -10042), true);
