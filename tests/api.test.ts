@@ -548,6 +548,162 @@ test("Telegram bridge API runtime records structured failures", async () => {
   ]);
 });
 
+test("Telegram bridge API runtime shares 429 backoff and drops chat actions", async () => {
+  const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+  const debugEvents: string[] = [];
+  const runtime = createTelegramBridgeApiRuntime({
+    tempDir: "/tmp/telegram",
+    maxFileSizeBytes: 123,
+    tempFileMaxAgeMs: 60_000,
+    recordRuntimeEvent: () => {},
+    debugLogger: {
+      enabled: () => true,
+      includeBodies: () => false,
+      log: (event) => {
+        debugEvents.push(event);
+      },
+    },
+    client: createApiRuntimeClient({
+      call: async <TResponse>(
+        method: string,
+        body: Record<string, unknown>,
+      ) => {
+        calls.push({ method, body });
+        if (method === "sendMessage") {
+          const error = new Error("flood wait") as Error & {
+            retryAfterSeconds?: number;
+          };
+          error.retryAfterSeconds = 44;
+          throw error;
+        }
+        return true as TResponse;
+      },
+    }),
+  });
+
+  await assert.rejects(
+    () => runtime.sendMessage({ chat_id: -10042, text: "limit me" }),
+    { message: "flood wait" },
+  );
+  assert.equal(await runtime.sendChatAction(-10042, "typing"), true);
+  assert.deepEqual(calls, [
+    { method: "sendMessage", body: { chat_id: -10042, text: "limit me" } },
+  ]);
+  assert.ok(debugEvents.includes("telegram.delivery.backoff.set"));
+  assert.ok(debugEvents.includes("telegram.delivery.drop_stale"));
+});
+
+test("Telegram bridge API runtime drops preview delivery during backoff", async () => {
+  const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+  const debugEvents: string[] = [];
+  const runtime = createTelegramBridgeApiRuntime({
+    tempDir: "/tmp/telegram",
+    maxFileSizeBytes: 123,
+    tempFileMaxAgeMs: 60_000,
+    recordRuntimeEvent: () => {},
+    debugLogger: {
+      enabled: () => true,
+      includeBodies: () => false,
+      log: (event) => {
+        debugEvents.push(event);
+      },
+    },
+    client: createApiRuntimeClient({
+      call: async <TResponse>(
+        method: string,
+        body: Record<string, unknown>,
+      ) => {
+        calls.push({ method, body });
+        if (method === "sendMessage" && body.text === "normal") {
+          const error = new Error("flood wait") as Error & {
+            retryAfterSeconds?: number;
+          };
+          error.retryAfterSeconds = 44;
+          throw error;
+        }
+        if (method === "sendMessage") return { message_id: 99 } as TResponse;
+        return true as TResponse;
+      },
+    }),
+  });
+
+  await assert.rejects(
+    () => runtime.sendMessage({ chat_id: -10042, text: "normal" }),
+    { message: "flood wait" },
+  );
+  assert.equal(
+    await runtime.sendMessage({
+      chat_id: -10042,
+      text: "\u{1F4A1} Thinking\npreview",
+    }),
+    undefined,
+  );
+  assert.equal(
+    await runtime.editMessageText({
+      chat_id: -10042,
+      message_id: 10,
+      text: "\u{1F4A1} Thinking\npreview update",
+    }),
+    "unchanged",
+  );
+  assert.deepEqual(calls, [
+    { method: "sendMessage", body: { chat_id: -10042, text: "normal" } },
+  ]);
+  assert.ok(debugEvents.includes("telegram.delivery.backoff.set"));
+  assert.equal(
+    debugEvents.filter((event) => event === "telegram.delivery.drop_stale").length,
+    2,
+  );
+});
+
+test("Telegram bridge API runtime does not let chat actions throttle messages", async () => {
+  const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+  const debugEntries: Array<{
+    event: string;
+    details?: Record<string, unknown>;
+  }> = [];
+  const runtime = createTelegramBridgeApiRuntime({
+    tempDir: "/tmp/telegram",
+    maxFileSizeBytes: 123,
+    tempFileMaxAgeMs: 60_000,
+    recordRuntimeEvent: () => {},
+    debugLogger: {
+      enabled: () => true,
+      includeBodies: () => false,
+      log: (event, details) => {
+        debugEntries.push({ event, details });
+      },
+    },
+    client: createApiRuntimeClient({
+      call: async <TResponse>(
+        method: string,
+        body: Record<string, unknown>,
+      ) => {
+        calls.push({ method, body });
+        if (method === "sendMessage") return { message_id: 99 } as TResponse;
+        return true as TResponse;
+      },
+    }),
+  });
+
+  assert.equal(await runtime.sendChatAction(-10042, "typing"), true);
+  assert.deepEqual(await runtime.sendMessage({ chat_id: -10042, text: "ack" }), {
+    message_id: 99,
+  });
+  assert.deepEqual(calls.map((call) => call.method), [
+    "sendChatAction",
+    "sendMessage",
+  ]);
+  assert.equal(
+    debugEntries.some(
+      (entry) =>
+        entry.event === "telegram.delivery.wait" &&
+        entry.details?.method === "sendMessage",
+    ),
+    false,
+  );
+});
+
 test("Telegram bridge API runtime exposes typed Bot API helpers", async () => {
   const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
   const runtime = createTelegramBridgeApiRuntime({

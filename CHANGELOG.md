@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Telegram API]` Added shared outbound delivery limiting/backoff for Bot API sends/edits/uploads/deletes. The runtime now serializes global and per-group delivery, applies Telegram `retry_after` backoff across outbound calls, drops stale typing actions and stream preview edits/sends while limited, and exposes env knobs for global/group rates plus droppable chat-action/preview behavior.
 - `[Forum Topics]` Enforced one open workspace per session for topic-bound tabs. `/resume` now canonicalizes the target session path (using `realpath` when the file exists), refreshes hot worker state, falls back to `sessionId` when needed, and blocks attempts to attach a session already owned by another open workspace. Prompt dispatch also checks live worker state before sending work so stale persisted records cannot silently double-attach a topic.
 - `[Forum Topics]` Hardened topic close while a worker is running. Closing a topic now marks the runtime closing, stops typing, clears stream/thinking/tool buffers and pending flush timers, unregisters the backend listener, disposes the worker, removes the topic record, ignores late child events, and preserves the session JSONL.
 - `[Config]` Made `telegram.json` persistence merge runtime updates with the latest on-disk config and update the live config object in place, so polling `lastUpdateId` writes no longer clobber operator changes such as `concurrentTabs.maxTabs`.

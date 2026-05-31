@@ -46,6 +46,34 @@ const TELEGRAM_INBOUND_FILE_MAX_BYTES = getTelegramInboundFileByteLimitFromEnv(
   TELEGRAM_FILE_MAX_BYTES,
 );
 
+function getTelegramPositiveNumberFromEnv(
+  env: NodeJS.ProcessEnv,
+  names: string[],
+  defaultValue = 0,
+): number {
+  for (const name of names) {
+    const rawValue = env[name]?.trim();
+    if (!rawValue) continue;
+    const parsed = Number(rawValue);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return defaultValue;
+}
+
+function getTelegramBooleanFromEnv(
+  env: NodeJS.ProcessEnv,
+  names: string[],
+  defaultValue: boolean,
+): boolean {
+  for (const name of names) {
+    const rawValue = env[name]?.trim().toLowerCase();
+    if (!rawValue) continue;
+    if (["1", "true", "yes", "on"].includes(rawValue)) return true;
+    if (["0", "false", "no", "off"].includes(rawValue)) return false;
+  }
+  return defaultValue;
+}
+
 export interface TelegramUser {
   id: number;
   is_bot: boolean;
@@ -435,6 +463,80 @@ function isTelegramOutboundApiMethod(method: string): boolean {
   );
 }
 
+function getTelegramOutboundChatId(
+  body: Record<string, unknown>,
+): number | undefined {
+  const chatId = body.chat_id;
+  if (typeof chatId === "number" && Number.isFinite(chatId)) return chatId;
+  if (typeof chatId === "string") {
+    const parsed = Number(chatId);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function getTelegramOutboundMessageThreadId(
+  body: Record<string, unknown>,
+): number | undefined {
+  const threadId = body.message_thread_id;
+  if (typeof threadId === "number" && Number.isFinite(threadId)) return threadId;
+  if (typeof threadId === "string") {
+    const parsed = Number(threadId);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function getTelegramRateMinIntervalMs(rate: number, periodMs: number): number {
+  return rate > 0 ? Math.ceil(periodMs / rate) : 0;
+}
+
+interface TelegramDeliveryLimiterState {
+  notBefore: number;
+  lastSendAt: number;
+  tail: Promise<void>;
+}
+
+function createTelegramDeliveryLimiterState(): TelegramDeliveryLimiterState {
+  return {
+    notBefore: 0,
+    lastSendAt: 0,
+    tail: Promise.resolve(),
+  };
+}
+
+function isTelegramPreviewDelivery(
+  method: string,
+  body: Record<string, unknown>,
+): boolean {
+  if (method !== "sendMessage" && method !== "editMessageText") return false;
+  const text = body.text;
+  if (typeof text !== "string") return false;
+  return text.startsWith("\u{1F4A1} Thinking") || text.startsWith("\u{1F527} ");
+}
+
+function isTelegramDroppableDelivery(
+  method: string,
+  body: Record<string, unknown>,
+  options: {
+    dropChatActionWhenLimited: boolean;
+    dropPreviewsWhenLimited: boolean;
+  },
+): boolean {
+  if (method === "sendChatAction") {
+    return options.dropChatActionWhenLimited;
+  }
+  return options.dropPreviewsWhenLimited && isTelegramPreviewDelivery(method, body);
+}
+
+function getDroppedTelegramDeliveryResult<TResponse>(
+  method: string,
+): TResponse {
+  if (method === "sendChatAction") return true as TResponse;
+  if (method === "editMessageText") return "unchanged" as TResponse;
+  return undefined as TResponse;
+}
+
 function assertTelegramFileSizeWithinLimit(
   size: number | undefined,
   maxFileSizeBytes: number | undefined,
@@ -788,7 +890,40 @@ export function createDefaultTelegramBridgeApiRuntime(deps: {
 export function createTelegramBridgeApiRuntime(
   deps: TelegramBridgeApiRuntimeDeps,
 ): TelegramBridgeApiRuntime {
-  let outboundBlockedUntil = 0;
+  const globalDeliveryLimiter = createTelegramDeliveryLimiterState();
+  const chatDeliveryLimiters = new Map<number, TelegramDeliveryLimiterState>();
+  const deliveryGroupMessagesPerMinute = getTelegramPositiveNumberFromEnv(
+    process.env,
+    [
+      "PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE",
+      "TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE",
+    ],
+  );
+  const deliveryGlobalMessagesPerSecond = getTelegramPositiveNumberFromEnv(
+    process.env,
+    [
+      "PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND",
+      "TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND",
+    ],
+  );
+  const dropChatActionWhenLimited = getTelegramBooleanFromEnv(
+    process.env,
+    ["PI_TELEGRAM_DROP_CHAT_ACTION_WHEN_LIMITED"],
+    true,
+  );
+  const dropPreviewsWhenLimited = getTelegramBooleanFromEnv(
+    process.env,
+    ["PI_TELEGRAM_DROP_PREVIEWS_WHEN_LIMITED"],
+    true,
+  );
+  const globalMinIntervalMs = getTelegramRateMinIntervalMs(
+    deliveryGlobalMessagesPerSecond,
+    1000,
+  );
+  const groupMinIntervalMs = getTelegramRateMinIntervalMs(
+    deliveryGroupMessagesPerMinute,
+    60_000,
+  );
   const resolveDefaultThreadId =
     deps.getDefaultMessageThreadId ?? ((_chatId: number) => undefined);
   const withDefaultThreadId = <T extends Record<string, unknown>>(body: T): T => {
@@ -799,57 +934,204 @@ export function createTelegramBridgeApiRuntime(
     if (threadId === undefined) return body;
     return { ...body, message_thread_id: threadId };
   };
+  const getChatDeliveryLimiter = (
+    chatId: number,
+  ): TelegramDeliveryLimiterState => {
+    let limiter = chatDeliveryLimiters.get(chatId);
+    if (!limiter) {
+      limiter = createTelegramDeliveryLimiterState();
+      chatDeliveryLimiters.set(chatId, limiter);
+    }
+    return limiter;
+  };
+  const getChatMinIntervalMs = (chatId: number | undefined): number =>
+    chatId !== undefined && chatId < 0 ? groupMinIntervalMs : 0;
+  const getDeliveryWaitMs = (
+    chatId: number | undefined,
+    chatLimiter: TelegramDeliveryLimiterState | undefined,
+  ): number => {
+    const nowMs = Date.now();
+    let waitUntil = globalDeliveryLimiter.notBefore;
+    if (globalMinIntervalMs > 0) {
+      waitUntil = Math.max(
+        waitUntil,
+        globalDeliveryLimiter.lastSendAt + globalMinIntervalMs,
+      );
+    }
+    if (chatLimiter) {
+      waitUntil = Math.max(waitUntil, chatLimiter.notBefore);
+      const chatMinIntervalMs = getChatMinIntervalMs(chatId);
+      if (chatMinIntervalMs > 0) {
+        waitUntil = Math.max(waitUntil, chatLimiter.lastSendAt + chatMinIntervalMs);
+      }
+    }
+    return Math.max(0, waitUntil - nowMs);
+  };
+  const setDeliveryBackoff = (
+    method: string,
+    body: Record<string, unknown>,
+    retryAfterSeconds: number,
+  ): void => {
+    const chatId = getTelegramOutboundChatId(body);
+    const messageThreadId = getTelegramOutboundMessageThreadId(body);
+    const notBefore = Date.now() + retryAfterSeconds * 1000;
+    globalDeliveryLimiter.notBefore = Math.max(
+      globalDeliveryLimiter.notBefore,
+      notBefore,
+    );
+    if (chatId !== undefined) {
+      const chatLimiter = getChatDeliveryLimiter(chatId);
+      chatLimiter.notBefore = Math.max(chatLimiter.notBefore, notBefore);
+    }
+    deps.debugLogger?.log("telegram.api.rate_limited", {
+      method,
+      chatId,
+      messageThreadId,
+      waitSeconds: retryAfterSeconds,
+    });
+    deps.debugLogger?.log("telegram.delivery.backoff.set", {
+      method,
+      chatId,
+      messageThreadId,
+      retryAfterSeconds,
+      notBefore,
+    });
+  };
+  const updateDeliveryBackoffFromError = (
+    method: string,
+    body: Record<string, unknown>,
+    error: unknown,
+  ): void => {
+    const retryAfterSeconds = getTelegramApiRetryAfterSeconds(error);
+    if (
+      isTelegramOutboundApiMethod(method) &&
+      retryAfterSeconds !== undefined &&
+      retryAfterSeconds > 0
+    ) {
+      setDeliveryBackoff(method, body, retryAfterSeconds);
+    }
+  };
+  const runQueuedDelivery = async <TResponse>(
+    method: string,
+    body: Record<string, unknown>,
+    run: () => Promise<TResponse>,
+  ): Promise<TResponse> => {
+    if (!isTelegramOutboundApiMethod(method)) return run();
+    const chatId = getTelegramOutboundChatId(body);
+    const messageThreadId = getTelegramOutboundMessageThreadId(body);
+    const chatLimiter =
+      chatId === undefined ? undefined : getChatDeliveryLimiter(chatId);
+    const sendNow = async (): Promise<TResponse> => {
+      deps.debugLogger?.log("telegram.delivery.send.start", {
+        method,
+        chatId,
+        messageThreadId,
+      });
+      const result = await run();
+      if (method !== "sendChatAction") {
+        const sentAt = Date.now();
+        globalDeliveryLimiter.lastSendAt = sentAt;
+        if (chatLimiter) chatLimiter.lastSendAt = sentAt;
+      }
+      deps.debugLogger?.log("telegram.delivery.send.result", {
+        method,
+        chatId,
+        messageThreadId,
+      });
+      return result;
+    };
+    if (globalMinIntervalMs === 0 && groupMinIntervalMs === 0) {
+      const waitMs = getDeliveryWaitMs(chatId, chatLimiter);
+      if (waitMs <= 0) return sendNow();
+      if (
+        isTelegramDroppableDelivery(method, body, {
+          dropChatActionWhenLimited,
+          dropPreviewsWhenLimited,
+        })
+      ) {
+        deps.debugLogger?.log("telegram.delivery.drop_stale", {
+          method,
+          chatId,
+          messageThreadId,
+          waitMs,
+          dropReason: "limited-droppable",
+        });
+        return getDroppedTelegramDeliveryResult<TResponse>(method);
+      }
+    }
+    deps.debugLogger?.log("telegram.delivery.enqueue", {
+      method,
+      chatId,
+      messageThreadId,
+    });
+    const previousGlobal = globalDeliveryLimiter.tail.catch(() => undefined);
+    const previousChat = chatLimiter?.tail.catch(() => undefined);
+    const task = Promise.all(
+      previousChat ? [previousGlobal, previousChat] : [previousGlobal],
+    ).then(async () => {
+      const waitMs = getDeliveryWaitMs(chatId, chatLimiter);
+      if (
+        waitMs > 0 &&
+        isTelegramDroppableDelivery(method, body, {
+          dropChatActionWhenLimited,
+          dropPreviewsWhenLimited,
+        })
+      ) {
+        deps.debugLogger?.log("telegram.delivery.drop_stale", {
+          method,
+          chatId,
+          messageThreadId,
+          waitMs,
+          dropReason: "limited-droppable",
+        });
+        return getDroppedTelegramDeliveryResult<TResponse>(method);
+      }
+      if (waitMs > 0) {
+        deps.debugLogger?.log("telegram.delivery.wait", {
+          method,
+          chatId,
+          messageThreadId,
+          waitMs,
+        });
+        await sleepTelegramRetry(waitMs);
+      }
+      return sendNow();
+    });
+    const settled = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    globalDeliveryLimiter.tail = settled;
+    if (chatLimiter) chatLimiter.tail = settled;
+    return task;
+  };
   const callRecorded = async <TResponse>(
     method: string,
     body: Record<string, unknown>,
     options?: TelegramApiCallOptions,
   ): Promise<TResponse> => {
-    const startedAt = Date.now();
-    if (isTelegramOutboundApiMethod(method)) {
-      const waitMs = outboundBlockedUntil - Date.now();
-      if (waitMs > 0) {
-        const waitSeconds = Math.ceil(waitMs / 1000);
-        const error = new TelegramApiHttpError(
-          `Telegram API ${method} skipped: outbound is rate-limited for ${waitSeconds}s`,
-          429,
-          waitSeconds,
+    return runQueuedDelivery(method, body, async () => {
+      const startedAt = Date.now();
+      deps.debugLogger?.log("telegram.api.request", { method }, body);
+      try {
+        const result = await deps.client.call<TResponse>(method, body, options);
+        deps.debugLogger?.log(
+          "telegram.api.response",
+          { method, elapsedMs: Date.now() - startedAt },
+          result,
         );
-        deps.debugLogger?.log("telegram.api.rate_limited", {
+        return result;
+      } catch (error) {
+        updateDeliveryBackoffFromError(method, body, error);
+        deps.debugLogger?.log("telegram.api.error", {
           method,
-          waitSeconds,
+          elapsedMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
         });
+        deps.recordRuntimeEvent("api", error, { method });
         throw error;
       }
-    }
-    deps.debugLogger?.log("telegram.api.request", { method }, body);
-    try {
-      const result = await deps.client.call<TResponse>(method, body, options);
-      deps.debugLogger?.log(
-        "telegram.api.response",
-        { method, elapsedMs: Date.now() - startedAt },
-        result,
-      );
-      return result;
-    } catch (error) {
-      const retryAfterSeconds = getTelegramApiRetryAfterSeconds(error);
-      if (
-        isTelegramOutboundApiMethod(method) &&
-        retryAfterSeconds !== undefined &&
-        retryAfterSeconds > 0
-      ) {
-        outboundBlockedUntil = Math.max(
-          outboundBlockedUntil,
-          Date.now() + retryAfterSeconds * 1000,
-        );
-      }
-      deps.debugLogger?.log("telegram.api.error", {
-        method,
-        elapsedMs: Date.now() - startedAt,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      deps.recordRuntimeEvent("api", error, { method });
-      throw error;
-    }
+    });
   };
   return {
     call: callRecorded,
@@ -877,37 +1159,40 @@ export function createTelegramBridgeApiRuntime(
           }
         }
       }
-      const startedAt = Date.now();
-      deps.debugLogger?.log(
-        "telegram.api.multipart.request",
-        { method, fileField, filePath, fileName },
-        effectiveFields,
-      );
-      try {
-        const result = await deps.client.callMultipart<TResponse>(
-          method,
-          effectiveFields,
-          fileField,
-          filePath,
-          fileName,
-          options,
-        );
+      return runQueuedDelivery(method, effectiveFields, async () => {
+        const startedAt = Date.now();
         deps.debugLogger?.log(
-          "telegram.api.multipart.response",
-          { method, fileName, elapsedMs: Date.now() - startedAt },
-          result,
+          "telegram.api.multipart.request",
+          { method, fileField, filePath, fileName },
+          effectiveFields,
         );
-        return result;
-      } catch (error) {
-        deps.debugLogger?.log("telegram.api.multipart.error", {
-          method,
-          fileName,
-          elapsedMs: Date.now() - startedAt,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        deps.recordRuntimeEvent("multipart", error, { method, fileName });
-        throw error;
-      }
+        try {
+          const result = await deps.client.callMultipart<TResponse>(
+            method,
+            effectiveFields,
+            fileField,
+            filePath,
+            fileName,
+            options,
+          );
+          deps.debugLogger?.log(
+            "telegram.api.multipart.response",
+            { method, fileName, elapsedMs: Date.now() - startedAt },
+            result,
+          );
+          return result;
+        } catch (error) {
+          updateDeliveryBackoffFromError(method, effectiveFields, error);
+          deps.debugLogger?.log("telegram.api.multipart.error", {
+            method,
+            fileName,
+            elapsedMs: Date.now() - startedAt,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          deps.recordRuntimeEvent("multipart", error, { method, fileName });
+          throw error;
+        }
+      });
     },
     downloadFile: async (fileId, suggestedName) => {
       const startedAt = Date.now();
@@ -985,33 +1270,41 @@ export function createTelegramBridgeApiRuntime(
         withDefaultThreadId(body),
       ),
     editMessageText: async (body) => {
-      const startedAt = Date.now();
-      deps.debugLogger?.log("telegram.api.request", { method: "editMessageText" }, body);
-      try {
-        await deps.client.call("editMessageText", body);
-        deps.debugLogger?.log("telegram.api.response", {
-          method: "editMessageText",
-          elapsedMs: Date.now() - startedAt,
-          result: "edited",
-        });
-        return "edited";
-      } catch (error) {
-        if (isTelegramMessageNotModifiedError(error)) {
+      const effectiveBody = withDefaultThreadId(body);
+      return runQueuedDelivery("editMessageText", effectiveBody, async () => {
+        const startedAt = Date.now();
+        deps.debugLogger?.log(
+          "telegram.api.request",
+          { method: "editMessageText" },
+          effectiveBody,
+        );
+        try {
+          await deps.client.call("editMessageText", effectiveBody);
           deps.debugLogger?.log("telegram.api.response", {
             method: "editMessageText",
             elapsedMs: Date.now() - startedAt,
-            result: "unchanged",
+            result: "edited",
           });
-          return "unchanged";
+          return "edited";
+        } catch (error) {
+          if (isTelegramMessageNotModifiedError(error)) {
+            deps.debugLogger?.log("telegram.api.response", {
+              method: "editMessageText",
+              elapsedMs: Date.now() - startedAt,
+              result: "unchanged",
+            });
+            return "unchanged";
+          }
+          updateDeliveryBackoffFromError("editMessageText", effectiveBody, error);
+          deps.debugLogger?.log("telegram.api.error", {
+            method: "editMessageText",
+            elapsedMs: Date.now() - startedAt,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          deps.recordRuntimeEvent("api", error, { method: "editMessageText" });
+          throw error;
         }
-        deps.debugLogger?.log("telegram.api.error", {
-          method: "editMessageText",
-          elapsedMs: Date.now() - startedAt,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        deps.recordRuntimeEvent("api", error, { method: "editMessageText" });
-        throw error;
-      }
+      });
     },
     answerCallbackQuery: async (callbackQueryId, text) => {
       const startedAt = Date.now();

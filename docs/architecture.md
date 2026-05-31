@@ -24,7 +24,7 @@ Naming rule: because the repository already scopes this codebase to Telegram, ex
 Current runtime areas use these ownership boundaries:
 
 - `index.ts`: single composition root for live π/Telegram ports, session state, API-bound transport adapters, and status updates.
-- `api`: Bot API transport shapes/helpers, retries, file download, temp-dir lifecycle, inbound limits, chat actions, lazy bot-token clients, runtime error recording, and the `TELEGRAM_API_BASE` constant for the Bot API endpoint.
+- `api`: Bot API transport shapes/helpers, retries, outbound delivery limiting/backoff, stale typing/preview dropping while limited, file download, temp-dir lifecycle, inbound limits, chat actions, lazy bot-token clients, runtime error recording, and the `TELEGRAM_API_BASE` constant for the Bot API endpoint.
 - `config` / `setup`: persisted bot/session pairing state, authorization, first-user pairing, token prompting, env fallback, validation, and config persistence.
 - `locks` / `polling`: singleton `locks.json` ownership, takeover/restart semantics, long-poll controller state, update offset persistence, and poll-loop runtime wiring.
 - `updates` / `routing`: update classification/execution planning, paired authorization, reactions, edits, callbacks, and inbound route composition.
