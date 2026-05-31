@@ -45,6 +45,7 @@ import * as Status from "./lib/status.ts";
 import * as TabManager from "./lib/tab-manager.ts";
 import * as TextGroups from "./lib/text-groups.ts";
 import * as ThreadContext from "./lib/thread-context.ts";
+import * as TopicOrphans from "./lib/topic-orphans.ts";
 import * as TreeExport from "./lib/tree-export.ts";
 
 type ActivePiModel = NonNullable<Pi.ExtensionContext["model"]>;
@@ -89,6 +90,7 @@ export default function (pi: Pi.ExtensionAPI) {
   const sectionRegistry: TelegramSectionRegistry =
     createTelegramExtensionSectionRegistry();
   setGlobalTelegramSectionRegistry(sectionRegistry);
+  const topicOrphanProofStore = TopicOrphans.createTelegramTopicOrphanProofStore();
   const runtimeEvents = Status.createTelegramRuntimeEventRecorder({
     getBotToken: configStore.getBotToken,
   });
@@ -226,6 +228,7 @@ export default function (pi: Pi.ExtensionAPI) {
     recordRuntimeEvent,
     getDefaultMessageThreadId: resolveDefaultMessageThreadId,
     debugLogger,
+    topicOrphanProofStore,
   });
 
   // --- Message Delivery & Preview ---
@@ -304,6 +307,7 @@ export default function (pi: Pi.ExtensionAPI) {
     debugLogger,
     createTreeBranch: Pi.createTelegramSessionFileTreeBranchCursor,
     deleteForumTopic,
+    topicOrphanProofStore,
   });
   const getTabReferenceContextWindow =
     TabManager.createTelegramTabReferenceContextWindowGetter<

@@ -25,6 +25,7 @@ import type {
   RpcChildSessionState,
 } from "../lib/rpc-child.ts";
 import type { TelegramNormalizedConcurrentTabsConfig } from "../lib/config.ts";
+import { createTelegramTopicOrphanProofStore } from "../lib/topic-orphans.ts";
 import {
   getAmbientTelegramThreadContext,
   runWithTelegramThreadContext,
@@ -2657,10 +2658,18 @@ test("Tab manager blocks manual tab lifecycle commands in forum-native mode", as
   await manager.dispose();
 });
 
-test("Tab manager exposes topic orphan repair diagnostics", async () => {
+test("Tab manager cleans proven topic orphan records", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-diagnostics-"));
   const statePath = join(tempDir, "tabs.json");
   const replies: string[] = [];
+  const topicOrphanProofStore = createTelegramTopicOrphanProofStore();
+  topicOrphanProofStore.record({
+    chatId: -10042,
+    messageThreadId: 77,
+    method: "sendMessage",
+    message: "Bad Request: message thread not found",
+    at: 1234,
+  });
   await writeFile(
     statePath,
     JSON.stringify({
@@ -2724,6 +2733,7 @@ test("Tab manager exposes topic orphan repair diagnostics", async () => {
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    topicOrphanProofStore,
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
       replies.push(text);
       return replies.length;
@@ -2734,16 +2744,27 @@ test("Tab manager exposes topic orphan repair diagnostics", async () => {
   assert.match(replies.at(-1) ?? "", /^Topic orphan diagnostics:/);
   assert.match(replies.at(-1) ?? "", /Proven orphans: 1/);
   assert.match(replies.at(-1) ?? "", /Deleted Topic/);
+  assert.match(replies.at(-1) ?? "", /proof sendMessage/);
+  assert.match(replies.at(-1) ?? "", /Errored topic records: 0/);
   assert.match(replies.at(-1) ?? "", /Suspected cold topic records: 1/);
   assert.match(replies.at(-1) ?? "", /Cold Topic/);
 
   await manager.handleTopicCommand?.("cleanup", 1, 11, "ctx");
   assert.equal(
     replies.at(-1),
-    "Topic cleanup is diagnostic-only until Bot API orphan detection is wired.",
+    "Cleaned 1 proven topic orphan. Session files are kept.",
   );
+  const saved = JSON.parse(await readFile(statePath, "utf8")) as {
+    tabs: Record<string, unknown>;
+  };
+  assert.equal(saved.tabs[normalizeTelegramTopicTabName(-10042, 77)], undefined);
+  assert.ok(saved.tabs[normalizeTelegramTopicTabName(-10042, 88)]);
+  assert.deepEqual(topicOrphanProofStore.getProofs(), []);
 
-  await manager.handleTopicCommand?.("unknown", 1, 12, "ctx");
+  await manager.handleTopicCommand?.("cleanup", 1, 12, "ctx");
+  assert.equal(replies.at(-1), "No proven topic orphans to clean.");
+
+  await manager.handleTopicCommand?.("unknown", 1, 13, "ctx");
   assert.match(replies.at(-1) ?? "", /Usage:\n\/topic orphans\n\/topic cleanup/);
   await manager.dispose();
 });

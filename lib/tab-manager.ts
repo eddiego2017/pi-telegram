@@ -54,6 +54,11 @@ import { getTelegramAgentDir, isTelegramTrustedChat } from "./config.ts";
 import type { TelegramDebugLogger } from "./debug.ts";
 import type { TelegramInlineKeyboardMarkup } from "./keyboard.ts";
 import {
+  isSameTelegramTopicOrphanTarget,
+  type TelegramTopicOrphanProof,
+  type TelegramTopicOrphanProofStore,
+} from "./topic-orphans.ts";
+import {
   getAmbientTelegramThreadContext,
   getTelegramForumThreadMessageThreadId,
   getTelegramForumTopicMessageThreadId,
@@ -240,6 +245,7 @@ export interface TelegramTabManagerDeps<TContext> {
     chatId: number,
     messageThreadId: number,
   ) => Promise<boolean>;
+  topicOrphanProofStore?: TelegramTopicOrphanProofStore;
 }
 
 interface RuntimeTab {
@@ -1319,7 +1325,10 @@ function formatTelegramTabDashboardLastMessage(record: TelegramTabRecord): strin
   return text ? truncateTelegramTabText(text, 96) : "No messages yet.";
 }
 
-function formatTelegramTabOrphanDetail(record: TelegramTabRecord): string {
+function formatTelegramTabOrphanDetail(
+  record: TelegramTabRecord,
+  proof?: TelegramTopicOrphanProof,
+): string {
   const details = [
     formatTelegramTabRecordDisplayName(record),
     record.source?.kind === "telegram-topic"
@@ -1333,6 +1342,7 @@ function formatTelegramTabOrphanDetail(record: TelegramTabRecord): string {
       ? `title ${record.source.topicTitle}`
       : undefined,
     record.sessionName ? `session ${record.sessionName}` : undefined,
+    proof ? `proof ${proof.method}` : undefined,
   ].filter((part): part is string => Boolean(part));
   return `- ${details.join(" · ")}`;
 }
@@ -3880,13 +3890,23 @@ export function createTelegramTabManager<TContext>(
       chatId: number,
       replyToMessageId: number,
     ) => {
-      const provenOrphans: TelegramTabRecord[] = [];
+      const proofs = deps.topicOrphanProofStore?.getProofs() ?? [];
+      const provenOrphans: Array<{
+        record: TelegramTabRecord;
+        proof: TelegramTopicOrphanProof;
+      }> = [];
+      const errored: TelegramTabRecord[] = [];
       const suspected: TelegramTabRecord[] = [];
       for (const record of getSortedTelegramTabRecords(tabState)) {
         if (record.source?.kind !== "telegram-topic") continue;
         const runtime = getRuntime(tabState, record.name);
-        if (record.status === "error" && record.lastError) {
-          provenOrphans.push(record);
+        const proof = proofs.find((item) =>
+          isSameTelegramTopicOrphanTarget(item, record.source!)
+        );
+        if (proof) {
+          provenOrphans.push({ record, proof });
+        } else if (record.status === "error" && record.lastError) {
+          errored.push(record);
         } else if (!hasHotWorker(runtime)) {
           suspected.push(record);
         }
@@ -3898,12 +3918,26 @@ export function createTelegramTabManager<TContext>(
           "Topic orphan diagnostics:",
           `Proven orphans: ${provenOrphans.length}`,
           ...(provenOrphans.length > 0
-            ? provenOrphans.map(formatTelegramTabOrphanDetail)
+            ? provenOrphans.map(({ record, proof }) =>
+                formatTelegramTabOrphanDetail(record, proof)
+              )
             : ["- none"]),
+          "",
+          `Errored topic records: ${errored.length}`,
+          ...(errored.length > 0
+            ? errored.slice(0, 10).map((record) =>
+                formatTelegramTabOrphanDetail(record)
+              )
+            : ["- none"]),
+          ...(errored.length > 10
+            ? [`- ...and ${errored.length - 10} more`]
+            : []),
           "",
           `Suspected cold topic records: ${suspected.length}`,
           ...(suspected.length > 0
-            ? suspected.slice(0, 10).map(formatTelegramTabOrphanDetail)
+            ? suspected.slice(0, 10).map((record) =>
+                formatTelegramTabOrphanDetail(record)
+              )
             : ["- none"]),
           ...(suspected.length > 10
             ? [`- ...and ${suspected.length - 10} more`]
@@ -3916,18 +3950,54 @@ export function createTelegramTabManager<TContext>(
       chatId: number,
       replyToMessageId: number,
     ) => {
+      const proofs = deps.topicOrphanProofStore?.getProofs() ?? [];
       const provenOrphans = getSortedTelegramTabRecords(tabState).filter(
         (record) =>
           record.source?.kind === "telegram-topic" &&
-          record.status === "error" &&
-          Boolean(record.lastError),
+          proofs.some((proof) =>
+            isSameTelegramTopicOrphanTarget(proof, record.source!)
+          ),
       );
+      if (provenOrphans.length === 0) {
+        await deps.sendTextReply(
+          chatId,
+          replyToMessageId,
+          "No proven topic orphans to clean.",
+        );
+        return;
+      }
+      for (const record of provenOrphans) {
+        const runtime = getRuntime(tabState, record.name);
+        if (runtime) await disposeClosingRuntimeBackend(runtime);
+        runtimeTabs.delete(record.name);
+        delete tabState.tabs[record.name];
+        if (record.source?.kind === "telegram-topic") {
+          deps.topicOrphanProofStore?.clearProofsFor(
+            record.source.chatId,
+            record.source.messageThreadId!,
+          );
+        }
+      }
+      if (!tabState.tabs[tabState.activeTab]) {
+        tabState.activeTab = TELEGRAM_DEFAULT_TAB_NAME;
+      }
+      deps.debugLogger?.log("telegram.topic.orphan.cleanup", {
+        count: provenOrphans.length,
+        records: provenOrphans.map((record) => ({
+          tab: record.name,
+          chatId: record.source?.chatId,
+          messageThreadId: record.source?.messageThreadId,
+        })),
+      });
+      deps.recordRuntimeEvent?.("tabs", "topic orphan cleanup", {
+        action: "topic_cleanup",
+        count: provenOrphans.length,
+      });
+      await persist();
       await deps.sendTextReply(
         chatId,
         replyToMessageId,
-        provenOrphans.length === 0
-          ? "No proven topic orphans to clean."
-          : "Topic cleanup is diagnostic-only until Bot API orphan detection is wired.",
+        `Cleaned ${provenOrphans.length} proven topic orphan${provenOrphans.length === 1 ? "" : "s"}. Session files are kept.`,
       );
     },
   };

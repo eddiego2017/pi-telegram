@@ -13,6 +13,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import type { TelegramDebugLogger } from "./debug.ts";
+import type { TelegramTopicOrphanProofStore } from "./topic-orphans.ts";
 
 export const TELEGRAM_API_BASE = "https://api.telegram.org";
 
@@ -328,6 +329,7 @@ export interface TelegramBridgeApiRuntimeDeps {
     details?: Record<string, unknown>,
   ) => void;
   debugLogger?: TelegramDebugLogger;
+  topicOrphanProofStore?: TelegramTopicOrphanProofStore;
   /** Resolve the ambient forum-topic id for outbound calls that did not
    *  explicitly specify one. Receives the target chat id so multi-chat
    *  scenarios don't leak threads across chats. Returns undefined for
@@ -863,6 +865,16 @@ export function isTelegramForumTopicPermissionError(error: unknown): boolean {
   );
 }
 
+export function isTelegramForumTopicMissingError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("message thread not found") ||
+    message.includes("topic not found") ||
+    message.includes("forum topic not found")
+  );
+}
+
 export function createTelegramChatActionSender<TAction extends string>(
   sendChatAction: (chatId: number, action: TAction) => Promise<unknown>,
   action: TAction,
@@ -875,6 +887,7 @@ export function createDefaultTelegramBridgeApiRuntime(deps: {
   recordRuntimeEvent: TelegramBridgeApiRuntimeDeps["recordRuntimeEvent"];
   getDefaultMessageThreadId?: (chatId: number) => number | undefined;
   debugLogger?: TelegramDebugLogger;
+  topicOrphanProofStore?: TelegramTopicOrphanProofStore;
 }): TelegramBridgeApiRuntime {
   return createTelegramBridgeApiRuntime({
     client: createTelegramApiClient(deps.getBotToken),
@@ -884,6 +897,7 @@ export function createDefaultTelegramBridgeApiRuntime(deps: {
     recordRuntimeEvent: deps.recordRuntimeEvent,
     getDefaultMessageThreadId: deps.getDefaultMessageThreadId,
     debugLogger: deps.debugLogger,
+    topicOrphanProofStore: deps.topicOrphanProofStore,
   });
 }
 
@@ -997,11 +1011,40 @@ export function createTelegramBridgeApiRuntime(
       notBefore,
     });
   };
+  const recordTopicOrphanProofFromError = (
+    method: string,
+    body: Record<string, unknown>,
+    error: unknown,
+  ): void => {
+    const chatId = getTelegramOutboundChatId(body);
+    const messageThreadId = getTelegramOutboundMessageThreadId(body);
+    if (
+      deps.topicOrphanProofStore &&
+      chatId !== undefined &&
+      messageThreadId !== undefined &&
+      isTelegramForumTopicMissingError(error)
+    ) {
+      deps.topicOrphanProofStore.record({
+        chatId,
+        messageThreadId,
+        method,
+        message: error instanceof Error ? error.message : String(error),
+        at: Date.now(),
+      });
+      deps.debugLogger?.log("telegram.topic.orphan.proof", {
+        method,
+        chatId,
+        messageThreadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
   const updateDeliveryBackoffFromError = (
     method: string,
     body: Record<string, unknown>,
     error: unknown,
   ): void => {
+    recordTopicOrphanProofFromError(method, body, error);
     const retryAfterSeconds = getTelegramApiRetryAfterSeconds(error);
     if (
       isTelegramOutboundApiMethod(method) &&

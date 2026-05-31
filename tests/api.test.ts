@@ -28,12 +28,14 @@ import {
   downloadTelegramFile,
   fetchTelegramBotIdentity,
   getTelegramInboundFileByteLimitFromEnv,
+  isTelegramForumTopicMissingError,
   isTelegramForumTopicPermissionError,
   isTelegramMessageNotModifiedError,
   prepareTelegramTempDir,
   TELEGRAM_FILE_MAX_BYTES,
   type TelegramApiClient,
 } from "../lib/api.ts";
+import { createTelegramTopicOrphanProofStore } from "../lib/topic-orphans.ts";
 
 function createApiResponseBody(result: unknown): { ok: true; result: unknown } {
   return { ok: true, result };
@@ -124,7 +126,7 @@ test("Telegram API byte-limit config prefers positive integer env values", () =>
   );
 });
 
-test("Telegram API helpers detect unchanged edit and forum-topic permission errors", () => {
+test("Telegram API helpers detect unchanged edit and forum-topic errors", () => {
   assert.equal(
     isTelegramMessageNotModifiedError(
       new Error("Bad Request: message is not modified"),
@@ -139,6 +141,14 @@ test("Telegram API helpers detect unchanged edit and forum-topic permission erro
     true,
   );
   assert.equal(isTelegramForumTopicPermissionError(new Error("other")), false);
+  assert.equal(
+    isTelegramForumTopicMissingError(
+      new Error("Bad Request: message thread not found"),
+    ),
+    true,
+  );
+  assert.equal(isTelegramForumTopicMissingError(new Error("topic not found")), true);
+  assert.equal(isTelegramForumTopicMissingError(new Error("other")), false);
 });
 
 test("Telegram API chat-action sender binds a fixed action", async () => {
@@ -484,6 +494,63 @@ test("Telegram bridge API runtime prepares its configured temp directory", async
   });
   assert.equal(await runtime.prepareTempDir(), 1);
   assert.deepEqual(await readdir(tempDir), []);
+});
+
+test("Telegram bridge API runtime records topic orphan proofs", async () => {
+  const topicOrphanProofStore = createTelegramTopicOrphanProofStore();
+  const runtime = createTelegramBridgeApiRuntime({
+    tempDir: "/tmp/telegram",
+    maxFileSizeBytes: 123,
+    tempFileMaxAgeMs: 60_000,
+    recordRuntimeEvent: () => {},
+    topicOrphanProofStore,
+    client: createApiRuntimeClient({
+      call: async () => {
+        throw new Error("Bad Request: message thread not found");
+      },
+      callMultipart: async () => {
+        throw new Error("Bad Request: topic not found");
+      },
+    }),
+  });
+
+  await assert.rejects(
+    () =>
+      runtime.sendMessage({
+        chat_id: -10042,
+        message_thread_id: 77,
+        text: "hi",
+      }),
+    { message: "Bad Request: message thread not found" },
+  );
+  await assert.rejects(
+    () =>
+      runtime.callMultipart(
+        "sendDocument",
+        { chat_id: "-10042", message_thread_id: "88" },
+        "document",
+        "/tmp/a",
+        "a.txt",
+      ),
+    { message: "Bad Request: topic not found" },
+  );
+
+  assert.deepEqual(topicOrphanProofStore.getProofs(), [
+    {
+      chatId: -10042,
+      messageThreadId: 77,
+      method: "sendMessage",
+      message: "Bad Request: message thread not found",
+      at: topicOrphanProofStore.getProofs()[0]?.at,
+    },
+    {
+      chatId: -10042,
+      messageThreadId: 88,
+      method: "sendDocument",
+      message: "Bad Request: topic not found",
+      at: topicOrphanProofStore.getProofs()[1]?.at,
+    },
+  ]);
 });
 
 test("Telegram bridge API runtime records structured failures", async () => {

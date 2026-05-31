@@ -923,24 +923,22 @@ git diff --check: pass
 
 ### Phase 4 — Level 1 orphan cleanup and `/topic` repair commands
 
-Status: initial repair command shell implemented; Bot API orphan detection/cleanup still pending.
+Status: implemented for clear Bot API missing-topic proofs.
 
 Implemented:
 
 - `/topic orphans` hidden diagnostic command lists:
-  - proven topic orphans currently inferred from topic-bound records in `error` state with `lastError`,
+  - proven topic orphans from clear Bot API `message thread not found` / `topic not found` delivery failures,
+  - errored topic records currently in `error` state with `lastError`,
   - suspected cold topic records with no hot worker.
-- `/topic cleanup` is wired but diagnostic-only until clear Bot API missing-topic failures are recorded as proven orphans.
+- Bot API send/edit/upload/delete-style outbound calls record orphan proofs when the call has `chat_id + message_thread_id` and fails with a conservative missing-topic message.
+- `/topic cleanup` removes only records with recorded missing-topic proofs, disposes any worker, preserves session JSONL, clears the proof, and leaves merely suspected/cold records untouched.
 - `/topic` is intentionally not in the visible Bot Commands menu and does not create, switch, or close topics.
 
-Remaining Level 1 cleanup:
+Remaining possible polish:
 
-- Detect clear topic/thread-missing errors from Bot API operations.
-- Remove or mark local topic record as orphan.
-- Dispose worker if any.
-- Preserve session JSONL.
-- Record runtime/debug event.
-- Let `/topic cleanup` clean only records proven orphan by previous Bot API failures.
+- Expand the conservative missing-topic matcher only after live Bot API evidence.
+- Surface proof timestamps/last error detail more compactly if needed.
 
 No MTProto reconciler in this phase.
 
