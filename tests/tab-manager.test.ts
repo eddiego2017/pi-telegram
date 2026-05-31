@@ -2304,6 +2304,74 @@ test("Tab manager uses current-topic wording for native prompt replies", async (
   await manager.dispose();
 });
 
+test("Tab manager uses current-topic wording for native worker lifecycle errors", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-worker-wording-"));
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        native: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async () => undefined,
+  });
+
+  await manager.dispatchPrompt(
+    {
+      chatId: -10042,
+      messageThreadId: 77,
+      replyToMessageId: 21,
+      content: [{ type: "text", text: "first" }],
+    },
+    "ctx",
+  );
+  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  const backend = backends.get(topicTab);
+  assert.ok(backend);
+  backend.setState({ isStreaming: true });
+
+  await runWithTelegramThreadContext(
+    { chatId: -10042, messageThreadId: 77 },
+    async () => {
+      assert.throws(
+        () => manager.compactActive("ctx", { onComplete: () => {}, onError: () => {} }),
+        /Current topic is busy\. Wait for it to go idle or send \/stop first\./,
+      );
+      await assert.rejects(
+        () => manager.newActiveSession("ctx"),
+        /Current topic is busy\. Wait for it to go idle or send \/stop first\./,
+      );
+      await assert.rejects(
+        () => manager.deleteActiveSession("/sessions/topic.jsonl", "ctx"),
+        /Current topic is busy\. Send \/stop first\./,
+      );
+      await assert.rejects(
+        () => manager.createActiveTreeBranch("u1", "ctx"),
+        /Current topic is busy\. Send \/abort first\./,
+      );
+    },
+  );
+  await manager.dispose();
+});
+
 test("Tab manager preserves running workers when live worker capacity is full", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-worker-capacity-running-"));
   const replies: string[] = [];

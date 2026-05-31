@@ -1829,6 +1829,44 @@ export function createTelegramTabManager<TContext>(
     errorMessage: string,
     turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
   ): string => `${formatRuntimeUserScopeTitle(runtime, turn)} failed: ${errorMessage}`;
+  const formatRuntimeBusyMessage = (runtime: RuntimeTab): string => {
+    const forumNativeScope = getForumNativeRuntimeScope(runtime);
+    if (forumNativeScope) {
+      return `${formatRuntimeUserScopeTitle(runtime)} is busy. Wait for it to go idle or send /stop first.`;
+    }
+    return `Tab ${runtime.record.name} is busy. Wait for it to go idle or send /stop first.`;
+  };
+  const formatRuntimeStopFirstMessage = (runtime: RuntimeTab): string => {
+    const forumNativeScope = getForumNativeRuntimeScope(runtime);
+    if (forumNativeScope) {
+      return `${formatRuntimeUserScopeTitle(runtime)} is busy. Send /stop first.`;
+    }
+    return `Tab ${runtime.record.name} is busy. Send /stop first.`;
+  };
+  const formatRuntimeAbortFirstMessage = (runtime: RuntimeTab): string => {
+    const forumNativeScope = getForumNativeRuntimeScope(runtime);
+    if (forumNativeScope) {
+      return `${formatRuntimeUserScopeTitle(runtime)} is busy. Send /abort first.`;
+    }
+    return `Tab ${runtime.record.name} is busy. Send /tab abort ${runtime.record.name} first.`;
+  };
+  const formatScopedTabBusyMessage = (tabName: string): string => {
+    if (isForumNativeMode()) {
+      return "Current workspace is busy. Send /abort first.";
+    }
+    return `Tab ${tabName} is busy. Send /tab abort ${tabName} first.`;
+  };
+  const formatRuntimeTreeBranchUnavailableMessage = (): string =>
+    isForumNativeMode()
+      ? "Current workspace tree branching is not configured."
+      : "Active tab tree branching is not configured.";
+  const formatRuntimeSessionBindFailureMessage = (
+    tabName: string,
+    sessionPath: string,
+  ): string =>
+    isForumNativeMode()
+      ? `Current workspace did not bind to resumed session ${sessionPath}.`
+      : `Tab ${tabName} did not bind to resumed session ${sessionPath}.`;
   const hasHotWorker = (runtime: RuntimeTab | undefined): boolean =>
     Boolean(runtime?.backend);
   const getHotWorkerCount = (): number =>
@@ -3311,7 +3349,9 @@ export function createTelegramTabManager<TContext>(
     if (!getTopicBindingConfig()?.autoCreate) {
       await sendTurnTextReply(
         turn,
-        "No tab is bound to this Telegram topic.",
+        isForumNativeMode()
+          ? "No workspace is bound to this Telegram topic."
+          : "No tab is bound to this Telegram topic.",
       );
     }
     return undefined;
@@ -4196,9 +4236,7 @@ export function createTelegramTabManager<TContext>(
         runtime.record.status === "running" ||
         runtime.record.status === "starting"
       ) {
-        throw new Error(
-          `Tab ${runtime.record.name} is busy. Wait for it to go idle or send /stop first.`,
-        );
+        throw new Error(formatRuntimeBusyMessage(runtime));
       }
       void (async () => {
         try {
@@ -4239,9 +4277,7 @@ export function createTelegramTabManager<TContext>(
         runtime.record.status === "running" ||
         runtime.record.status === "starting"
       ) {
-        throw new Error(
-          `Tab ${runtime.record.name} is busy. Wait for it to go idle or send /stop first.`,
-        );
+        throw new Error(formatRuntimeBusyMessage(runtime));
       }
       try {
         const backend = await ensureBackend(runtime, ctx);
@@ -4298,9 +4334,7 @@ export function createTelegramTabManager<TContext>(
       if (!runtime) return undefined;
       await refreshRuntimeState(runtime);
       if (!canSwitchTelegramTabModel(runtime.record)) {
-        throw new Error(
-          `Tab ${runtime.record.name} is busy. Send /stop first.`,
-        );
+        throw new Error(formatRuntimeStopFirstMessage(runtime));
       }
       const sessionPath = runtime.record.sessionFile;
       if (!sessionPath) {
@@ -4375,9 +4409,7 @@ export function createTelegramTabManager<TContext>(
       }
       await refreshRuntimeState(runtime);
       if (!canSwitchTelegramTabModel(runtime.record)) {
-        throw new Error(
-          `Tab ${scope.tabName} is busy. Send /tab abort ${scope.tabName} first.`,
-        );
+        throw new Error(formatScopedTabBusyMessage(scope.tabName));
       }
       await assertNoOpenSessionConflict(tabState, runtime, {
         sessionFile: sessionPath,
@@ -4422,7 +4454,7 @@ export function createTelegramTabManager<TContext>(
           await ensureBackend(runtime, ctx);
           if (!isSameTelegramTabSessionFile(runtime.record.sessionFile, sessionPath)) {
             throw new Error(
-              `Tab ${scope.tabName} did not bind to resumed session ${sessionPath}.`,
+              formatRuntimeSessionBindFailureMessage(scope.tabName, sessionPath),
             );
           }
           const topicSessionNameAfterRestart = getTelegramTopicSessionName(
@@ -4458,13 +4490,11 @@ export function createTelegramTabManager<TContext>(
       if (!runtime) return undefined;
       await refreshRuntimeState(runtime);
       if (!canSwitchTelegramTabModel(runtime.record)) {
-        throw new Error(
-          `Tab ${runtime.record.name} is busy. Send /tab abort ${runtime.record.name} first.`,
-        );
+        throw new Error(formatRuntimeAbortFirstMessage(runtime));
       }
       try {
         if (!deps.createTreeBranch) {
-          throw new Error("Active tab tree branching is not configured.");
+          throw new Error(formatRuntimeTreeBranchUnavailableMessage());
         }
         const result = await deps.createTreeBranch(
           getTelegramTabSessionReference(runtime.record, deps.getCwd(ctx)),
