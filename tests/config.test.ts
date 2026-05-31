@@ -144,6 +144,7 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
   assert.deepEqual(store.getConcurrentTabsConfig(), {
     enabled: true,
     maxTabs: 2,
+    maxWorkers: 2,
     inactiveNotify: false,
     workerExtensions: ["/agent/extensions/provider.ts"],
     topicBinding: {
@@ -193,6 +194,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
   assert.deepEqual(normalizeTelegramConcurrentTabsConfig(), {
     enabled: false,
     maxTabs: 10,
+    maxWorkers: 10,
     inactiveNotify: true,
     workerExtensions: [],
     topicBinding: {
@@ -216,6 +218,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     {
       enabled: true,
       maxTabs: 10,
+      maxWorkers: 10,
       inactiveNotify: false,
       workerExtensions: ["/agent/extensions/provider.ts"],
       topicBinding: {
@@ -253,10 +256,19 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
       defaultModel: undefined,
     },
   );
+  assert.equal(
+    normalizeTelegramConcurrentTabsConfig({ maxTabs: 8, maxWorkers: 3 }).maxWorkers,
+    3,
+  );
+  assert.equal(
+    normalizeTelegramConcurrentTabsConfig({ maxTabs: 8, maxWorkers: 0 }).maxWorkers,
+    8,
+  );
   const getConfig = createTelegramConcurrentTabsConfigGetter({
     getConcurrentTabsConfig: () => ({
       enabled: true,
       maxTabs: 8,
+      maxWorkers: 3,
       inactiveNotify: false,
       workerExtensions: ["/agent/extensions/provider.ts"],
       topicBinding: {
@@ -274,6 +286,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
   assert.deepEqual(getConfig(), {
     enabled: true,
     maxTabs: 8,
+    maxWorkers: 3,
     inactiveNotify: false,
     workerExtensions: ["/agent/extensions/provider.ts"],
     topicBinding: {

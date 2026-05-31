@@ -1716,6 +1716,21 @@ export function createTelegramTabManager<TContext>(
     tabName: string,
     runtime: RuntimeTab,
   ): boolean => isTopicDeliveryActive(runtime) || tabState.activeTab === tabName;
+  const hasHotWorker = (runtime: RuntimeTab | undefined): boolean =>
+    Boolean(runtime?.backend);
+  const getHotWorkerCount = (): number =>
+    [...runtimeTabs.values()].filter((runtime) => hasHotWorker(runtime)).length;
+  const getConfiguredMaxWorkers = (): number =>
+    deps.getConfig().maxWorkers ?? deps.getConfig().maxTabs;
+  const assertWorkerCapacity = (runtime: RuntimeTab): void => {
+    if (hasHotWorker(runtime)) return;
+    const maxWorkers = getConfiguredMaxWorkers();
+    if (getHotWorkerCount() >= maxWorkers) {
+      throw new Error(
+        `Worker capacity reached (${maxWorkers}). Wait for another workspace to finish or restart it later.`,
+      );
+    }
+  };
   const runInTabThreadContext = <T>(runtime: RuntimeTab, fn: () => T): T => {
     if (runtime.activeChatId === undefined) return fn();
     return runWithTelegramThreadContext(
@@ -2828,6 +2843,7 @@ export function createTelegramTabManager<TContext>(
     ctx: TContext,
   ): Promise<TelegramTabBackend> => {
     if (runtime.backend) return runtime.backend;
+    assertWorkerCapacity(runtime);
     runtime.record.status = "starting";
     runtime.record.lastError = undefined;
     const cwd = runtime.record.cwd || deps.getCwd(ctx);
@@ -3108,7 +3124,7 @@ export function createTelegramTabManager<TContext>(
     if (Object.keys(tabState.tabs).length >= deps.getConfig().maxTabs) {
       await sendTurnTextReply(
         turn,
-        "Maximum tab count reached. Close another topic/tab first.",
+        "Maximum workspace count reached. Close another topic/workspace first.",
       );
       return undefined;
     }

@@ -2001,7 +2001,7 @@ test("Tab manager rejects unknown forum topics at max tab capacity", async () =>
   );
   assert.equal(
     replies.at(-1),
-    "Maximum tab count reached. Close another topic/tab first.",
+    "Maximum workspace count reached. Close another topic/workspace first.",
   );
   assert.equal(backends.size, 0);
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
@@ -2084,6 +2084,94 @@ test("Tab manager reports worker API errors instead of replaying stale text", as
     textReplies.at(-1),
     "Tab A failed: 503 auth_unavailable: no auth available",
   );
+});
+
+test("Tab manager separates workspace capacity from live worker capacity", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-worker-capacity-"));
+  const replies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      maxWorkers: 1,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        native: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  for (const [messageThreadId, name] of [[77, "A"], [78, "B"]] as const) {
+    assert.equal(
+      await manager.handleTopicServiceMessage(
+        {
+          chat: { id: -10042 },
+          message_thread_id: messageThreadId,
+          forum_topic_created: { name },
+        },
+        "ctx",
+      ),
+      true,
+    );
+  }
+  const saved = JSON.parse(await readFile(join(tempDir, "tabs.json"), "utf8")) as {
+    tabs: Record<string, unknown>;
+  };
+  assert.equal(Object.keys(saved.tabs).length, 3);
+
+  assert.equal(
+    await manager.dispatchPrompt(
+      {
+        chatId: -10042,
+        messageThreadId: 77,
+        replyToMessageId: 21,
+        content: [{ type: "text", text: "first topic" }],
+      },
+      "ctx",
+    ),
+    true,
+  );
+  assert.match(replies.at(-1) ?? "", /Started tab/);
+  assert.equal(backends.size, 1);
+
+  assert.equal(
+    await manager.dispatchPrompt(
+      {
+        chatId: -10042,
+        messageThreadId: 78,
+        replyToMessageId: 22,
+        content: [{ type: "text", text: "second topic" }],
+      },
+      "ctx",
+    ),
+    true,
+  );
+  assert.match(
+    replies.at(-1) ?? "",
+    /^Tab .* failed: Worker capacity reached \(1\)\. Wait for another workspace to finish or restart it later\.$/,
+  );
+  assert.equal(backends.size, 1);
+  await manager.dispose();
 });
 
 test("Tab manager rebinds worker when resume RPC reports stale session state", async () => {

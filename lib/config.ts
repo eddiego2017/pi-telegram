@@ -37,13 +37,15 @@ export interface TelegramNormalizedConcurrentTabTopicBindingConfig {
 export interface TelegramConcurrentTabsConfig {
   enabled?: boolean;
   maxTabs?: number;
+  maxWorkers?: number;
   inactiveNotify?: boolean;
   workerExtensions?: string[];
   topicBinding?: TelegramConcurrentTabTopicBindingConfig;
 }
 
 export interface TelegramNormalizedConcurrentTabsConfig
-  extends Required<Omit<TelegramConcurrentTabsConfig, "topicBinding">> {
+  extends Required<Omit<TelegramConcurrentTabsConfig, "topicBinding" | "maxWorkers">> {
+  maxWorkers?: number;
   topicBinding?: TelegramNormalizedConcurrentTabTopicBindingConfig;
 }
 
@@ -305,9 +307,16 @@ export function normalizeTelegramConcurrentTabsConfig(
     config.maxTabs > 0
       ? config.maxTabs
       : 10;
+  const maxWorkers =
+    typeof config?.maxWorkers === "number" &&
+    Number.isInteger(config.maxWorkers) &&
+    config.maxWorkers > 0
+      ? config.maxWorkers
+      : maxTabs;
   return {
     enabled: config?.enabled ?? false,
     maxTabs,
+    maxWorkers,
     inactiveNotify: config?.inactiveNotify ?? true,
     workerExtensions: Array.isArray(config?.workerExtensions)
       ? config.workerExtensions.filter(
