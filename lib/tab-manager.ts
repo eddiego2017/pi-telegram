@@ -1778,6 +1778,54 @@ export function createTelegramTabManager<TContext>(
     tabName: string,
     runtime: RuntimeTab,
   ): boolean => isTopicDeliveryActive(runtime) || tabState.activeTab === tabName;
+  const isTelegramForumChatId = (chatId: number | undefined): boolean =>
+    typeof chatId === "number" && chatId < 0;
+  const getForumNativeRuntimeScope = (
+    runtime: RuntimeTab,
+    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+  ): "topic" | "workspace" | undefined => {
+    if (!isForumNativeMode()) return undefined;
+    const chatId = runtime.activeChatId ?? turn?.chatId;
+    const messageThreadId = runtime.activeMessageThreadId ?? turn?.messageThreadId;
+    if (
+      messageThreadId !== undefined ||
+      runtime.record.source?.kind === "telegram-topic" ||
+      isTelegramForumChatId(chatId)
+    ) {
+      return "topic";
+    }
+    return "workspace";
+  };
+  const formatRuntimeUserScopeTarget = (
+    runtime: RuntimeTab,
+    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+  ): string => {
+    const forumNativeScope = getForumNativeRuntimeScope(runtime, turn);
+    if (forumNativeScope) return `current ${forumNativeScope}`;
+    return `tab ${formatTelegramTabRecordDisplayName(runtime.record)}`;
+  };
+  const formatRuntimeUserScopeTitle = (
+    runtime: RuntimeTab,
+    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+  ): string => {
+    const target = formatRuntimeUserScopeTarget(runtime, turn);
+    return `${target.charAt(0).toUpperCase()}${target.slice(1)}`;
+  };
+  const formatRuntimeStartedMessage = (
+    runtime: RuntimeTab,
+    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+  ): string => {
+    const forumNativeScope = getForumNativeRuntimeScope(runtime, turn);
+    if (forumNativeScope) {
+      return `Started run in ${formatRuntimeUserScopeTarget(runtime, turn)}.`;
+    }
+    return `Started ${formatRuntimeUserScopeTarget(runtime, turn)}.`;
+  };
+  const formatRuntimeFailureMessage = (
+    runtime: RuntimeTab,
+    errorMessage: string,
+    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+  ): string => `${formatRuntimeUserScopeTitle(runtime, turn)} failed: ${errorMessage}`;
   const hasHotWorker = (runtime: RuntimeTab | undefined): boolean =>
     Boolean(runtime?.backend);
   const getHotWorkerCount = (): number =>
@@ -2713,7 +2761,6 @@ export function createTelegramTabManager<TContext>(
         logTabTurnSummary(tabName, runtime, "error", assistantError);
         record.status = "error";
         record.lastError = assistantError;
-        const displayName = formatTelegramTabDisplayName(tabName);
         const isActive = isRuntimeDeliveryActive(tabState, tabName, runtime);
         if (!runtime.activeErrorDelivered) {
           runtime.activeErrorDelivered = true;
@@ -2722,7 +2769,7 @@ export function createTelegramTabManager<TContext>(
               sendTabReply(
                 runtime.activeChatId,
                 runtime.activeReplyToMessageId,
-                `Tab ${displayName} failed: ${assistantError}`,
+                formatRuntimeFailureMessage(runtime, assistantError),
               ),
             );
           } else {
@@ -2732,7 +2779,7 @@ export function createTelegramTabManager<TContext>(
                 sendTabReply(
                   runtime.activeChatId,
                   runtime.activeReplyToMessageId,
-                  `Tab ${displayName} failed: ${assistantError}`,
+                  formatRuntimeFailureMessage(runtime, assistantError),
                 ),
               );
             }
@@ -4935,7 +4982,10 @@ export function createTelegramTabManager<TContext>(
       }
       const promptText = buildTelegramTabPromptText(turn);
       if (!promptText) {
-        await sendTurnTextReply(turn, "Tab prompt is empty.");
+        await sendTurnTextReply(
+          turn,
+          isForumNativeMode() ? "Topic prompt is empty." : "Tab prompt is empty.",
+        );
         return true;
       }
       const wasRunning = runtime.record.status === "running";
@@ -4985,8 +5035,8 @@ export function createTelegramTabManager<TContext>(
         await sendTurnTextReply(
           turn,
           wasRunning
-            ? `Queued follow-up in tab ${formatTelegramTabRecordDisplayName(runtime.record)}.`
-            : `Started tab ${formatTelegramTabRecordDisplayName(runtime.record)}.`,
+            ? `Queued follow-up in ${formatRuntimeUserScopeTarget(runtime, turn)}.`
+            : formatRuntimeStartedMessage(runtime, turn),
         );
       } catch (error) {
         deps.debugLogger?.log("telegram.tab.prompt.error", {
@@ -5009,7 +5059,7 @@ export function createTelegramTabManager<TContext>(
         await persist();
         await sendTurnTextReply(
           turn,
-          `Tab ${formatTelegramTabRecordDisplayName(runtime.record)} failed: ${getErrorMessage(error)}`,
+          formatRuntimeFailureMessage(runtime, getErrorMessage(error), turn),
         );
       }
       return true;

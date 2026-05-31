@@ -2158,7 +2158,7 @@ test("Tab manager evicts idle workers when live worker capacity is full", async 
     ),
     true,
   );
-  assert.match(replies.at(-1) ?? "", /Started tab/);
+  assert.equal(replies.at(-1), "Started run in current topic.");
   assert.equal(backends.size, 1);
   const firstBackend = [...backends.values()][0];
   assert.ok(firstBackend);
@@ -2182,10 +2182,98 @@ test("Tab manager evicts idle workers when live worker capacity is full", async 
     ),
     true,
   );
-  assert.match(replies.at(-1) ?? "", /Started tab/);
+  assert.equal(replies.at(-1), "Started run in current topic.");
   assert.equal(backends.size, 2);
   assert.equal(disposed.length, 1);
   assert.equal(firstBackend.disposed, true);
+  await manager.dispose();
+});
+
+test("Tab manager uses current-topic wording for native prompt replies", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-prompt-wording-"));
+  const replies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        native: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.dispatchPrompt(
+    {
+      chatId: -10042,
+      messageThreadId: 77,
+      replyToMessageId: 20,
+      content: [{ type: "text", text: "   " }],
+    },
+    "ctx",
+  );
+  assert.equal(replies.at(-1), "Topic prompt is empty.");
+
+  await manager.dispatchPrompt(
+    {
+      chatId: -10042,
+      messageThreadId: 77,
+      replyToMessageId: 21,
+      content: [{ type: "text", text: "first" }],
+    },
+    "ctx",
+  );
+  assert.equal(replies.at(-1), "Started run in current topic.");
+
+  await manager.dispatchPrompt(
+    {
+      chatId: -10042,
+      messageThreadId: 77,
+      replyToMessageId: 22,
+      content: [{ type: "text", text: "second" }],
+    },
+    "ctx",
+  );
+  assert.equal(replies.at(-1), "Queued follow-up in current topic.");
+
+  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  const backend = backends.get(topicTab);
+  assert.ok(backend);
+  assert.deepEqual(backend.prompts, ["first"]);
+  assert.deepEqual(backend.followUps, ["second"]);
+  backend.emit({ type: "agent_start" });
+  backend.emit({
+    type: "agent_end",
+    messages: [
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "native boom",
+      },
+    ],
+  });
+  assert.equal(replies.at(-1), "Current topic failed: native boom");
   await manager.dispose();
 });
 
@@ -2267,9 +2355,9 @@ test("Tab manager preserves running workers when live worker capacity is full", 
     ),
     true,
   );
-  assert.match(
-    replies.at(-1) ?? "",
-    /^Tab .* failed: Worker capacity reached \(1\)\. Wait for another workspace to finish or restart it later\.$/,
+  assert.equal(
+    replies.at(-1),
+    "Current topic failed: Worker capacity reached (1). Wait for another workspace to finish or restart it later.",
   );
   assert.equal(backends.size, 1);
   assert.equal(disposed.length, 0);

@@ -956,11 +956,12 @@ Implemented:
 
 - In `topicBinding.native` mode, `/tab` is hidden from the visible Bot Commands menu registered by `/start`.
 - In `topicBinding.native` mode, `/start` help omits `/tab` and uses current-topic wording for scoped controls such as `/compact`, `/new`, `/session`, `/abort`, and `/stop`.
+- In `topicBinding.native` mode, prompt start/follow-up/failure/empty-prompt replies use `current topic` / `current workspace` wording instead of exposing internal tab names.
 - `/tab` remains routable as a hidden operator/debug dashboard; this preserves diagnostics and avoids removing emergency tooling.
 
 Remaining tasks:
 
-- Continue replacing user-facing wording where it appears in normal topic flows:
+- Continue replacing user-facing wording where it appears in less common topic flows:
 
   ```text
   tab -> topic/workspace
