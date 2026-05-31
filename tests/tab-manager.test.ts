@@ -2712,6 +2712,7 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
 
   await manager.handleCommand("", 1, 12, "ctx");
   assert.match(dashboardTexts.at(-1) ?? "", /^Forum topics 3\/10/);
+  assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10 hot\n/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /tab:switch:/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /tab:close/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /Manage 🗑/);
@@ -2732,6 +2733,7 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
   };
   assert.equal(saved.activeTab, "B");
   assert.match(interactiveEdits.at(-1) ?? "", /^plain:Forum topics 3\/10/);
+  assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10 hot\n/);
 
   await manager.handleCallbackQuery(
     {
@@ -2818,6 +2820,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   await manager.handleCommand("", 1, 12, "ctx");
 
   assert.deepEqual(interactiveSends, ["plain:Tabs 3/10:General|A"]);
+  assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10 hot\n/);
   assert.match(dashboardTexts.at(-1) ?? "", /○ General · idle · \d+s · 0msg · unset/);
   assert.match(dashboardTexts.at(-1) ?? "", /\n  ↳ No messages yet\./);
   assert.doesNotMatch(dashboardTexts.at(-1) ?? "", /opencode\//);

@@ -1356,6 +1356,7 @@ function formatTelegramTabDashboardSummary(
   visibleTabs?: readonly TelegramTabRecord[],
   filterTrace: readonly TelegramTabFilterTraceItem[] = [],
   forumNativeMode = false,
+  workerCapacity?: { hot: number; max: number },
 ): string {
   const allTabs = getSortedTelegramTabRecords(state);
   const tabs = mode === "open" && visibleTabs ? [...visibleTabs] : allTabs;
@@ -1379,6 +1380,11 @@ function formatTelegramTabDashboardSummary(
     filterSummary
       ? `${title} ${tabs.length}/${allTabs.length} filtered (${allTabs.length}/${maxTabs} total)`
       : `${title} ${allTabs.length}/${maxTabs}`,
+  ];
+  if (workerCapacity) {
+    lines.push(`Workers: ${workerCapacity.hot}/${workerCapacity.max} hot`);
+  }
+  lines.push(
     active
       ? [
           `${currentLabel}: ${formatTelegramTabRecordDisplayName(active)}`,
@@ -1387,7 +1393,7 @@ function formatTelegramTabDashboardSummary(
           formatTelegramTabDashboardName(active),
         ].join(" · ")
       : `${currentLabel}: ${formatTelegramTabDisplayName(state.activeTab)}`,
-  ];
+  );
   if (active?.currentThinkingLevel) {
     lines.push(`Thinking: ${active.currentThinkingLevel}`);
   }
@@ -3384,6 +3390,7 @@ export function createTelegramTabManager<TContext>(
         visibleTabs,
         filterResult.trace,
         forumNativeMode,
+        { hot: getHotWorkerCount(), max: getConfiguredMaxWorkers() },
       ),
       "plain",
       buildTelegramTabDashboardReplyMarkup(
@@ -3437,6 +3444,7 @@ export function createTelegramTabManager<TContext>(
         undefined,
         [],
         forumNativeMode,
+        { hot: getHotWorkerCount(), max: getConfiguredMaxWorkers() },
       ),
       "plain",
       buildTelegramTabDashboardReplyMarkup(

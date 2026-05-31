@@ -1019,9 +1019,12 @@ recent Telegram logs: no error/warn/rate/backoff/drop/worker-capacity/evict anom
 
 Remaining future performance/scalability/UX work:
 
-- Add richer dashboard visibility for hot/evicted worker state.
-- Show worker capacity in `/tab` dashboard, e.g. `Workers: hot/maxWorkers`.
+- Add richer dashboard visibility for evicted worker state if needed.
 - Tune eviction policy beyond oldest `lastUsedAt` if needed.
+
+Follow-up implemented after live verification:
+
+- `/tab` dashboard now shows hot worker capacity as `Workers: hot/maxWorkers hot`.
 
 ### Phase 7 — Internal `default -> general` migration
 
