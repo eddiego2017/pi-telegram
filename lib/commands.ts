@@ -8,6 +8,7 @@ import { unlink } from "node:fs/promises";
 
 import { pairTelegramUserIfNeeded } from "./config.ts";
 import {
+  getAmbientTelegramThreadContext,
   getTelegramForumThreadMessageThreadId,
   normalizeTelegramForumThread,
 } from "./thread-context.ts";
@@ -208,7 +209,62 @@ export function getTelegramBotCommands(options: {
   forumNativeMode?: boolean;
 } = {}): readonly TelegramBotCommandDefinition[] {
   if (!options.forumNativeMode) return TELEGRAM_BOT_COMMANDS;
-  return TELEGRAM_BOT_COMMANDS.filter((command) => command.command !== "tab");
+  return TELEGRAM_BOT_COMMANDS.filter((command) => command.command !== "tab").map(
+    (command) => {
+      switch (command.command) {
+        case "compact":
+          return {
+            ...command,
+            description: formatTelegramBotCommandDescription(
+              "compact",
+              "Compact current topic",
+            ),
+          };
+        case "new":
+          return {
+            ...command,
+            description: formatTelegramBotCommandDescription(
+              "new",
+              "Start a new session in this topic",
+            ),
+          };
+        case "clone":
+          return {
+            ...command,
+            description: formatTelegramBotCommandDescription(
+              "clone",
+              "Clone current topic session",
+            ),
+          };
+        case "session":
+          return {
+            ...command,
+            description: formatTelegramBotCommandDescription(
+              "session",
+              "Show current topic session",
+            ),
+          };
+        case "abort":
+          return {
+            ...command,
+            description: formatTelegramBotCommandDescription(
+              "abort",
+              "Abort current topic",
+            ),
+          };
+        case "stop":
+          return {
+            ...command,
+            description: formatTelegramBotCommandDescription(
+              "stop",
+              "Abort current topic & Clear queue",
+            ),
+          };
+        default:
+          return command;
+      }
+    },
+  );
 }
 
 export interface TelegramBotCommandRegistrationDeps {
@@ -636,6 +692,11 @@ export interface TelegramRuntimeEventRecorderPort {
   ) => void;
 }
 
+export interface TelegramScopedCommandTextOptions {
+  forumNativeMode?: boolean;
+  scope?: "topic" | "workspace";
+}
+
 export interface TelegramCompactCommandDeps extends TelegramRuntimeEventRecorderPort {
   isIdle: () => boolean;
   hasPendingMessages: () => boolean;
@@ -668,6 +729,7 @@ export interface TelegramCompactCommandDeps extends TelegramRuntimeEventRecorder
 export interface TelegramNewSessionCommandDeps<TContext>
   extends TelegramRuntimeEventRecorderPort {
   ctx: TContext;
+  textOptions?: TelegramScopedCommandTextOptions;
   isIdle: () => boolean;
   hasPendingMessages: () => boolean;
   hasActiveTelegramTurn: () => boolean;
@@ -685,6 +747,7 @@ export interface TelegramNewSessionCommandDeps<TContext>
  */
 export interface TelegramCloneSessionCommandDeps
   extends TelegramRuntimeEventRecorderPort {
+  textOptions?: TelegramScopedCommandTextOptions;
   isIdle: () => boolean;
   hasPendingMessages: () => boolean;
   hasActiveTelegramTurn: () => boolean;
@@ -1118,7 +1181,7 @@ export const TELEGRAM_FORUM_NATIVE_APP_MENU_INTRO_HTML = [
   `${formatTelegramCommandEmojiPrefix("compact")}/compact — Compact current topic`,
   `${formatTelegramCommandEmojiPrefix("reload")}/reload — Reload π runtime`,
   `${formatTelegramCommandEmojiPrefix("new")}/new — Start a new session in this topic`,
-  `${formatTelegramCommandEmojiPrefix("clone")}/clone — Clone current session at current position`,
+  `${formatTelegramCommandEmojiPrefix("clone")}/clone — Clone current topic session at current position`,
   `${formatTelegramCommandEmojiPrefix("resume")}/resume — Resume/manage previous sessions`,
   `${formatTelegramCommandEmojiPrefix("session")}/session — Show current topic session`,
   `${formatTelegramCommandEmojiPrefix("tree")}/tree — Rewind current session tree`,
@@ -1178,6 +1241,106 @@ export function createTelegramAppMenuHtmlBuilder<TContext>(deps: {
 
 function getTelegramCommandErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function getTelegramScopedCommandScope(
+  options: TelegramScopedCommandTextOptions | undefined,
+): "topic" | "workspace" | undefined {
+  if (!options?.forumNativeMode) return undefined;
+  if (options.scope) return options.scope;
+  const ambientThread = getAmbientTelegramThreadContext();
+  if (
+    ambientThread?.messageThreadId !== undefined ||
+    (typeof ambientThread?.chatId === "number" && ambientThread.chatId < 0)
+  ) {
+    return "topic";
+  }
+  return "workspace";
+}
+
+function getTelegramScopedCommandTarget(
+  options: TelegramScopedCommandTextOptions | undefined,
+): string | undefined {
+  const scope = getTelegramScopedCommandScope(options);
+  return scope ? `current ${scope}` : undefined;
+}
+
+function getTelegramScopedSessionTarget(
+  options: TelegramScopedCommandTextOptions | undefined,
+): string {
+  const target = getTelegramScopedCommandTarget(options);
+  return target ? `${target} session` : "session";
+}
+
+function getTelegramScopedSessionTargetTitle(
+  options: TelegramScopedCommandTextOptions | undefined,
+): string {
+  const target = getTelegramScopedSessionTarget(options);
+  return `${target.charAt(0).toUpperCase()}${target.slice(1)}`;
+}
+
+function getTelegramScopedNewSessionBusyMessage(
+  options: TelegramScopedCommandTextOptions | undefined,
+): string {
+  const target = getTelegramScopedCommandTarget(options);
+  if (target) {
+    return `Cannot start a new session in ${target} while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.`;
+  }
+  return "Cannot start a new session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.";
+}
+
+function getTelegramScopedNewSessionStartedMessage(
+  options: TelegramScopedCommandTextOptions | undefined,
+): string {
+  return getTelegramScopedCommandScope(options)
+    ? `${getTelegramScopedSessionTargetTitle(options)} started.`
+    : "New session started.";
+}
+
+function getTelegramScopedNewSessionCancelledMessage(
+  options: TelegramScopedCommandTextOptions | undefined,
+): string {
+  return getTelegramScopedCommandScope(options)
+    ? `${getTelegramScopedSessionTargetTitle(options)} cancelled.`
+    : "New session cancelled.";
+}
+
+function getTelegramScopedNewSessionFailedMessage(
+  options: TelegramScopedCommandTextOptions | undefined,
+  errorMessage: string,
+): string {
+  return getTelegramScopedCommandScope(options)
+    ? `${getTelegramScopedSessionTargetTitle(options)} failed: ${errorMessage}`
+    : `New session failed: ${errorMessage}`;
+}
+
+function getTelegramScopedCloneSessionBusyMessage(
+  options: TelegramScopedCommandTextOptions | undefined,
+): string {
+  return `Cannot clone the ${getTelegramScopedSessionTarget(options)} while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.`;
+}
+
+function getTelegramScopedCloneSessionSuccessMessage(
+  options: TelegramScopedCommandTextOptions | undefined,
+): string {
+  return getTelegramScopedCommandScope(options)
+    ? `Cloned ${getTelegramScopedSessionTarget(options)}.`
+    : "Cloned to new session.";
+}
+
+function getTelegramScopedCloneSessionFailureMessage(
+  options: TelegramScopedCommandTextOptions | undefined,
+  errorMessage: string,
+): string {
+  return getTelegramScopedCommandScope(options)
+    ? `Cloning ${getTelegramScopedSessionTarget(options)} failed: ${errorMessage}`
+    : `Clone failed: ${errorMessage}`;
+}
+
+function getTelegramScopedCommandTextOptions(
+  forumNativeMode: boolean,
+): TelegramScopedCommandTextOptions {
+  return { forumNativeMode };
 }
 
 export function parseTelegramCommand(
@@ -1432,21 +1595,27 @@ export async function handleTelegramNewSessionCommand<TContext>(
     deps.isCompactionInProgress()
   ) {
     await deps.sendTextReply(
-      "Cannot start a new session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
+      getTelegramScopedNewSessionBusyMessage(deps.textOptions),
     );
     return;
   }
   try {
     const started = await deps.injectNewSession(deps.ctx);
     if (!started) {
-      await deps.sendTextReply("New session cancelled.");
+      await deps.sendTextReply(
+        getTelegramScopedNewSessionCancelledMessage(deps.textOptions),
+      );
       return;
     }
-    await deps.sendTextReply("New session started.");
+    await deps.sendTextReply(
+      getTelegramScopedNewSessionStartedMessage(deps.textOptions),
+    );
   } catch (error) {
     deps.recordRuntimeEvent?.("new_session", error);
     const errorMessage = error instanceof Error ? error.message : String(error);
-    await deps.sendTextReply(`New session failed: ${errorMessage}`);
+    await deps.sendTextReply(
+      getTelegramScopedNewSessionFailedMessage(deps.textOptions, errorMessage),
+    );
   }
 }
 
@@ -1462,17 +1631,21 @@ export async function handleTelegramCloneSessionCommand(
     deps.isCompactionInProgress()
   ) {
     await deps.sendTextReply(
-      "Cannot clone the session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
+      getTelegramScopedCloneSessionBusyMessage(deps.textOptions),
     );
     return;
   }
   try {
     await deps.injectClone();
-    await deps.sendTextReply("Cloned to new session.");
+    await deps.sendTextReply(
+      getTelegramScopedCloneSessionSuccessMessage(deps.textOptions),
+    );
   } catch (error) {
     deps.recordRuntimeEvent?.("clone_session", error);
     const errorMessage = error instanceof Error ? error.message : String(error);
-    await deps.sendTextReply(`Clone failed: ${errorMessage}`);
+    await deps.sendTextReply(
+      getTelegramScopedCloneSessionFailureMessage(deps.textOptions, errorMessage),
+    );
   }
 }
 
@@ -1901,6 +2074,8 @@ async function handleTelegramCommandRuntime<
 ): Promise<boolean> {
   const sendReplyFor = (nextMessage: TMessage) => (text: string) =>
     deps.sendTextReply(nextMessage, text);
+  const getTextOptions = () =>
+    getTelegramScopedCommandTextOptions(deps.isForumNativeMode?.() ?? false);
   const updateStatusFor = (commandCtx: TContext) => () =>
     deps.updateStatus(commandCtx);
   return executeTelegramCommandAction(
@@ -1985,6 +2160,7 @@ async function handleTelegramCommandRuntime<
           isCompactionInProgress: deps.isCompactionInProgress,
           injectNewSession: deps.injectNewSession,
           sendTextReply: sendReplyFor(nextMessage),
+          textOptions: getTextOptions(),
           recordRuntimeEvent: deps.recordRuntimeEvent,
         });
       },
@@ -1998,6 +2174,7 @@ async function handleTelegramCommandRuntime<
           isCompactionInProgress: deps.isCompactionInProgress,
           injectClone: deps.injectClone,
           sendTextReply: sendReplyFor(nextMessage),
+          textOptions: getTextOptions(),
           recordRuntimeEvent: deps.recordRuntimeEvent,
         });
       },

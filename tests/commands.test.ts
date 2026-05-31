@@ -47,6 +47,7 @@ import {
   TELEGRAM_RESERVED_COMMAND_NAMES,
 } from "../lib/commands.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "../lib/pi.ts";
+import { runWithTelegramThreadContext } from "../lib/thread-context.ts";
 
 type RegisteredBridgeCommand = {
   handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
@@ -141,7 +142,32 @@ test("Command helpers expose Telegram bot command definitions", () => {
   assert.deepEqual(TELEGRAM_BOT_COMMANDS, expectedBuiltins);
   assert.deepEqual(
     getTelegramBotCommands({ forumNativeMode: true }),
-    expectedBuiltins.filter((command) => command.command !== "tab"),
+    expectedBuiltins
+      .filter((command) => command.command !== "tab")
+      .map((command) => {
+        switch (command.command) {
+          case "compact":
+            return { ...command, description: "🗜 Compact current topic" };
+          case "new":
+            return {
+              ...command,
+              description: "🆕 Start a new session in this topic",
+            };
+          case "clone":
+            return { ...command, description: "📑 Clone current topic session" };
+          case "session":
+            return { ...command, description: "🧭 Show current topic session" };
+          case "abort":
+            return { ...command, description: "⏹️ Abort current topic" };
+          case "stop":
+            return {
+              ...command,
+              description: "🟥 Abort current topic & Clear queue",
+            };
+          default:
+            return command;
+        }
+      }),
   );
 });
 
@@ -1292,6 +1318,80 @@ test("Command handler target runtime binds command targets into command handling
   ]);
 });
 
+test("Command runtime routes forum-native session commands with topic wording", async () => {
+  const events: string[] = [];
+  const message = { chat: { id: 42 }, message_id: 99, from: { id: 7 } };
+  const handleCommand = createTelegramCommandHandler({
+    hasAbortHandler: () => false,
+    clearPendingModelSwitch: () => undefined,
+    hasQueuedTelegramItems: () => false,
+    clearQueuedTelegramItems: () => 0,
+    setPreserveQueuedTurnsAsHistory: () => undefined,
+    abortCurrentTurn: () => undefined,
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    isCompactionInProgress: () => false,
+    setCompactionInProgress: () => undefined,
+    updateStatus: () => undefined,
+    dispatchNextQueuedTelegramTurn: () => undefined,
+    enqueueContinueTurn: async () => undefined,
+    compact: () => undefined,
+    queueReloadRuntimeCommand: () => undefined,
+    injectNewSession: async () => {
+      events.push("inject-new");
+      return true;
+    },
+    injectClone: async () => {
+      events.push("inject-clone");
+    },
+    enqueueControlItem: () => undefined,
+    showStatus: async () => undefined,
+    openModelMenu: async () => undefined,
+    listAvailableModels: () => [],
+    isModelSwitchAllowed: () => true,
+    selectLlmModel: async () => true,
+    openThinkingMenu: async () => undefined,
+    openQueueMenu: async () => undefined,
+    openResumeMenu: async () => undefined,
+    openSessionMenu: async () => undefined,
+    openTreeMenu: async () => undefined,
+    openDumpMenu: async () => undefined,
+    getSessionName: () => undefined,
+    setSessionName: () => undefined,
+    getAllowedUserId: () => 7,
+    setAllowedUserId: () => undefined,
+    registerBotCommands: async () => undefined,
+    isForumNativeMode: () => true,
+    persistConfig: async () => undefined,
+    sendTextReply: async (_message, text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
+  assert.equal(await handleCommand("new", "", message, {}), true);
+  assert.equal(await handleCommand("clone", "", message, {}), true);
+  await runWithTelegramThreadContext(
+    { chatId: -10042, messageThreadId: 77 },
+    async () => {
+      assert.equal(await handleCommand("new", "", message, {}), true);
+      assert.equal(await handleCommand("clone", "", message, {}), true);
+    },
+  );
+
+  assert.deepEqual(events, [
+    "inject-new",
+    "reply:Current workspace session started.",
+    "inject-clone",
+    "reply:Cloned current workspace session.",
+    "inject-new",
+    "reply:Current topic session started.",
+    "inject-clone",
+    "reply:Cloned current topic session.",
+  ]);
+});
+
 test("Command runtime routes commands through runtime ports", async () => {
   const events: string[] = [];
   const message = { chat: { id: 42 }, message_id: 99, from: { id: 7 } };
@@ -1459,6 +1559,8 @@ test("Command runtime routes commands through runtime ports", async () => {
     await handleCommand("reload", "", message, { idle: true }),
     true,
   );
+  assert.equal(await handleCommand("new", "", message, { idle: true }), true);
+  assert.equal(await handleCommand("clone", "", message, { idle: true }), true);
   assert.equal(
     await handleCommand("tree", "", message, { idle: true }),
     true,
@@ -1505,6 +1607,10 @@ test("Command runtime routes commands through runtime ports", async () => {
     "reply:99:Compaction completed.",
     "reply:99:Reload queued.",
     "reload:queue",
+    "inject-new",
+    "reply:99:New session started.",
+    "inject-clone",
+    "reply:99:Cloned to new session.",
     "tree:42",
     "session-name:mobile task",
     "status",
@@ -1976,6 +2082,72 @@ test("Command helpers guard and complete /new session flow", async () => {
     },
   });
 
+  // Forum-native wording
+  await handleTelegramNewSessionCommand({
+    ctx: "ctx",
+    textOptions: { forumNativeMode: true, scope: "topic" },
+    isIdle: () => false,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectNewSession: async () => {
+      events.push("unexpected:inject");
+      return true;
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+  await handleTelegramNewSessionCommand({
+    ctx: "ctx",
+    textOptions: { forumNativeMode: true, scope: "topic" },
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectNewSession: async () => {
+      events.push("inject-topic");
+      return true;
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+  await handleTelegramNewSessionCommand({
+    ctx: "ctx",
+    textOptions: { forumNativeMode: true, scope: "topic" },
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectNewSession: async () => false,
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+  await handleTelegramNewSessionCommand({
+    ctx: "ctx",
+    textOptions: { forumNativeMode: true, scope: "topic" },
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectNewSession: async () => {
+      throw new Error("tmux not running");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
   // Injection failure
   await handleTelegramNewSessionCommand({
     ctx: "ctx",
@@ -2003,6 +2175,11 @@ test("Command helpers guard and complete /new session flow", async () => {
     "inject",
     "reply:New session started.",
     "reply:New session cancelled.",
+    "reply:Cannot start a new session in current topic while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
+    "inject-topic",
+    "reply:Current topic session started.",
+    "reply:Current topic session cancelled.",
+    "reply:Current topic session failed: tmux not running",
     "event:new_session:tmux not running",
     "reply:New session failed: tmux not running",
   ]);
@@ -2059,6 +2236,53 @@ test("Command helpers guard and complete /clone session flow", async () => {
     },
   });
 
+  // Forum-native wording
+  await handleTelegramCloneSessionCommand({
+    textOptions: { forumNativeMode: true, scope: "topic" },
+    isIdle: () => false,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectClone: async () => {
+      events.push("unexpected:inject");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+  await handleTelegramCloneSessionCommand({
+    textOptions: { forumNativeMode: true, scope: "topic" },
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectClone: async () => {
+      events.push("inject-topic");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+  await handleTelegramCloneSessionCommand({
+    textOptions: { forumNativeMode: true, scope: "topic" },
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    hasActiveTelegramTurn: () => false,
+    hasDispatchPending: () => false,
+    hasQueuedTelegramItems: () => false,
+    isCompactionInProgress: () => false,
+    injectClone: async () => {
+      throw new Error("tmux not running");
+    },
+    sendTextReply: async (text) => {
+      events.push(`reply:${text}`);
+    },
+  });
+
   // Injection failure
   await handleTelegramCloneSessionCommand({
     isIdle: () => true,
@@ -2084,6 +2308,10 @@ test("Command helpers guard and complete /clone session flow", async () => {
     "reply:Cannot clone the session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
     "inject",
     "reply:Cloned to new session.",
+    "reply:Cannot clone the current topic session while π or the Telegram queue is busy. Wait for queued turns to finish or send /stop first.",
+    "inject-topic",
+    "reply:Cloned current topic session.",
+    "reply:Cloning current topic session failed: tmux not running",
     "event:clone_session:tmux not running",
     "reply:Clone failed: tmux not running",
   ]);
