@@ -623,6 +623,16 @@ export function createTelegramInboundRouteRuntime<
           );
         }
       : undefined,
+    handleTopicCommand: deps.tabManager?.handleTopicCommand
+      ? async (message, args, ctx) => {
+          await deps.tabManager?.handleTopicCommand?.(
+            args,
+            message.chat.id,
+            message.message_id,
+            ctx,
+          );
+        }
+      : undefined,
     getAllowedUserId: deps.configStore.getAllowedUserId,
     setAllowedUserId: deps.configStore.setAllowedUserId,
     setMyCommands: deps.setMyCommands,

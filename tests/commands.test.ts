@@ -98,6 +98,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.dump, "🧾");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.reload, "🔄");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.tab, "🗂️");
+  assert.deepEqual(TELEGRAM_COMMAND_EMOJI.topic, "🧵");
   assert.equal(formatTelegramCommandEmojiPrefix("model"), "🤖 ");
   const expectedBuiltins = [
     {
@@ -706,6 +707,11 @@ test("Command helpers build command actions", () => {
     args: "new A",
     executionMode: "immediate",
   });
+  assert.deepEqual(buildTelegramCommandAction("topic", "orphans"), {
+    kind: "topic",
+    args: "orphans",
+    executionMode: "immediate",
+  });
   assert.deepEqual(Object.keys(TELEGRAM_COMMAND_ACTIONS), [
     ...TELEGRAM_RESERVED_COMMAND_NAMES,
   ]);
@@ -735,6 +741,7 @@ test("Command execution mode contract keeps Telegram controls immediate", () => 
     ["session", "immediate"],
     ["dump", "immediate"],
     ["tab", "immediate"],
+    ["topic", "immediate"],
     ["unknown", "ignored"],
     [undefined, "ignored"],
   ];
@@ -1180,6 +1187,9 @@ test("Command handler target runtime binds command targets into command handling
     handleTabCommand: async (_message, args, ctx) => {
       calls.push(`tab:${args}:${ctx}`);
     },
+    handleTopicCommand: async (_message, args, ctx) => {
+      calls.push(`topic:${args}:${ctx}`);
+    },
     openResumeMenu: async () => {},
     openSessionMenu: async () => {},
     getAllowedUserId: () => undefined,
@@ -1210,6 +1220,15 @@ test("Command handler target runtime binds command targets into command handling
   );
   assert.equal(
     await handleCommand(
+      "topic",
+      "orphans",
+      { chat: { id: 7 }, message_id: 11 },
+      "ctx",
+    ),
+    true,
+  );
+  assert.equal(
+    await handleCommand(
       "abort",
       "",
       { chat: { id: 7 }, message_id: 11 },
@@ -1229,6 +1248,7 @@ test("Command handler target runtime binds command targets into command handling
   assert.deepEqual(calls, [
     "show:ctx",
     "tab:new A:ctx",
+    "topic:orphans:ctx",
     "tab-abort:ctx",
     "clear-switch",
     "preserve:true",
@@ -1719,6 +1739,9 @@ test("Command helpers execute command actions through provided handlers", async 
     handleTab: async (_message: unknown, args: string) => {
       events.push(`tab:${args}`);
     },
+    handleTopic: async (_message: unknown, args: string) => {
+      events.push(`topic:${args}`);
+    },
     handleThinking: async () => {
       events.push("thinking");
     },
@@ -1831,6 +1854,15 @@ test("Command helpers execute command actions through provided handlers", async 
     ),
     true,
   );
+  assert.equal(
+    await executeTelegramCommandAction(
+      { kind: "topic", args: "orphans", executionMode: "immediate" },
+      {},
+      {},
+      deps,
+    ),
+    true,
+  );
   assert.deepEqual(events, [
     "stop",
     "help:start",
@@ -1839,6 +1871,7 @@ test("Command helpers execute command actions through provided handlers", async 
     "resume:apple cat",
     "dump:20",
     "tab:new A",
+    "topic:orphans",
   ]);
 });
 

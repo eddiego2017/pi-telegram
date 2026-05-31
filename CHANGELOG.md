@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `[Forum Topics]` Added hidden `/topic orphans` / `/topic cleanup` repair diagnostics. `/topic orphans` reports proven topic orphans and suspected cold topic records; `/topic cleanup` is diagnostic-only until missing-topic Bot API failures are wired into conservative cleanup.
 - `[Concurrent Tabs]` `/tab` dashboard now shows hot worker capacity as `Workers: hot/maxWorkers hot` and marks each row as `worker hot` or `no worker`, making worker-pool headroom and evicted/cold workspaces visible alongside tab/topic counts.
 - `[Forum Topics]` Added `concurrentTabs.maxWorkers` as the live worker cap, separate from durable workspace/topic records. Forum service lifecycle can keep recording topics up to `maxTabs`; when starting another worker would exceed `maxWorkers`, the tab manager evicts the oldest idle hot worker, but never auto-evicts running/starting workers.
 - `[Telegram API]` Added shared outbound delivery limiting/backoff for Bot API sends/edits/uploads/deletes. The runtime now serializes global and per-group delivery, applies Telegram `retry_after` backoff across outbound calls, drops stale typing actions and stream preview edits/sends while limited, and exposes env knobs for global/group rates plus droppable chat-action/preview behavior.

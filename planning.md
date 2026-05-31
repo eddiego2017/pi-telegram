@@ -923,26 +923,24 @@ git diff --check: pass
 
 ### Phase 4 — Level 1 orphan cleanup and `/topic` repair commands
 
-Level 1 cleanup:
+Status: initial repair command shell implemented; Bot API orphan detection/cleanup still pending.
+
+Implemented:
+
+- `/topic orphans` hidden diagnostic command lists:
+  - proven topic orphans currently inferred from topic-bound records in `error` state with `lastError`,
+  - suspected cold topic records with no hot worker.
+- `/topic cleanup` is wired but diagnostic-only until clear Bot API missing-topic failures are recorded as proven orphans.
+- `/topic` is intentionally not in the visible Bot Commands menu and does not create, switch, or close topics.
+
+Remaining Level 1 cleanup:
 
 - Detect clear topic/thread-missing errors from Bot API operations.
 - Remove or mark local topic record as orphan.
 - Dispose worker if any.
 - Preserve session JSONL.
 - Record runtime/debug event.
-
-Repair commands:
-
-```text
-/topic orphans
-/topic cleanup
-```
-
-Initial scope:
-
-- show suspected orphan records,
-- clean records proven orphan by previous Bot API failures,
-- do not attempt full Telegram topic list reconciliation.
+- Let `/topic cleanup` clean only records proven orphan by previous Bot API failures.
 
 No MTProto reconciler in this phase.
 

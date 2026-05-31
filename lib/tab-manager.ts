@@ -399,6 +399,12 @@ export interface TelegramTabManager<TContext> {
     replyToMessageId: number,
     ctx: TContext,
   ) => Promise<boolean>;
+  handleTopicCommand?: (
+    args: string,
+    chatId: number,
+    replyToMessageId: number,
+    ctx: TContext,
+  ) => Promise<boolean>;
   handleCallbackQuery: (
     query: TelegramTabCallbackQuery,
     ctx: TContext,
@@ -1311,6 +1317,34 @@ function formatTelegramTabDashboardName(record: TelegramTabRecord): string {
 function formatTelegramTabDashboardLastMessage(record: TelegramTabRecord): string {
   const text = (record.lastMessageText ?? record.lastAssistantText)?.replace(/\s+/g, " ").trim();
   return text ? truncateTelegramTabText(text, 96) : "No messages yet.";
+}
+
+function formatTelegramTabOrphanDetail(record: TelegramTabRecord): string {
+  const details = [
+    formatTelegramTabRecordDisplayName(record),
+    record.source?.kind === "telegram-topic"
+      ? `chat ${record.source.chatId}`
+      : undefined,
+    record.source?.kind === "telegram-topic" &&
+      record.source.messageThreadId !== undefined
+      ? `topic ${record.source.messageThreadId}`
+      : undefined,
+    record.source?.kind === "telegram-topic" && record.source.topicTitle
+      ? `title ${record.source.topicTitle}`
+      : undefined,
+    record.sessionName ? `session ${record.sessionName}` : undefined,
+  ].filter((part): part is string => Boolean(part));
+  return `- ${details.join(" · ")}`;
+}
+
+function formatTelegramTopicRepairUsage(): string {
+  return [
+    "Usage:",
+    "/topic orphans",
+    "/topic cleanup",
+    "",
+    "Level 1 cleanup records only proven topic orphans from Bot API failures.",
+  ].join("\n");
 }
 
 type TelegramTabDashboardWorkerState = "hot" | "cold";
@@ -3841,6 +3875,61 @@ export function createTelegramTabManager<TContext>(
         );
       }
     },
+    topicOrphans: async (
+      tabState: TelegramTabsState,
+      chatId: number,
+      replyToMessageId: number,
+    ) => {
+      const provenOrphans: TelegramTabRecord[] = [];
+      const suspected: TelegramTabRecord[] = [];
+      for (const record of getSortedTelegramTabRecords(tabState)) {
+        if (record.source?.kind !== "telegram-topic") continue;
+        const runtime = getRuntime(tabState, record.name);
+        if (record.status === "error" && record.lastError) {
+          provenOrphans.push(record);
+        } else if (!hasHotWorker(runtime)) {
+          suspected.push(record);
+        }
+      }
+      await deps.sendTextReply(
+        chatId,
+        replyToMessageId,
+        [
+          "Topic orphan diagnostics:",
+          `Proven orphans: ${provenOrphans.length}`,
+          ...(provenOrphans.length > 0
+            ? provenOrphans.map(formatTelegramTabOrphanDetail)
+            : ["- none"]),
+          "",
+          `Suspected cold topic records: ${suspected.length}`,
+          ...(suspected.length > 0
+            ? suspected.slice(0, 10).map(formatTelegramTabOrphanDetail)
+            : ["- none"]),
+          ...(suspected.length > 10
+            ? [`- ...and ${suspected.length - 10} more`]
+            : []),
+        ].join("\n"),
+      );
+    },
+    topicCleanup: async (
+      tabState: TelegramTabsState,
+      chatId: number,
+      replyToMessageId: number,
+    ) => {
+      const provenOrphans = getSortedTelegramTabRecords(tabState).filter(
+        (record) =>
+          record.source?.kind === "telegram-topic" &&
+          record.status === "error" &&
+          Boolean(record.lastError),
+      );
+      await deps.sendTextReply(
+        chatId,
+        replyToMessageId,
+        provenOrphans.length === 0
+          ? "No proven topic orphans to clean."
+          : "Topic cleanup is diagnostic-only until Bot API orphan detection is wired.",
+      );
+    },
   };
   return {
     isEnabled,
@@ -4344,6 +4433,24 @@ export function createTelegramTabManager<TContext>(
           await deps.sendTextReply(chatId, replyToMessageId, formatTelegramTabUsage());
           return true;
       }
+    },
+    handleTopicCommand: async (args, chatId, replyToMessageId, ctx) => {
+      if (!isEnabled()) {
+        await replyDisabled(chatId, replyToMessageId);
+        return true;
+      }
+      const tabState = await ensureState(deps.getCwd(ctx));
+      const cleanedArgs = args.trim().toLowerCase();
+      if (!cleanedArgs || cleanedArgs === "orphans") {
+        await commandHandlers.topicOrphans(tabState, chatId, replyToMessageId);
+        return true;
+      }
+      if (cleanedArgs === "cleanup") {
+        await commandHandlers.topicCleanup(tabState, chatId, replyToMessageId);
+        return true;
+      }
+      await deps.sendTextReply(chatId, replyToMessageId, formatTelegramTopicRepairUsage());
+      return true;
     },
     handleCallbackQuery: async (query, ctx) => {
       const data = query.data;

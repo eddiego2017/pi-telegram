@@ -59,6 +59,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   dump: "🧾",
   name: "🏷️",
   tab: "🗂️",
+  topic: "🧵",
   queue: "🔢",
   next: "⏩",
   continue: "▶️",
@@ -173,6 +174,7 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
         "Manage concurrent tabs",
       ),
     },
+
     {
       command: "next",
       description: formatTelegramBotCommandDescription(
@@ -518,6 +520,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "model",
   "llm",
   "tab",
+  "topic",
   "thinking",
   "settings",
   "help",
@@ -560,6 +563,7 @@ export type TelegramCommandAction =
   | { kind: "model"; executionMode: "immediate" }
   | { kind: "llm"; args: string; executionMode: "immediate" }
   | { kind: "tab"; args: string; executionMode: "immediate" }
+  | { kind: "topic"; args: string; executionMode: "immediate" }
   | { kind: "thinking"; executionMode: "immediate" }
   | { kind: "settings"; executionMode: "immediate" }
   | {
@@ -589,6 +593,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
   handleLlm: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleTab?: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
+  handleTopic?: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleThinking: (message: TMessage, ctx: TContext) => Promise<void>;
   handleSettings?: (message: TMessage, ctx: TContext) => Promise<void>;
   handleHelp: (
@@ -1059,6 +1064,11 @@ export interface TelegramCommandRuntimeDeps<
     args: string,
     ctx: TContext,
   ) => Promise<void>;
+  handleTopicCommand?: (
+    message: TMessage,
+    args: string,
+    ctx: TContext,
+  ) => Promise<void>;
   getSessionName: (ctx: TContext) => string | undefined;
   setSessionName: (name: string, ctx: TContext) => void | Promise<void>;
   getAllowedUserId: () => number | undefined;
@@ -1163,6 +1173,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   model: { kind: "model", executionMode: "immediate" },
   llm: { kind: "llm", args: "", executionMode: "immediate" },
   tab: { kind: "tab", args: "", executionMode: "immediate" },
+  topic: { kind: "topic", args: "", executionMode: "immediate" },
   thinking: { kind: "thinking", executionMode: "immediate" },
   settings: { kind: "settings", executionMode: "immediate" },
   help: { kind: "help", commandName: "help", executionMode: "immediate" },
@@ -1182,7 +1193,8 @@ export function buildTelegramCommandAction(
     baseAction.kind === "name" ||
     baseAction.kind === "resume" ||
     baseAction.kind === "dump" ||
-    baseAction.kind === "tab"
+    baseAction.kind === "tab" ||
+    baseAction.kind === "topic"
   ) {
     return { ...baseAction, args: args ?? "" };
   }
@@ -1656,6 +1668,10 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
       if (!deps.handleTab) return false;
       await deps.handleTab(message, action.args, ctx);
       return true;
+    case "topic":
+      if (!deps.handleTopic) return false;
+      await deps.handleTopic(message, action.args, ctx);
+      return true;
     case "thinking":
       await deps.handleThinking(message, ctx);
       return true;
@@ -1762,6 +1778,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     openTreeMenu: commandTargetRuntime.openTreeMenu,
     openDumpMenu: commandTargetRuntime.openDumpMenu,
     handleTabCommand: deps.handleTabCommand,
+    handleTopicCommand: deps.handleTopicCommand,
     getSessionName: deps.getSessionName,
     setSessionName: deps.setSessionName,
     getAllowedUserId: deps.getAllowedUserId,
@@ -2039,6 +2056,11 @@ async function handleTelegramCommandRuntime<
       handleTab: deps.handleTabCommand
         ? async (nextMessage, args, commandCtx) => {
             await deps.handleTabCommand?.(nextMessage, args, commandCtx);
+          }
+        : undefined,
+      handleTopic: deps.handleTopicCommand
+        ? async (nextMessage, args, commandCtx) => {
+            await deps.handleTopicCommand?.(nextMessage, args, commandCtx);
           }
         : undefined,
       handleThinking: async (nextMessage, commandCtx) => {

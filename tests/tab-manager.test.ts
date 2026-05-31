@@ -2657,6 +2657,97 @@ test("Tab manager blocks manual tab lifecycle commands in forum-native mode", as
   await manager.dispose();
 });
 
+test("Tab manager exposes topic orphan repair diagnostics", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-diagnostics-"));
+  const statePath = join(tempDir, "tabs.json");
+  const replies: string[] = [];
+  await writeFile(
+    statePath,
+    JSON.stringify({
+      version: 1,
+      activeTab: TELEGRAM_DEFAULT_TAB_NAME,
+      tabs: {
+        [TELEGRAM_DEFAULT_TAB_NAME]: {
+          name: TELEGRAM_DEFAULT_TAB_NAME,
+          cwd: "/repo",
+          createdAt: 1000,
+          lastUsedAt: 1000,
+          status: "idle",
+        },
+        [normalizeTelegramTopicTabName(-10042, 77)]: {
+          name: normalizeTelegramTopicTabName(-10042, 77),
+          cwd: "/repo",
+          createdAt: 1000,
+          lastUsedAt: 1000,
+          status: "error",
+          lastError: "Bad Request: message thread not found",
+          source: {
+            kind: "telegram-topic",
+            chatId: -10042,
+            messageThreadId: 77,
+            topicTitle: "Deleted Topic",
+          },
+        },
+        [normalizeTelegramTopicTabName(-10042, 88)]: {
+          name: normalizeTelegramTopicTabName(-10042, 88),
+          cwd: "/repo",
+          createdAt: 1000,
+          lastUsedAt: 1000,
+          status: "idle",
+          source: {
+            kind: "telegram-topic",
+            chatId: -10042,
+            messageThreadId: 88,
+            topicTitle: "Cold Topic",
+          },
+        },
+      },
+    }),
+  );
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 10,
+      inactiveNotify: true,
+      workerExtensions: [],
+      topicBinding: {
+        enabled: true,
+        native: true,
+        generalIsDefault: true,
+        autoCreate: true,
+        closeOnTopicClose: true,
+        deleteTopicOnClose: false,
+        trustedChatIds: [],
+      },
+    }),
+    getCwd: () => "/repo",
+    statePath,
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleTopicCommand?.("orphans", 1, 10, "ctx");
+  assert.match(replies.at(-1) ?? "", /^Topic orphan diagnostics:/);
+  assert.match(replies.at(-1) ?? "", /Proven orphans: 1/);
+  assert.match(replies.at(-1) ?? "", /Deleted Topic/);
+  assert.match(replies.at(-1) ?? "", /Suspected cold topic records: 1/);
+  assert.match(replies.at(-1) ?? "", /Cold Topic/);
+
+  await manager.handleTopicCommand?.("cleanup", 1, 11, "ctx");
+  assert.equal(
+    replies.at(-1),
+    "Topic cleanup is diagnostic-only until Bot API orphan detection is wired.",
+  );
+
+  await manager.handleTopicCommand?.("unknown", 1, 12, "ctx");
+  assert.match(replies.at(-1) ?? "", /Usage:\n\/topic orphans\n\/topic cleanup/);
+  await manager.dispose();
+});
+
 test("Tab manager keeps the dashboard read-only in forum-native mode", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-dashboard-"));
   const statePath = join(tempDir, "tabs.json");
