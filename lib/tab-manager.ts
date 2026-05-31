@@ -1838,10 +1838,13 @@ export function createTelegramTabManager<TContext>(
     const displayName = formatTelegramTabDisplayName(tabName);
     return `Tab ${displayName} finished. Use /tab ${displayName} to view latest reply.`;
   };
-  const formatRuntimeBusyMessage = (runtime: RuntimeTab): string => {
-    const forumNativeScope = getForumNativeRuntimeScope(runtime);
+  const formatRuntimeBusyMessage = (
+    runtime: RuntimeTab,
+    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+  ): string => {
+    const forumNativeScope = getForumNativeRuntimeScope(runtime, turn);
     if (forumNativeScope) {
-      return `${formatRuntimeUserScopeTitle(runtime)} is busy. Wait for it to go idle or send /stop first.`;
+      return `${formatRuntimeUserScopeTitle(runtime, turn)} is busy. Wait for it to go idle or send /stop first.`;
     }
     return `Tab ${runtime.record.name} is busy. Wait for it to go idle or send /stop first.`;
   };
@@ -5017,8 +5020,9 @@ export function createTelegramTabManager<TContext>(
       const tabState = await ensureState(deps.getCwd(ctx));
       const runtime = await getRuntimeForPromptTurn(tabState, turn, ctx);
       if (!runtime) return true;
+      let childState: RpcChildSessionState | undefined;
       try {
-        await refreshRuntimeState(runtime);
+        childState = await refreshRuntimeState(runtime);
         await assertNoOpenSessionConflict(tabState, runtime, runtime.record);
       } catch (error) {
         await sendTurnTextReply(turn, getErrorMessage(error));
@@ -5032,7 +5036,13 @@ export function createTelegramTabManager<TContext>(
         );
         return true;
       }
+      const isCompacting = childState?.isCompacting === true;
+      const isStarting = runtime.record.status === "starting";
       const wasRunning = runtime.record.status === "running";
+      if (isStarting || isCompacting) {
+        await sendTurnTextReply(turn, formatRuntimeBusyMessage(runtime, turn));
+        return true;
+      }
       const promptNow = now();
       runtime.activeChatId = turn.chatId;
       runtime.activeMessageThreadId = turn.messageThreadId;

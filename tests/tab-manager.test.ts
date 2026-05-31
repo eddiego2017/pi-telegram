@@ -2372,6 +2372,7 @@ test("Tab manager uses workspace wording for native inactive completion notices"
 
 test("Tab manager uses current-topic wording for native worker lifecycle errors", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-worker-wording-"));
+  const replies: string[] = [];
   const backends = new Map<string, FakeTabBackend>();
   const manager = createTelegramTabManager<string>({
     getConfig: () => ({
@@ -2397,7 +2398,10 @@ test("Tab manager uses current-topic wording for native worker lifecycle errors"
       backends.set(options.tabName, backend);
       return backend;
     },
-    sendTextReply: async () => undefined,
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
   });
 
   await manager.dispatchPrompt(
@@ -2421,6 +2425,21 @@ test("Tab manager uses current-topic wording for native worker lifecycle errors"
         () => manager.compactActive("ctx", { onComplete: () => {}, onError: () => {} }),
         /Current topic is busy\. Wait for it to go idle or send \/stop first\./,
       );
+      backend.setState({ isStreaming: false, isCompacting: true });
+      await manager.dispatchPrompt(
+        {
+          chatId: -10042,
+          messageThreadId: 77,
+          replyToMessageId: 22,
+          content: [{ type: "text", text: "second" }],
+        },
+        "ctx",
+      );
+      assert.equal(
+        replies.at(-1),
+        "Current topic is busy. Wait for it to go idle or send /stop first.",
+      );
+      assert.deepEqual(backend.followUps, []);
       await assert.rejects(
         () => manager.newActiveSession("ctx"),
         /Current topic is busy\. Wait for it to go idle or send \/stop first\./,

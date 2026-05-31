@@ -970,7 +970,7 @@ Implemented:
 
 - In `topicBinding.native` mode, `/tab` is hidden from the visible Bot Commands menu registered by `/start`.
 - In `topicBinding.native` mode, `/start` help omits `/tab` and uses current-topic wording for scoped controls such as `/compact`, `/new`, `/session`, `/abort`, and `/stop`.
-- In `topicBinding.native` mode, prompt start/follow-up/failure/empty-prompt/abort replies and inactive-completion notices use topic/workspace wording instead of exposing internal tab names.
+- In `topicBinding.native` mode, prompt start/follow-up/busy/failure/empty-prompt/abort replies and inactive-completion notices use topic/workspace wording instead of exposing internal tab names.
 - In `topicBinding.native` mode, `/compact`, `/new`, `/clone`, and less-common worker lifecycle errors describe the current topic/workspace session instead of a generic hidden tab-backed session.
 - `/tab` remains routable as a hidden operator/debug dashboard; this preserves diagnostics and avoids removing emergency tooling.
 
