@@ -2087,8 +2087,8 @@ test("Tab manager reports worker API errors instead of replaying stale text", as
   );
 });
 
-test("Tab manager evicts idle workers when live worker capacity is full", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-worker-capacity-"));
+test("Tab manager keeps sticky topic workers when another topic starts", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-sticky-topic-workers-"));
   const replies: string[] = [];
   const disposed: string[] = [];
   const backends = new Map<string, FakeTabBackend>();
@@ -2184,8 +2184,8 @@ test("Tab manager evicts idle workers when live worker capacity is full", async 
   );
   assert.equal(replies.at(-1), "Started run in current topic.");
   assert.equal(backends.size, 2);
-  assert.equal(disposed.length, 1);
-  assert.equal(firstBackend.disposed, true);
+  assert.equal(disposed.length, 0);
+  assert.equal(firstBackend.disposed, false);
   await manager.dispose();
 });
 
@@ -2457,8 +2457,8 @@ test("Tab manager uses current-topic wording for native worker lifecycle errors"
   await manager.dispose();
 });
 
-test("Tab manager preserves running workers when live worker capacity is full", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-worker-capacity-running-"));
+test("Tab manager may stop idle non-native workers when live worker capacity is full", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-worker-capacity-stop-"));
   const replies: string[] = [];
   const disposed: string[] = [];
   const backends = new Map<string, FakeTabBackend>();
@@ -2471,7 +2471,7 @@ test("Tab manager preserves running workers when live worker capacity is full", 
       workerExtensions: [],
       topicBinding: {
         enabled: true,
-        native: true,
+        native: false,
         generalIsDefault: true,
         autoCreate: true,
         closeOnTopicClose: true,
@@ -2523,6 +2523,15 @@ test("Tab manager preserves running workers when live worker capacity is full", 
     ),
     true,
   );
+  const firstBackend = [...backends.values()][0];
+  assert.ok(firstBackend);
+  firstBackend.emit({
+    type: "agent_end",
+    messages: [
+      { role: "assistant", content: [{ type: "text", text: "first answer" }] },
+    ],
+  });
+  firstBackend.setState({ isStreaming: false });
   assert.equal(
     await manager.dispatchPrompt(
       {
@@ -2535,12 +2544,10 @@ test("Tab manager preserves running workers when live worker capacity is full", 
     ),
     true,
   );
-  assert.equal(
-    replies.at(-1),
-    "Current topic failed: Worker capacity reached (1). Wait for another workspace to finish or restart it later.",
-  );
-  assert.equal(backends.size, 1);
-  assert.equal(disposed.length, 0);
+  assert.equal(replies.at(-1), "Started tab tg-o6dmkl-26.");
+  assert.equal(backends.size, 2);
+  assert.equal(disposed.length, 1);
+  assert.equal(firstBackend.disposed, true);
   await manager.dispose();
 });
 
@@ -3014,7 +3021,7 @@ test("Tab manager cleans proven topic orphan records", async () => {
   assert.match(replies.at(-1) ?? "", /Deleted Topic/);
   assert.match(replies.at(-1) ?? "", /proof sendMessage/);
   assert.match(replies.at(-1) ?? "", /Errored topic records: 0/);
-  assert.match(replies.at(-1) ?? "", /Suspected cold topic records: 1/);
+  assert.match(replies.at(-1) ?? "", /Suspected topic records without workers: 1/);
   assert.match(replies.at(-1) ?? "", /Cold Topic/);
 
   await manager.handleTopicCommand?.("cleanup", 1, 11, "ctx");
@@ -3092,9 +3099,9 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
 
   await manager.handleCommand("", 1, 12, "ctx");
   assert.match(dashboardTexts.at(-1) ?? "", /^Forum topics 3\/10/);
-  assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10 hot\n/);
-  assert.match(dashboardTexts.at(-1) ?? "", /○ General · idle · no worker · \d+s · 0msg · unset/);
-  assert.match(dashboardTexts.at(-1) ?? "", /● B · idle · worker hot · \d+s · 0msg · unset/);
+  assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10\n/);
+  assert.match(dashboardTexts.at(-1) ?? "", /○ General · idle · worker not started · \d+s · 0msg · unset/);
+  assert.match(dashboardTexts.at(-1) ?? "", /● B · idle · worker idle · \d+s · 0msg · unset/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /tab:switch:/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /tab:close/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /Manage 🗑/);
@@ -3115,8 +3122,8 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
   };
   assert.equal(saved.activeTab, "B");
   assert.match(interactiveEdits.at(-1) ?? "", /^plain:Forum topics 3\/10/);
-  assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10 hot\n/);
-  assert.match(dashboardTexts.at(-1) ?? "", /○ General · idle · no worker · \d+s · 0msg · unset/);
+  assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10\n/);
+  assert.match(dashboardTexts.at(-1) ?? "", /○ General · idle · worker not started · \d+s · 0msg · unset/);
 
   await manager.handleCallbackQuery(
     {
@@ -3203,9 +3210,9 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   await manager.handleCommand("", 1, 12, "ctx");
 
   assert.deepEqual(interactiveSends, ["plain:Tabs 3/10:General|A"]);
-  assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10 hot\n/);
-  assert.match(dashboardTexts.at(-1) ?? "", /○ General · idle · no worker · \d+s · 0msg · unset/);
-  assert.match(dashboardTexts.at(-1) ?? "", /● B · idle · worker hot · \d+s · 0msg · unset/);
+  assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10\n/);
+  assert.match(dashboardTexts.at(-1) ?? "", /○ General · idle · worker not started · \d+s · 0msg · unset/);
+  assert.match(dashboardTexts.at(-1) ?? "", /● B · idle · worker idle · \d+s · 0msg · unset/);
   assert.match(dashboardTexts.at(-1) ?? "", /\n  ↳ No messages yet\./);
   assert.doesNotMatch(dashboardTexts.at(-1) ?? "", /opencode\//);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /\bRefresh\b/);

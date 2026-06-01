@@ -450,7 +450,7 @@ maxTabs / maxTopics = maximum open topic/workspace records and therefore maximum
 maxWorkers remains a compatibility/internal guard for older configs, but Eddie's forum-native policy is maxWorkers == maxTabs.
 ```
 
-Dashboard wording should eventually describe worker presence as a topic-owned state such as `worker running`, `worker idle`, `not started after reload`, or `error`.
+Dashboard wording describes worker presence as a topic-owned state such as `worker running`, `worker idle`, or `worker not started`.
 
 ## Phase Plan
 
@@ -1038,20 +1038,20 @@ Capacity policy:
 ```text
 maxTabs is the intuitive open topic/workspace cap.
 maxWorkers should equal maxTabs in Eddie's forum-native config.
-maxWorkers remains only a compatibility/internal guard until runtime/docs are simplified.
+maxWorkers remains only a compatibility/internal guard; forum-native runtime uses maxTabs as the effective worker cap.
 If the sticky worker cap is reached, prefer a clear capacity refusal over stopping another open topic's worker.
 ```
 
 Current implementation notes:
 
 - Workers are still launched with `pi --mode rpc --no-extensions`; this remains the safety boundary that prevents workers from loading pi-telegram and starting competing Bot API pollers or `/start` menus.
-- Current code still contains the previous `maxWorkers` capacity guard. Do not build new features around capacity sharing. Future runtime polish should make sticky one-to-one the only forum-native policy.
-- Current dashboard capacity wording came from earlier diagnostics. Future UX polish should rename this to topic-owned states such as `worker idle`, `worker running`, `not started after reload`, or `error`.
+- Forum-native runtime now treats `maxWorkers` as `maxTabs`, so a topic's sticky worker is not stopped just to start another topic.
+- Dashboard wording now uses topic-owned states such as `worker idle`, `worker running`, and `worker not started`.
 
 Validation history kept for reference only:
 
 ```text
-Earlier worker-cap experiments passed tests and live reload validation when maxWorkers == maxTabs, but the product plan for forum-native mode is now sticky one-to-one topic workers.
+Earlier worker-cap experiments passed tests and live reload validation when maxWorkers == maxTabs; forum-native mode is now aligned to sticky one-to-one topic workers.
 ```
 
 ### Phase 7 — Internal `default -> general` migration
@@ -1187,12 +1187,13 @@ npm run pack:check
 git diff --check
 ```
 
-Latest recorded results after Phase 4 live orphan-cleanup validation, Phase 5 final validation, and the Telegram preview fallback fix:
+Latest recorded results after Phase 4 live orphan-cleanup validation, Phase 5 final validation, the Telegram preview fallback fix, and the sticky one-to-one runtime alignment:
 
 ```text
 npm run typecheck: pass
 PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test tests/commands.test.ts tests/tab-manager.test.ts tests/config.test.ts tests/routing.test.ts tests/invariants.test.ts: pass, 132 pass
 PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test tests/replies.test.ts tests/preview.test.ts tests/queue.test.ts tests/api.test.ts tests/tab-manager.test.ts tests/runtime.test.ts: pass, 212 pass
+PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test tests/tab-manager.test.ts tests/config.test.ts: pass, 73 pass
 git diff --check: pass
 live orphan cleanup smoke: pass; proven topic 8419 removed, session JSONL preserved, no-proof records untouched
 live preview ordering smoke after 71d9876 reload: pass; temporary topic 10572 showed Started run -> bash tool preview -> final marker reply, then Close topic removed the local record and Bot API deletion made Telegram return ForumTopicDeleted

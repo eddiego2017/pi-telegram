@@ -1373,13 +1373,15 @@ function formatTelegramTopicRepairUsage(): string {
   ].join("\n");
 }
 
-type TelegramTabDashboardWorkerState = "hot" | "cold";
+type TelegramTabDashboardWorkerState = "running" | "idle" | "not-started";
 
 function formatTelegramTabDashboardWorkerLabel(
   workerState: TelegramTabDashboardWorkerState | undefined,
 ): string | undefined {
   if (!workerState) return undefined;
-  return workerState === "hot" ? "worker hot" : "no worker";
+  if (workerState === "running") return "worker running";
+  if (workerState === "idle") return "worker idle";
+  return "worker not started";
 }
 
 function formatTelegramTabDashboardMeta(
@@ -1427,7 +1429,7 @@ function formatTelegramTabDashboardSummary(
   visibleTabs?: readonly TelegramTabRecord[],
   filterTrace: readonly TelegramTabFilterTraceItem[] = [],
   forumNativeMode = false,
-  workerCapacity?: { hot: number; max: number },
+  workerCapacity?: { live: number; max: number },
   workerStateByTab: Readonly<Record<string, TelegramTabDashboardWorkerState>> = {},
 ): string {
   const allTabs = getSortedTelegramTabRecords(state);
@@ -1454,7 +1456,7 @@ function formatTelegramTabDashboardSummary(
       : `${title} ${allTabs.length}/${maxTabs}`,
   ];
   if (workerCapacity) {
-    lines.push(`Workers: ${workerCapacity.hot}/${workerCapacity.max} hot`);
+    lines.push(`Workers: ${workerCapacity.live}/${workerCapacity.max}`);
   }
   lines.push(
     active
@@ -1895,40 +1897,46 @@ export function createTelegramTabManager<TContext>(
     isForumNativeMode()
       ? `Current workspace did not bind to resumed session ${sessionPath}.`
       : `Tab ${tabName} did not bind to resumed session ${sessionPath}.`;
-  const hasHotWorker = (runtime: RuntimeTab | undefined): boolean =>
+  const hasLiveWorker = (runtime: RuntimeTab | undefined): boolean =>
     Boolean(runtime?.backend);
-  const getHotWorkerCount = (): number =>
-    [...runtimeTabs.values()].filter((runtime) => hasHotWorker(runtime)).length;
+  const getLiveWorkerCount = (): number =>
+    [...runtimeTabs.values()].filter((runtime) => hasLiveWorker(runtime)).length;
   const getConfiguredMaxWorkers = (): number =>
-    deps.getConfig().maxWorkers ?? deps.getConfig().maxTabs;
-  const getIdleWorkerEvictionCandidates = (
+    isForumNativeMode()
+      ? deps.getConfig().maxTabs
+      : deps.getConfig().maxWorkers ?? deps.getConfig().maxTabs;
+  const formatWorkerCapacityReachedMessage = (maxWorkers: number): string =>
+    isForumNativeMode()
+      ? `Worker capacity reached (${maxWorkers}). Close another workspace before starting this one.`
+      : `Worker capacity reached (${maxWorkers}). Wait for another workspace to finish or close one before starting this one.`;
+  const getIdleLiveWorkerStopCandidates = (
     targetRuntime: RuntimeTab,
   ): RuntimeTab[] =>
     [...runtimeTabs.values()]
       .filter(
         (runtime) =>
           runtime !== targetRuntime &&
-          hasHotWorker(runtime) &&
+          hasLiveWorker(runtime) &&
           runtime.closing !== true,
       )
       .sort((a, b) => a.record.lastUsedAt - b.record.lastUsedAt);
-  const evictIdleWorkerForCapacity = async (
+  const stopIdleLiveWorkerForCapacity = async (
     targetRuntime: RuntimeTab,
     maxWorkers: number,
   ): Promise<boolean> => {
     const skipped = new Set<RuntimeTab>();
-    while (getHotWorkerCount() >= maxWorkers) {
-      const candidate = getIdleWorkerEvictionCandidates(targetRuntime).find(
+    while (getLiveWorkerCount() >= maxWorkers) {
+      const candidate = getIdleLiveWorkerStopCandidates(targetRuntime).find(
         (runtime) => !skipped.has(runtime),
       );
       if (!candidate) return false;
       await refreshRuntimeState(candidate);
-      if (!hasHotWorker(candidate)) continue;
+      if (!hasLiveWorker(candidate)) continue;
       if (!canSwitchTelegramTabModel(candidate.record)) {
         skipped.add(candidate);
         continue;
       }
-      deps.debugLogger?.log("telegram.tab.worker.evict", {
+      deps.debugLogger?.log("telegram.tab.worker.capacity.stop", {
         tab: candidate.record.name,
         reason: "worker_capacity",
         maxWorkers,
@@ -1939,13 +1947,13 @@ export function createTelegramTabManager<TContext>(
     return true;
   };
   const ensureWorkerCapacity = async (runtime: RuntimeTab): Promise<void> => {
-    if (hasHotWorker(runtime)) return;
+    if (hasLiveWorker(runtime)) return;
     const maxWorkers = getConfiguredMaxWorkers();
-    if (getHotWorkerCount() < maxWorkers) return;
-    if (await evictIdleWorkerForCapacity(runtime, maxWorkers)) return;
-    throw new Error(
-      `Worker capacity reached (${maxWorkers}). Wait for another workspace to finish or restart it later.`,
-    );
+    if (getLiveWorkerCount() < maxWorkers) return;
+    if (!isForumNativeMode() && await stopIdleLiveWorkerForCapacity(runtime, maxWorkers)) {
+      return;
+    }
+    throw new Error(formatWorkerCapacityReachedMessage(maxWorkers));
   };
   const runInTabThreadContext = <T>(runtime: RuntimeTab, fn: () => T): T => {
     if (runtime.activeChatId === undefined) return fn();
@@ -3546,13 +3554,21 @@ export function createTelegramTabManager<TContext>(
         runtime.unreadEvents,
       ]),
     );
+  const getDashboardWorkerState = (
+    runtime: RuntimeTab | undefined,
+  ): TelegramTabDashboardWorkerState => {
+    if (!hasLiveWorker(runtime)) return "not-started";
+    return runtime?.record.status === "running" || runtime?.record.status === "starting"
+      ? "running"
+      : "idle";
+  };
   const getDashboardWorkerStateByTab = (
     tabState: TelegramTabsState,
   ): Record<string, TelegramTabDashboardWorkerState> =>
     Object.fromEntries(
       Object.keys(tabState.tabs).map((name) => [
         name,
-        hasHotWorker(runtimeTabs.get(name)) ? "hot" : "cold",
+        getDashboardWorkerState(runtimeTabs.get(name)),
       ]),
     );
   const sendForumNativeLifecycleDisabledReply = (
@@ -3604,7 +3620,7 @@ export function createTelegramTabManager<TContext>(
         visibleTabs,
         filterResult.trace,
         forumNativeMode,
-        { hot: getHotWorkerCount(), max: getConfiguredMaxWorkers() },
+        { live: getLiveWorkerCount(), max: getConfiguredMaxWorkers() },
         workerStateByTab,
       ),
       "plain",
@@ -3660,7 +3676,7 @@ export function createTelegramTabManager<TContext>(
         undefined,
         [],
         forumNativeMode,
-        { hot: getHotWorkerCount(), max: getConfiguredMaxWorkers() },
+        { live: getLiveWorkerCount(), max: getConfiguredMaxWorkers() },
         workerStateByTab,
       ),
       "plain",
@@ -4057,7 +4073,7 @@ export function createTelegramTabManager<TContext>(
           provenOrphans.push({ record, proof });
         } else if (record.status === "error" && record.lastError) {
           errored.push(record);
-        } else if (!hasHotWorker(runtime)) {
+        } else if (!hasLiveWorker(runtime)) {
           suspected.push(record);
         }
       }
@@ -4083,7 +4099,7 @@ export function createTelegramTabManager<TContext>(
             ? [`- ...and ${errored.length - 10} more`]
             : []),
           "",
-          `Suspected cold topic records: ${suspected.length}`,
+          `Suspected topic records without workers: ${suspected.length}`,
           ...(suspected.length > 0
             ? suspected.slice(0, 10).map((record) =>
                 formatTelegramTabOrphanDetail(record)
