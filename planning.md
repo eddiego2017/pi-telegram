@@ -7,16 +7,34 @@ Telegram forum topics should be the native workspace/tab model for pi-telegram i
 User-facing model:
 
 ```text
-Telegram forum topic = workspace / topic / user-visible tab
+Telegram forum topic = current topic / topic workspace
 General topic        = General workspace
-a pi worker          = temporary runtime for a topic
-session JSONL        = durable conversation history, independent from topic/workspace lifecycle
+a pi worker          = live RPC child owned by one workspace
+a session JSONL      = durable conversation history, independent from topic/workspace lifecycle
 ```
 
-Implementation model for now:
+Terminology contract:
 
 ```text
-existing tab-manager / tab records = implementation detail for per-topic runtime isolation
+Topic     = Telegram forum transport thread and Telegram UI scope.
+Workspace = durable logical working context, session binding, and worker owner.
+Worker    = live RPC child process for one workspace.
+Session   = JSONL conversation history; preserved across topic close/reload cleanup.
+```
+
+Internal rename direction:
+
+```text
+Do not rename everything to topic.
+Use workspace as the canonical internal durable unit.
+Use topic only for Telegram-specific source binding / UI scope.
+Keep worker for the live RPC child process.
+```
+
+Implementation model during migration:
+
+```text
+existing tab-manager / tab records = compatibility implementation detail for workspace runtime isolation
 ```
 
 Long-term direction:
@@ -24,7 +42,7 @@ Long-term direction:
 ```text
 Stop exposing independent manual tabs in Telegram forum-native mode.
 Use Telegram forum topics as the canonical UI and lifecycle.
-Gradually retire the user-facing "tab" concept.
+Retire the user-facing and internal "tab" concept in favor of workspace/topic/worker.
 ```
 
 This means:
@@ -991,17 +1009,17 @@ git diff --check: pass
 live runtime reloaded through 8a96d38 after /reload
 ```
 
-Deferred to later phases:
+Deferred to later phases and now planned as the Phase 7 rename migration:
 
 ```text
-TelegramTabRecord -> TelegramTopicRecord / WorkspaceRecord
-tab-manager -> topic-runtime-manager
-RuntimeTab -> TopicRuntime / WorkspaceRuntime
-internal default -> general migration
+TelegramTabRecord -> TelegramWorkspaceRecord
+tab-manager -> workspace-manager
+RuntimeTab -> WorkspaceRuntime
+internal default -> general migration after workspace rename
 optional deeper /session, /tree, and /resume wording pass
 ```
 
-Do not start broad internal refactor yet.
+Do not start the code refactor until the rename plan is reviewed and recorded.
 
 ### Phase 6 — Sticky one-to-one topic workers
 
@@ -1054,7 +1072,139 @@ Validation history kept for reference only:
 Earlier worker-cap experiments passed tests and live reload validation when maxWorkers == maxTabs; forum-native mode is now aligned to sticky one-to-one topic workers.
 ```
 
-### Phase 7 — Internal `default -> general` migration
+### Phase 7 — Internal `tab -> workspace` rename migration
+
+Status: planned, not started. This is a semantic rename, not a mechanical `tab -> topic` replacement.
+
+Vocabulary target:
+
+```text
+Topic     = Telegram forum transport thread and UI scope.
+Workspace = durable logical working context, session JSONL binding, and sticky worker owner.
+Worker    = live RPC child process.
+```
+
+Primary rename map:
+
+```text
+TelegramTabRecord      -> TelegramWorkspaceRecord
+TelegramTabsState      -> TelegramWorkspacesState
+RuntimeTab             -> WorkspaceRuntime
+TelegramTabManager     -> TelegramWorkspaceManager
+TelegramTabBackend     -> TelegramWorkspaceBackend
+lib/tab-manager.ts     -> lib/workspace-manager.ts
+lib/tabs.ts            -> lib/workspaces.ts
+tests/tab-manager.test.ts -> tests/workspace-manager.test.ts
+tests/tabs.test.ts        -> tests/workspaces.test.ts
+```
+
+Topic-specific terms should remain topic-specific:
+
+```text
+TopicBinding
+TopicOrphanProof
+findWorkspaceByTopic(...)
+createTelegramTopicWorkspaceRecord(...)
+```
+
+Do not rename the durable record to `TopicRecord`; General/manual compatibility and future non-topic scopes still need a neutral `WorkspaceRecord`.
+
+Phased implementation plan:
+
+1. Internal domain rename with compatibility aliases.
+
+   ```text
+   Add workspace-named types/helpers first.
+   Keep temporary tab-named type aliases where they reduce churn.
+   Preserve behavior and persisted state shape in this phase.
+   ```
+
+2. File/module rename.
+
+   ```text
+   Move tab-manager/tabs modules to workspace-manager/workspaces.
+   Keep temporary compatibility barrels only if needed.
+   Update import graph and invariants tests.
+   ```
+
+3. Persisted state migration.
+
+   ```text
+   New file: telegram-workspaces.json
+   Legacy file: telegram-tabs.json
+
+   Read telegram-workspaces.json first.
+   If absent, read telegram-tabs.json.
+   Normalize old fields:
+     activeTab -> activeWorkspace
+     tabs      -> workspaces
+   Write the new file after successful load.
+   Do not automatically delete telegram-tabs.json.
+   Never delete session JSONL during this migration.
+   ```
+
+4. Command and callback rename.
+
+   ```text
+   New primary command: /workspace
+   Short alias: /ws
+   Legacy hidden alias: /tab
+
+   New callback prefix: ws:
+   Legacy callback prefix tab: remains accepted for stale inline keyboards.
+   ```
+
+   Forum-native mode should continue hiding manual lifecycle/dashboard commands from primary UX; `/workspace`, `/ws`, and `/tab` are operator/debug compatibility surfaces unless manual workspace mode is active.
+
+5. Config rename last, compatibility-first.
+
+   ```text
+   New config shape: workspaces
+   Legacy config shape: concurrentTabs
+
+   maxWorkspaces ?? maxTabs
+   workspaces ?? concurrentTabs
+   ```
+
+   Do not rewrite Eddie's live config automatically until explicitly chosen. New docs can prefer `workspaces`, while runtime reads both.
+
+6. Docs/tests cleanup.
+
+   ```text
+   Concurrent Tabs -> Concurrent Workspaces
+   Tabs 3/10      -> Workspaces 3/10
+   Active tab     -> Active workspace
+   tab:*          -> ws:* except compatibility handlers/tests
+   ```
+
+Compatibility rules:
+
+- Preserve session JSONL files.
+- Preserve old state files as backups/compatibility inputs.
+- Accept old callback prefixes for stale inline keyboards.
+- Read old config keys for upstream and Eddie live compatibility.
+- Keep `/tab` routable as a hidden legacy alias until a separate removal decision.
+- Historical changelog text may keep old feature names when rewriting would make history misleading.
+
+Risk areas:
+
+```text
+state migration > callback compatibility > config migration > source rename churn
+```
+
+Validation plan:
+
+```text
+npm run typecheck
+node --experimental-strip-types --test tests/workspace-manager.test.ts tests/workspaces.test.ts tests/config.test.ts tests/routing.test.ts tests/invariants.test.ts
+# while compatibility files remain, include the legacy test names if not yet renamed
+node --experimental-strip-types --test tests/tab-manager.test.ts tests/tabs.test.ts tests/config.test.ts tests/routing.test.ts tests/invariants.test.ts
+
+git diff --check
+live smoke after state/command migration phases
+```
+
+### Phase 8 — Internal `default -> general` migration
 
 Later migration:
 
