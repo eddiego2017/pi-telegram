@@ -48,7 +48,7 @@ import {
   type TelegramWorkspaceRecord,
   type TelegramWorkspaceSourceTelegramTopic,
   type TelegramWorkspacesState,
-} from "./tabs.ts";
+} from "./workspaces.ts";
 import type { TelegramNormalizedConcurrentTabsConfig } from "./config.ts";
 import { isTelegramForumTopicPermissionError } from "./api.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./model.ts";

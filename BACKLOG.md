@@ -5,7 +5,7 @@
 - [ ] Execute the Phase 7 `tab -> workspace` internal rename migration.
   - Priority: Medium.
   - Idea: The plan is now recorded in `planning.md`: use `workspace` for the durable logical unit, keep `topic` for Telegram forum source/UI scope, and keep `worker` for live RPC children. Rename internals gradually without breaking non-native/manual tab compatibility.
-  - Progress: Workspace-named state/helper exports now exist in `lib/tabs.ts`, and `tab-manager` internals now use workspace-named records/runtime maps while legacy tab-named public APIs remain.
+  - Progress: Workspace-named helpers now live in canonical `lib/workspaces.ts`; `lib/tabs.ts` is a legacy re-export shim, and `tab-manager` internals use workspace-named records/runtime maps while legacy tab-named public APIs remain.
   - Exit: Types/helpers, modules/tests, persisted state, commands/callbacks, config, docs, and compatibility shims are migrated according to Phase 7.
 - [ ] Polish forum-native topic-worker internals.
   - Priority: Low.
