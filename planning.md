@@ -416,38 +416,41 @@ tests during transition
 
 Long-term goal: remove user-facing reliance on activeTab entirely in Telegram forum-native UX.
 
-### 13. Topic records and live workers are different layers
+### 13. Forum topics own sticky workers in native mode
 
-A forum topic/workspace should be cheap metadata. A worker is expensive.
-
-```text
-Forum topics / records: many
-Live workers: few
-```
-
-Dashboard should eventually show:
+Forum-native mode should use a deliberately simple one-to-one mental model:
 
 ```text
-🧵 General       running      worker hot      session: current
-🧵 Deploy Debug  mapped       no worker       session: deploy.jsonl
-🧵 EVE Market    idle         worker hot      session: eve.jsonl
-🧵 Old Topic     orphan?      no worker       session preserved
+one Telegram forum topic = one workspace = one sticky RPC worker = one active session pointer
 ```
 
-Future config direction:
+Use Option A for worker startup:
 
-```json
-{
-  "concurrentTabs": {
-    "maxTabs": 100,
-    "maxWorkers": 4
-  }
-}
+```text
+topic create/edit/reopen -> create/update the durable topic record only
+first prompt or worker-scoped command in that topic -> spawn that topic's worker
+subsequent topic prompts -> reuse the same worker
+topic close -> dispose the worker, remove the topic record, preserve the session JSONL
+bot reload -> workers are gone; the next prompt lazily starts that topic's worker again
 ```
 
-`maxTabs` limits durable records/dashboard scale. `maxWorkers` limits live child processes.
+Important simplification:
 
-Do not block service lifecycle sync merely because worker capacity is full.
+```text
+No topic record / worker separation as a product model.
+No background capacity lifecycle.
+No worker reuse across topics.
+No "many records, few workers" UX.
+```
+
+Capacity should be intuitive:
+
+```text
+maxTabs / maxTopics = maximum open topic/workspace records and therefore maximum sticky workers.
+maxWorkers remains a compatibility/internal guard for older configs, but Eddie's forum-native policy is maxWorkers == maxTabs.
+```
+
+Dashboard wording should eventually describe worker presence as a topic-owned state such as `worker running`, `worker idle`, `not started after reload`, or `error`.
 
 ## Phase Plan
 
@@ -741,7 +744,7 @@ Do not implement yet:
 - `/topic new`
 - internal `default -> general` migration
 - complete internal tab-to-topic rename
-- worker pool / `maxWorkers`
+- sticky one-to-one topic worker policy polish
 - session single-owner enforcement
 - late worker event guard
 
@@ -810,8 +813,8 @@ Implemented behavior:
   ```
 
 - `sessionId` is used as a fallback when both records/states do not have comparable session files.
-- Before `/resume` applies a worker session switch, the tab-manager refreshes other hot worker states and blocks if another open workspace already owns that session.
-- Before prompt dispatch into a topic/workspace, the tab-manager refreshes the selected worker and checks other hot workers so live state conflicts are caught even if persisted records are stale.
+- Before `/resume` applies a worker session switch, the tab-manager refreshes other live worker states and blocks if another open workspace already owns that session.
+- Before prompt dispatch into a topic/workspace, the tab-manager refreshes the selected worker and checks other live workers so live state conflicts are caught even if persisted records are stale.
 - Closing a forum topic now performs a closing dispose path:
 
   ```text
@@ -881,7 +884,7 @@ Repair/backfill:
 /tab sync-names
 ```
 
-reapplies current topic titles to topic-bound records and hot workers. This is
+reapplies current topic titles to topic-bound records and live workers. This is
 operator/repair UI only, not the primary topic workflow.
 
 Important constraints:
@@ -930,9 +933,9 @@ Implemented:
 - `/topic orphans` hidden diagnostic command lists:
   - proven topic orphans from clear Bot API `message thread not found` / `topic not found` delivery failures,
   - errored topic records currently in `error` state with `lastError`,
-  - suspected cold topic records with no hot worker.
+  - suspected no-proof topic records with no current worker.
 - Bot API send/edit/upload/delete-style outbound calls record orphan proofs when the call has `chat_id + message_thread_id` and fails with a conservative missing-topic message.
-- `/topic cleanup` removes only records with recorded missing-topic proofs, disposes any worker, preserves session JSONL, clears the proof, and leaves merely suspected/cold records untouched.
+- `/topic cleanup` removes only records with recorded missing-topic proofs, disposes any worker, preserves session JSONL, clears the proof, and leaves no-proof suspected records untouched.
 - `/topic` is intentionally not in the visible Bot Commands menu and does not create, switch, or close topics.
 
 Live validation after `8a96d38` reload:
@@ -1000,55 +1003,56 @@ optional deeper /session, /tree, and /resume wording pass
 
 Do not start broad internal refactor yet.
 
-### Phase 6 — Worker pool model
+### Phase 6 — Sticky one-to-one topic workers
 
-Status: implemented through the initial worker-pool cut and loaded in Eddie's live runtime after `/reload`.
+Status: direction reset by operator decision after live forum-native validation. Forum-native mode now targets a strict one-to-one topic-worker plan.
 
-Implemented:
-
-- Added optional `concurrentTabs.maxWorkers` separate from durable topic record count.
-- `maxWorkers` defaults to `maxTabs` when unset for backward compatibility.
-- Topic service create/edit/reopen still records workspace metadata up to `maxTabs` without starting a worker.
-- Starting a new hot worker checks current live backend count.
-- If `maxWorkers` is reached, the tab manager refreshes candidate worker state, evicts the oldest idle hot worker, persists state, and then starts the requested worker.
-- Running/starting workers are never auto-evicted; if no idle worker is available, the new worker start fails fast with a capacity message.
-- Evicted workers are reloaded from their persisted session file on the next message.
-
-Validation result:
+Goal:
 
 ```text
-commit fa84665 feat: add Telegram worker capacity limit
-commit 8ee92e5 feat: evict idle Telegram workers
-npm run typecheck: pass
-PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test tests/tab-manager.test.ts tests/config.test.ts: pass, 69 pass
-PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts: pass, 710 pass
-git diff --check: pass
+one Telegram forum topic = one workspace = one sticky worker once the topic is used
 ```
 
-Live `/reload` validation after `8ee92e5`:
+Chosen startup policy: Option A, first prompt spawn.
 
 ```text
-maxTabs: 20
-maxWorkers: 20
-topicBinding.native: true
-deleteTopicOnClose: true
-lastUpdateId present
-tab records/open records: 17
-capacity remaining: 3
-statuses: idle 15, exited 1, running 1
-duplicate open session keys: 0
-8-second persistence check: unchanged
-recent Telegram logs: no error/warn/rate/backoff/drop/worker-capacity/evict anomalies
+topic create/edit/reopen -> create/update the durable topic record only
+first prompt or worker-scoped command in that topic -> spawn that topic's worker
+subsequent prompts in that topic -> reuse the same worker
+topic close -> dispose the worker, remove the local topic record, preserve session JSONL, optionally delete the Telegram topic
+bot reload -> all workers naturally disappear; next prompt lazily restarts that topic's worker from its session file
 ```
 
-Remaining future performance/scalability/UX work:
+Explicit non-goals for forum-native mode:
 
-- Tune eviction policy beyond oldest `lastUsedAt` if needed.
+```text
+No topic record / worker separation as a product model.
+No many-records/few-workers capacity UX.
+No background capacity lifecycle.
+No worker reuse across topics.
+No delivery-lease design; worker-owned-topic identity is enough for future attachment relay.
+```
 
-Follow-ups implemented after live verification:
+Capacity policy:
 
-- `/tab` dashboard now shows hot worker capacity as `Workers: hot/maxWorkers hot`.
-- `/tab` dashboard rows now mark workspaces as `worker hot` or `no worker`, so evicted/cold topic records are visible without starting them.
+```text
+maxTabs is the intuitive open topic/workspace cap.
+maxWorkers should equal maxTabs in Eddie's forum-native config.
+maxWorkers remains only a compatibility/internal guard until runtime/docs are simplified.
+If the sticky worker cap is reached, prefer a clear capacity refusal over stopping another open topic's worker.
+```
+
+Current implementation notes:
+
+- Workers are still launched with `pi --mode rpc --no-extensions`; this remains the safety boundary that prevents workers from loading pi-telegram and starting competing Bot API pollers or `/start` menus.
+- Current code still contains the previous `maxWorkers` capacity guard. Do not build new features around capacity sharing. Future runtime polish should make sticky one-to-one the only forum-native policy.
+- Current dashboard capacity wording came from earlier diagnostics. Future UX polish should rename this to topic-owned states such as `worker idle`, `worker running`, `not started after reload`, or `error`.
+
+Validation history kept for reference only:
+
+```text
+Earlier worker-cap experiments passed tests and live reload validation when maxWorkers == maxTabs, but the product plan for forum-native mode is now sticky one-to-one topic workers.
+```
 
 ### Phase 7 — Internal `default -> general` migration
 
@@ -1194,7 +1198,7 @@ live orphan cleanup smoke: pass; proven topic 8419 removed, session JSONL preser
 live preview ordering smoke after 71d9876 reload: pass; temporary topic 10572 showed Started run -> bash tool preview -> final marker reply, then Close topic removed the local record and Bot API deletion made Telegram return ForumTopicDeleted
 ```
 
-Previous full-suite result after Phase 6 worker-pool initial cut:
+Previous full-suite result after the earlier Phase 6 worker-capacity implementation:
 
 ```text
 npm run typecheck: pass
