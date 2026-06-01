@@ -14,9 +14,11 @@ export type TelegramWorkspaceStatus =
 
 export interface TelegramWorkspacesState {
   version: 1;
-  /** Legacy persisted field name; migrated state-file schema will rename this later. */
+  activeWorkspace: string;
+  workspaces: Record<string, TelegramWorkspaceRecord>;
+  /** Legacy in-memory compatibility alias for activeWorkspace. Not persisted by workspace writers. */
   activeTab: string;
-  /** Legacy persisted field name; migrated state-file schema will rename this later. */
+  /** Legacy in-memory compatibility alias for workspaces. Not persisted by workspace writers. */
   tabs: Record<string, TelegramWorkspaceRecord>;
 }
 
@@ -206,17 +208,44 @@ export function createTelegramDefaultWorkspaceRecord(
   };
 }
 
+function withTelegramLegacyTabStateAliases(
+  state: Pick<TelegramWorkspacesState, "version" | "activeWorkspace" | "workspaces">,
+): TelegramWorkspacesState {
+  return Object.defineProperties(state, {
+    activeTab: {
+      get() {
+        return this.activeWorkspace;
+      },
+      set(value: string) {
+        this.activeWorkspace = value;
+      },
+      enumerable: false,
+      configurable: true,
+    },
+    tabs: {
+      get() {
+        return this.workspaces;
+      },
+      set(value: Record<string, TelegramWorkspaceRecord>) {
+        this.workspaces = value;
+      },
+      enumerable: false,
+      configurable: true,
+    },
+  }) as TelegramWorkspacesState;
+}
+
 export function createDefaultTelegramWorkspacesState(
   cwd: string,
   now: number,
 ): TelegramWorkspacesState {
-  return {
+  return withTelegramLegacyTabStateAliases({
     version: 1,
-    activeTab: TELEGRAM_DEFAULT_WORKSPACE_NAME,
-    tabs: {
+    activeWorkspace: TELEGRAM_DEFAULT_WORKSPACE_NAME,
+    workspaces: {
       [TELEGRAM_DEFAULT_WORKSPACE_NAME]: createTelegramDefaultWorkspaceRecord(cwd, now),
     },
-  };
+  });
 }
 
 function isTelegramWorkspaceSource(value: unknown): value is TelegramWorkspaceSource {
@@ -266,12 +295,16 @@ export function normalizeTelegramWorkspacesState(
   }
   const raw = value as {
     version?: unknown;
+    activeWorkspace?: unknown;
+    workspaces?: unknown;
     activeTab?: unknown;
     tabs?: unknown;
   };
+  const rawWorkspaces = raw.workspaces ?? raw.tabs;
+  const rawActiveWorkspace = raw.activeWorkspace ?? raw.activeTab;
   const workspaces: Record<string, TelegramWorkspaceRecord> = {};
-  if (raw.tabs && typeof raw.tabs === "object") {
-    for (const [name, record] of Object.entries(raw.tabs)) {
+  if (rawWorkspaces && typeof rawWorkspaces === "object") {
+    for (const [name, record] of Object.entries(rawWorkspaces)) {
       const normalizedName = normalizeTelegramWorkspaceName(name);
       if (
         name !== normalizedName ||
@@ -293,15 +326,15 @@ export function normalizeTelegramWorkspacesState(
   if (!workspaces[TELEGRAM_DEFAULT_WORKSPACE_NAME]) {
     workspaces[TELEGRAM_DEFAULT_WORKSPACE_NAME] = createTelegramDefaultWorkspaceRecord(cwd, now);
   }
-  const activeTab =
-    typeof raw.activeTab === "string" && workspaces[raw.activeTab]
-      ? raw.activeTab
+  const activeWorkspace =
+    typeof rawActiveWorkspace === "string" && workspaces[rawActiveWorkspace]
+      ? rawActiveWorkspace
       : TELEGRAM_DEFAULT_WORKSPACE_NAME;
-  return {
+  return withTelegramLegacyTabStateAliases({
     version: 1,
-    activeTab,
-    tabs: workspaces,
-  };
+    activeWorkspace,
+    workspaces,
+  });
 }
 
 export function parseTelegramWorkspaceFilterTokens(args: string): string[] {
@@ -486,12 +519,12 @@ export function formatTelegramWorkspaceList(
     emptyText?: string;
   } = {},
 ): string {
-  const allWorkspaces = Object.values(state.tabs).sort((a, b) => a.createdAt - b.createdAt);
+  const allWorkspaces = Object.values(state.workspaces).sort((a, b) => a.createdAt - b.createdAt);
   const visibleWorkspaces = options.workspaces ? [...options.workspaces] : allWorkspaces;
   const filterSummary = formatTelegramWorkspaceFilterSummary(options.filterTrace ?? []);
   const rows = visibleWorkspaces.map((workspace) => {
     const displayName = formatTelegramWorkspaceRecordDisplayName(workspace);
-    const active = workspace.name === state.activeTab ? " *" : "";
+    const active = workspace.name === state.activeWorkspace ? " *" : "";
     const unread = unreadByWorkspace[workspace.name] ? " unread" : "";
     const topic = formatTelegramWorkspaceTopicLabel(workspace);
     const topicSuffix = topic ? ` · ${topic}` : "";

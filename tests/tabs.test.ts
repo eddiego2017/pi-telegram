@@ -17,5 +17,7 @@ test("Legacy tabs module path re-exports tab compatibility helpers", () => {
   assert.equal(validateTelegramTabName("A_1-ok"), undefined);
   assert.deepEqual(parseTelegramTabCommand("new A"), { kind: "new", name: "A" });
   assert.match(normalizeTelegramTopicTabName(-1001234567890, 123), /^tg-[a-z0-9]{6}-3f$/);
-  assert.equal(createDefaultTelegramTabsState("/repo", 1000).activeTab, "default");
+  const state = createDefaultTelegramTabsState("/repo", 1000);
+  assert.equal(state.activeTab, "default");
+  assert.equal(state.tabs, state.workspaces);
 });

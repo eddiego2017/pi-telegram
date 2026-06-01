@@ -183,19 +183,19 @@ test("Tab topic helpers build stable names and find topic-bound records", () => 
 });
 
 test("Tab state normalization preserves records and marks stale running tabs exited", () => {
-  assert.deepEqual(normalizeTelegramTabsState(undefined, "/repo", 1000), {
-    version: 1,
-    activeTab: "default",
-    tabs: {
-      default: {
-        name: "default",
-        cwd: "/repo",
-        createdAt: 1000,
-        lastUsedAt: 1000,
-        status: "idle",
-      },
+  const defaultState = normalizeTelegramTabsState(undefined, "/repo", 1000);
+  assert.equal(defaultState.activeWorkspace, "default");
+  assert.equal(defaultState.activeTab, "default");
+  assert.deepEqual(defaultState.workspaces, {
+    default: {
+      name: "default",
+      cwd: "/repo",
+      createdAt: 1000,
+      lastUsedAt: 1000,
+      status: "idle",
     },
   });
+  assert.equal(defaultState.tabs, defaultState.workspaces);
   const normalized = normalizeTelegramTabsState(
     {
       version: 1,
@@ -213,14 +213,16 @@ test("Tab state normalization preserves records and marks stale running tabs exi
     "/repo",
     1000,
   );
+  assert.equal(normalized.activeWorkspace, "A");
   assert.equal(normalized.activeTab, "A");
+  assert.equal(normalized.workspaces.A?.status, "exited");
   assert.equal(normalized.tabs.A?.status, "exited");
-  assert.equal(normalized.tabs.default?.status, "idle");
+  assert.equal(normalized.workspaces.default?.status, "idle");
   const normalizedWithSource = normalizeTelegramTabsState(
     {
       version: 1,
-      activeTab: "tg-topic",
-      tabs: {
+      activeWorkspace: "tg-topic",
+      workspaces: {
         "tg-topic": {
           name: "tg-topic",
           cwd: "/repo",
@@ -239,7 +241,7 @@ test("Tab state normalization preserves records and marks stale running tabs exi
     "/repo",
     1000,
   );
-  assert.deepEqual(normalizedWithSource.tabs["tg-topic"]?.source, {
+  assert.deepEqual(normalizedWithSource.workspaces["tg-topic"]?.source, {
     kind: "telegram-topic",
     chatId: -1001,
     messageThreadId: 77,

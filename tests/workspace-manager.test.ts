@@ -452,6 +452,70 @@ test("Tab manager declines prompt dispatch when disabled", async () => {
   assert.match(replies[0] ?? "", /Concurrent tabs are disabled/);
 });
 
+test("Workspace manager migrates the default legacy tabs state file to workspace state", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-state-migration-"));
+  const legacyStatePath = join(tempDir, "telegram-tabs.json");
+  const workspaceStatePath = join(tempDir, "telegram-workspaces.json");
+  await writeFile(
+    legacyStatePath,
+    JSON.stringify({
+      version: 1,
+      activeTab: "A",
+      tabs: {
+        default: {
+          name: "default",
+          cwd: "/repo",
+          createdAt: 1000,
+          lastUsedAt: 1000,
+          status: "idle",
+        },
+        A: {
+          name: "A",
+          cwd: "/repo",
+          createdAt: 1001,
+          lastUsedAt: 1002,
+          status: "running",
+        },
+      },
+    }),
+  );
+  const replies: string[] = [];
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    agentDir: tempDir,
+    sessionDir: join(tempDir, "sessions"),
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleCommand("status", 1, 2, "ctx");
+  await manager.dispose();
+
+  assert.match(replies.at(-1) ?? "", /A \* stopped/);
+  assert.equal(existsSync(legacyStatePath), true);
+  assert.equal(existsSync(workspaceStatePath), true);
+  const saved = JSON.parse(await readFile(workspaceStatePath, "utf8")) as {
+    activeWorkspace?: string;
+    activeTab?: string;
+    workspaces?: Record<string, { status?: string }>;
+    tabs?: Record<string, unknown>;
+  };
+  assert.equal(saved.activeWorkspace, "A");
+  assert.equal(saved.activeTab, undefined);
+  assert.equal(saved.workspaces?.A?.status, "exited");
+  assert.equal(saved.tabs, undefined);
+  const legacy = JSON.parse(await readFile(legacyStatePath, "utf8")) as { activeTab?: string };
+  assert.equal(legacy.activeTab, "A");
+});
+
 test("Tab manager creates spaced tab names and filters implicit tab queries", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-spaced-filter-"));
   const replies: string[] = [];
@@ -943,11 +1007,11 @@ test("Tab manager routes forum topic prompts to topic-bound tabs without switchi
   assert.equal(textReplies.some((reply) => reply.includes("finished")), false);
 
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    activeTab: string;
-    tabs: Record<string, { source?: unknown }>;
+    activeWorkspace: string;
+    workspaces: Record<string, { source?: unknown }>;
   };
-  assert.equal(saved.activeTab, "A");
-  assert.deepEqual(saved.tabs[topicTab]?.source, {
+  assert.equal(saved.activeWorkspace, "A");
+  assert.deepEqual(saved.workspaces[topicTab]?.source, {
     kind: "telegram-topic",
     chatId: -10042,
     messageThreadId: 77,
@@ -1005,10 +1069,10 @@ test("Tab manager handles forum topic service create, edit, and close events", a
     true,
   );
   const topicTab = normalizeTelegramTopicTabName(-10042, 77);
-  let saved: { tabs: Record<string, { source?: { topicTitle?: string }; sessionName?: string } | undefined> } =
+  let saved: { workspaces: Record<string, { source?: { topicTitle?: string }; sessionName?: string } | undefined> } =
     JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(saved.tabs[topicTab]?.source?.topicTitle, "Deploy Debug");
-  assert.equal(saved.tabs[topicTab]?.sessionName, "Deploy Debug");
+  assert.equal(saved.workspaces[topicTab]?.source?.topicTitle, "Deploy Debug");
+  assert.equal(saved.workspaces[topicTab]?.sessionName, "Deploy Debug");
   assert.equal(backends.size, 0);
 
   await manager.handleTopicServiceMessage(
@@ -1021,8 +1085,8 @@ test("Tab manager handles forum topic service create, edit, and close events", a
     "ctx",
   );
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(saved.tabs[topicTab]?.source?.topicTitle, "Deploy Debug 2");
-  assert.equal(saved.tabs[topicTab]?.sessionName, "Deploy Debug 2");
+  assert.equal(saved.workspaces[topicTab]?.source?.topicTitle, "Deploy Debug 2");
+  assert.equal(saved.workspaces[topicTab]?.sessionName, "Deploy Debug 2");
 
   await manager.dispatchPrompt(
     {
@@ -1044,7 +1108,7 @@ test("Tab manager handles forum topic service create, edit, and close events", a
     "ctx",
   );
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(saved.tabs[topicTab], undefined);
+  assert.equal(saved.workspaces[topicTab], undefined);
   assert.deepEqual(disposed, [topicTab]);
   await manager.dispose();
 });
@@ -1110,9 +1174,9 @@ test("Tab manager deletes Telegram forum topics after close when configured", as
   );
 
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    tabs: Record<string, unknown>;
+    workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.tabs[topicTab], undefined);
+  assert.equal(saved.workspaces[topicTab], undefined);
   assert.deepEqual(disposed, [topicTab]);
   assert.deepEqual(deleteCalls, [{ chatId: -10042, messageThreadId: 77 }]);
   await manager.dispose();
@@ -1160,9 +1224,9 @@ test("Tab manager ignores forum topic service events from untrusted chats", asyn
   );
   const trustedTopicTab = normalizeTelegramTopicTabName(-10042, 77);
   let saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    tabs: Record<string, unknown>;
+    workspaces: Record<string, unknown>;
   };
-  assert.ok(saved.tabs[trustedTopicTab]);
+  assert.ok(saved.workspaces[trustedTopicTab]);
 
   await manager.handleTopicServiceMessage(
     {
@@ -1174,7 +1238,7 @@ test("Tab manager ignores forum topic service events from untrusted chats", asyn
     "ctx",
   );
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(saved.tabs[normalizeTelegramTopicTabName(-10043, 77)], undefined);
+  assert.equal(saved.workspaces[normalizeTelegramTopicTabName(-10043, 77)], undefined);
 
   await manager.handleTopicServiceMessage(
     {
@@ -1186,7 +1250,7 @@ test("Tab manager ignores forum topic service events from untrusted chats", asyn
     "ctx",
   );
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.ok(saved.tabs[trustedTopicTab]);
+  assert.ok(saved.workspaces[trustedTopicTab]);
   assert.deepEqual(deleteCalls, []);
   await manager.dispose();
 });
@@ -1254,9 +1318,9 @@ test("Tab manager warns when delete-topic-on-close lacks Telegram rights", async
   );
 
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    tabs: Record<string, unknown>;
+    workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.tabs[topicTab], undefined);
+  assert.equal(saved.workspaces[topicTab], undefined);
   assert.equal(replies.length, 1);
   assert.deepEqual(replies[0], {
     chatId: -10042,
@@ -1352,10 +1416,10 @@ test("Tab manager syncs forum topic titles into active session names", async () 
   );
 
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    tabs: Record<string, { source?: { topicTitle?: string }; sessionName?: string }>;
+    workspaces: Record<string, { source?: { topicTitle?: string }; sessionName?: string }>;
   };
-  assert.equal(saved.tabs[topicTab]?.source?.topicTitle, "Prod Debug");
-  assert.equal(saved.tabs[topicTab]?.sessionName, "Prod Debug");
+  assert.equal(saved.workspaces[topicTab]?.source?.topicTitle, "Prod Debug");
+  assert.equal(saved.workspaces[topicTab]?.sessionName, "Prod Debug");
   await manager.dispose();
 });
 
@@ -1678,9 +1742,9 @@ test("Tab manager ignores late worker output after a forum topic is closed", asy
   backend.disposeDeferred.resolve();
   await closePromise;
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    tabs: Record<string, unknown>;
+    workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.tabs[topicTab], undefined);
+  assert.equal(saved.workspaces[topicTab], undefined);
   await manager.dispose();
 });
 
@@ -1943,9 +2007,9 @@ test("Tab manager scopes active APIs to ambient forum topics", async () => {
   assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
 
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    tabs: Record<string, { source?: unknown; sessionName?: string }>;
+    workspaces: Record<string, { source?: unknown; sessionName?: string }>;
   };
-  assert.deepEqual(saved.tabs[topicTab]?.source, {
+  assert.deepEqual(saved.workspaces[topicTab]?.source, {
     kind: "telegram-topic",
     chatId: -10042,
     messageThreadId: 77,
@@ -2006,9 +2070,9 @@ test("Tab manager rejects unknown forum topics at max tab capacity", async () =>
   );
   assert.equal(backends.size, 0);
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    tabs: Record<string, unknown>;
+    workspaces: Record<string, unknown>;
   };
-  assert.deepEqual(Object.keys(saved.tabs), ["default"]);
+  assert.deepEqual(Object.keys(saved.workspaces), ["default"]);
 });
 
 test("Tab manager reports worker API errors instead of replaying stale text", async () => {
@@ -2142,9 +2206,9 @@ test("Tab manager keeps sticky topic workers when another topic starts", async (
     );
   }
   const saved = JSON.parse(await readFile(join(tempDir, "tabs.json"), "utf8")) as {
-    tabs: Record<string, unknown>;
+    workspaces: Record<string, unknown>;
   };
-  assert.equal(Object.keys(saved.tabs).length, 3);
+  assert.equal(Object.keys(saved.workspaces).length, 3);
 
   assert.equal(
     await manager.dispatchPrompt(
@@ -2900,33 +2964,33 @@ test("Tab manager blocks manual tab lifecycle commands in forum-native mode", as
   await manager.handleCommand("new C", 1, 12, "ctx");
   assert.match(replies.at(-1) ?? "", /Forum-native mode is enabled/);
   let saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    activeTab: string;
-    tabs: Record<string, unknown>;
+    activeWorkspace: string;
+    workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.tabs.C, undefined);
-  assert.equal(saved.activeTab, "B");
+  assert.equal(saved.workspaces.C, undefined);
+  assert.equal(saved.activeWorkspace, "B");
 
   await manager.handleCommand("switch A", 1, 13, "ctx");
   assert.match(replies.at(-1) ?? "", /Forum-native mode is enabled/);
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(saved.activeTab, "B");
+  assert.equal(saved.activeWorkspace, "B");
 
   await manager.handleCommand("A", 1, 14, "ctx");
   assert.match(replies.at(-1) ?? "", /Tabs \(2\/3\):/);
   assert.doesNotMatch(replies.at(-1) ?? "", /Switched to tab A/);
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(saved.activeTab, "B");
+  assert.equal(saved.activeWorkspace, "B");
 
   await manager.handleCommand("close B --force", 1, 15, "ctx");
   assert.match(replies.at(-1) ?? "", /Forum-native mode is enabled/);
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.ok(saved.tabs.B);
+  assert.ok(saved.workspaces.B);
 
   await manager.handleCommand("rename B Beta", 1, 16, "ctx");
   assert.match(replies.at(-1) ?? "", /Forum-native mode is enabled/);
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.ok(saved.tabs.B);
-  assert.equal(saved.tabs.Beta, undefined);
+  assert.ok(saved.workspaces.B);
+  assert.equal(saved.workspaces.Beta, undefined);
 
   await manager.handleCommand("status B", 1, 17, "ctx");
   assert.match(replies.at(-1) ?? "", /Tab: B/);
@@ -3030,10 +3094,10 @@ test("Tab manager cleans proven topic orphan records", async () => {
     "Cleaned 1 proven topic orphan. Session files are kept.",
   );
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    tabs: Record<string, unknown>;
+    workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.tabs[normalizeTelegramTopicTabName(-10042, 77)], undefined);
-  assert.ok(saved.tabs[normalizeTelegramTopicTabName(-10042, 88)]);
+  assert.equal(saved.workspaces[normalizeTelegramTopicTabName(-10042, 77)], undefined);
+  assert.ok(saved.workspaces[normalizeTelegramTopicTabName(-10042, 88)]);
   assert.deepEqual(topicOrphanProofStore.getProofs(), []);
 
   await manager.handleTopicCommand?.("cleanup", 1, 12, "ctx");
@@ -3117,10 +3181,10 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
   );
   assert.match(answers.at(-1) ?? "", /Forum-native mode is enabled/);
   let saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    activeTab: string;
-    tabs: Record<string, unknown>;
+    activeWorkspace: string;
+    workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.activeTab, "B");
+  assert.equal(saved.activeWorkspace, "B");
   assert.match(interactiveEdits.at(-1) ?? "", /^plain:Forum topics 3\/10/);
   assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10\n/);
   assert.match(dashboardTexts.at(-1) ?? "", /○ General · idle · worker not started · \d+s · 0msg · unset/);
@@ -3135,7 +3199,7 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
   );
   assert.match(answers.at(-1) ?? "", /Forum-native mode is enabled/);
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.ok(saved.tabs.B);
+  assert.ok(saved.workspaces.B);
 
   await manager.handleCallbackQuery(
     {
@@ -3370,11 +3434,11 @@ test("Tab dashboard closes multiple selected tabs", async () => {
   assert.match(interactiveEdits.at(-1) ?? "", /Tabs 2\/10/);
 
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    activeTab: string;
-    tabs: Record<string, unknown>;
+    activeWorkspace: string;
+    workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.activeTab, "C");
-  assert.deepEqual(Object.keys(saved.tabs).sort(), ["C", "default"]);
+  assert.equal(saved.activeWorkspace, "C");
+  assert.deepEqual(Object.keys(saved.workspaces).sort(), ["C", "default"]);
   assert.equal(backends.get("A")?.disposed, true);
   assert.equal(backends.get("B")?.disposed, true);
   assert.equal(backends.get("C")?.disposed, false);
@@ -3428,12 +3492,12 @@ test("Tab manager renames tabs without discarding session state", async () => {
   assert.match(replies.at(-1) ?? "", /Started tab Alpha/);
 
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
-    activeTab: string;
-    tabs: Record<string, unknown>;
+    activeWorkspace: string;
+    workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.activeTab, "Alpha");
-  assert.equal(saved.tabs.A, undefined);
-  assert.ok(saved.tabs.Alpha);
+  assert.equal(saved.activeWorkspace, "Alpha");
+  assert.equal(saved.workspaces.A, undefined);
+  assert.ok(saved.workspaces.Alpha);
 
   await manager.handleCommand("rename Alpha", 1, 13, "ctx");
   assert.match(replies.at(-1) ?? "", /already named Alpha/);

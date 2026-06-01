@@ -1156,6 +1156,16 @@ Phased implementation plan:
    Never delete session JSONL during this migration.
    ```
 
+   Progress:
+
+   ```text
+   Default runtime state path is now telegram-workspaces.json.
+   Default runtime reads telegram-workspaces.json first and falls back to telegram-tabs.json.
+   Writers persist only activeWorkspace/workspaces shape.
+   Legacy activeTab/tabs remain as non-enumerable in-memory aliases for API compatibility.
+   Tests cover legacy-file fallback and workspace-file creation without deleting telegram-tabs.json.
+   ```
+
 4. Command and callback rename.
 
    ```text

@@ -817,6 +817,10 @@ export function createTelegramTabManagerShutdownHook<TContext>(
 }
 
 function getTelegramWorkspacesStatePath(agentDir: string): string {
+  return join(agentDir, "telegram-workspaces.json");
+}
+
+function getLegacyTelegramTabsStatePath(agentDir: string): string {
   return join(agentDir, "telegram-tabs.json");
 }
 
@@ -824,9 +828,15 @@ async function readTelegramWorkspacesState(
   statePath: string,
   cwd: string,
   now: number,
+  legacyStatePath?: string,
 ): Promise<TelegramWorkspacesState> {
-  if (!existsSync(statePath)) return createDefaultTelegramWorkspacesState(cwd, now);
-  const raw = JSON.parse(await readFile(statePath, "utf8")) as unknown;
+  const readPath = existsSync(statePath)
+    ? statePath
+    : legacyStatePath && existsSync(legacyStatePath)
+      ? legacyStatePath
+      : undefined;
+  if (!readPath) return createDefaultTelegramWorkspacesState(cwd, now);
+  const raw = JSON.parse(await readFile(readPath, "utf8")) as unknown;
   return normalizeTelegramWorkspacesState(raw, cwd, now);
 }
 
@@ -834,10 +844,30 @@ function readTelegramWorkspacesStateSync(
   statePath: string,
   cwd: string,
   now: number,
+  legacyStatePath?: string,
 ): TelegramWorkspacesState {
-  if (!existsSync(statePath)) return createDefaultTelegramWorkspacesState(cwd, now);
-  const raw = JSON.parse(readFileSync(statePath, "utf8")) as unknown;
+  const readPath = existsSync(statePath)
+    ? statePath
+    : legacyStatePath && existsSync(legacyStatePath)
+      ? legacyStatePath
+      : undefined;
+  if (!readPath) return createDefaultTelegramWorkspacesState(cwd, now);
+  const raw = JSON.parse(readFileSync(readPath, "utf8")) as unknown;
   return normalizeTelegramWorkspacesState(raw, cwd, now);
+}
+
+function serializeTelegramWorkspacesState(state: TelegramWorkspacesState): {
+  version: 1;
+  activeWorkspace: string;
+  workspaces: Record<string, TelegramWorkspaceRecord>;
+} {
+  return {
+    version: 1,
+    activeWorkspace: state.activeWorkspace,
+    workspaces: Object.fromEntries(
+      Object.entries(state.workspaces).map(([name, record]) => [name, { ...record }]),
+    ),
+  };
 }
 
 async function writeTelegramWorkspacesState(
@@ -846,7 +876,7 @@ async function writeTelegramWorkspacesState(
 ): Promise<void> {
   await mkdir(dirname(statePath), { recursive: true });
   const tempPath = `${statePath}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tempPath, JSON.stringify(state, null, "\t") + "\n", {
+  await writeFile(tempPath, JSON.stringify(serializeTelegramWorkspacesState(state), null, "\t") + "\n", {
     encoding: "utf8",
     mode: 0o600,
   });
@@ -1689,6 +1719,7 @@ export function createTelegramTabManager<TContext>(
 ): TelegramTabManager<TContext> {
   const agentDir = deps.agentDir ?? getTelegramAgentDir();
   const statePath = deps.statePath ?? getTelegramWorkspacesStatePath(agentDir);
+  const legacyStatePath = deps.statePath ? undefined : getLegacyTelegramTabsStatePath(agentDir);
   const configuredSessionDir = deps.sessionDir;
   const workspaceRuntimes = new Map<string, WorkspaceRuntime>();
   const dashboardStates = new Map<number, TelegramTabDashboardState>();
@@ -1730,12 +1761,7 @@ export function createTelegramTabManager<TContext>(
   };
   const persist = (): Promise<void> => {
     if (!state) return Promise.resolve();
-    const snapshot = {
-      ...state,
-      tabs: Object.fromEntries(
-        Object.entries(state.tabs).map(([name, record]) => [name, { ...record }]),
-      ),
-    };
+    const snapshot = state;
     persistChain = persistChain.then(() =>
       writeTelegramWorkspacesState(statePath, snapshot),
     );
@@ -1754,7 +1780,7 @@ export function createTelegramTabManager<TContext>(
   };
   const ensureState = async (cwd: string): Promise<TelegramWorkspacesState> => {
     if (!state) {
-      state = await readTelegramWorkspacesState(statePath, cwd, now());
+      state = await readTelegramWorkspacesState(statePath, cwd, now(), legacyStatePath);
       hydrateWorkspaceRuntimes(state);
       await persist();
     }
@@ -1762,7 +1788,7 @@ export function createTelegramTabManager<TContext>(
   };
   const ensureStateSync = (cwd: string): TelegramWorkspacesState => {
     if (!state) {
-      state = readTelegramWorkspacesStateSync(statePath, cwd, now());
+      state = readTelegramWorkspacesStateSync(statePath, cwd, now(), legacyStatePath);
       hydrateWorkspaceRuntimes(state);
       void persist();
     }
