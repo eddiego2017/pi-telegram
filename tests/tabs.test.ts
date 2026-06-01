@@ -18,6 +18,14 @@ import {
   parseTelegramTabCommand,
   truncateTelegramTabText,
   validateTelegramTabName,
+  createDefaultTelegramWorkspacesState,
+  filterTelegramWorkspaceRecords,
+  findTelegramWorkspaceByTopic,
+  formatTelegramWorkspaceList,
+  formatTelegramWorkspaceStatus,
+  normalizeTelegramTopicWorkspaceName,
+  parseTelegramWorkspaceCommand,
+  validateTelegramWorkspaceName,
 } from "../lib/tabs.ts";
 
 test("Tab helpers validate safe names and case conflicts", () => {
@@ -35,6 +43,16 @@ test("Tab helpers validate safe names and case conflicts", () => {
     status: "idle",
   };
   assert.equal(findTelegramTabNameCaseConflict(state.tabs, "work"), "Work");
+});
+
+test("Workspace aliases validate names and parse commands with workspace wording", () => {
+  assert.equal(validateTelegramWorkspaceName("A_1-ok"), undefined);
+  assert.match(validateTelegramWorkspaceName("has space!") ?? "", /Workspace names/);
+  assert.deepEqual(parseTelegramWorkspaceCommand("new A"), { kind: "new", name: "A" });
+  assert.deepEqual(parseTelegramWorkspaceCommand("new"), {
+    kind: "invalid",
+    message: "Usage: /workspace new <name>",
+  });
 });
 
 test("Tab command parser handles MVP command forms", () => {
@@ -114,6 +132,29 @@ test("Tab command parser handles MVP command forms", () => {
     kind: "invalid",
     message: "Usage: /tab rename [old-name] <new-name>",
   });
+});
+
+test("Workspace topic helpers build stable names and find topic-bound records", () => {
+  const name = normalizeTelegramTopicWorkspaceName(-1001234567890, 123);
+  assert.match(name, /^tg-[a-z0-9]{6}-3f$/);
+  const state = createDefaultTelegramWorkspacesState("/repo", 1000);
+  state.tabs[name] = {
+    name,
+    cwd: "/repo",
+    createdAt: 1000,
+    lastUsedAt: 1000,
+    status: "idle",
+    source: {
+      kind: "telegram-topic",
+      chatId: -1001234567890,
+      messageThreadId: 123,
+      topicTitle: "Deploy Debug",
+    },
+  };
+  assert.equal(
+    findTelegramWorkspaceByTopic(state.tabs, -1001234567890, 123)?.name,
+    name,
+  );
 });
 
 test("Tab topic helpers build stable names and find topic-bound records", () => {
@@ -229,6 +270,28 @@ test("Tab filters apply multiple tokens like resume filters", () => {
     { filter: "eve", before: 3, after: 2 },
     { filter: "on", before: 2, after: 1 },
   ]);
+});
+
+test("Workspace filters and formatters keep list and status compact", () => {
+  const state = createDefaultTelegramWorkspacesState("/repo", 1000);
+  state.tabs.A = {
+    name: "A",
+    cwd: "/repo",
+    createdAt: 1100,
+    lastUsedAt: 1200,
+    status: "running",
+    lastAgentStartAt: 500,
+    lastAssistantText: "hello",
+  };
+  state.activeTab = "A";
+  const filtered = filterTelegramWorkspaceRecords(Object.values(state.tabs), ["hello"]);
+  assert.deepEqual(filtered.workspaces.map((workspace) => workspace.name), ["A"]);
+  assert.match(formatTelegramWorkspaceList(state, { A: 1 }, 1500), /^Workspaces:/);
+  assert.match(formatTelegramWorkspaceList(state, { A: 1 }, 1500), /A \* running 1s unread/);
+  assert.match(
+    formatTelegramWorkspaceStatus(state.tabs.A!, 1, 1500),
+    /Workspace: A\nStatus: running/,
+  );
 });
 
 test("Tab formatters keep list and status compact", () => {

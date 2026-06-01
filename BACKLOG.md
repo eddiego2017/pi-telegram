@@ -2,10 +2,11 @@
 
 ## Open Work
 
-- [ ] Explore a Phase 6+ topic/workspace internal rename after forum-native UX stays stable.
-  - Priority: Low.
-  - Idea: De-tab internal names gradually without breaking non-native/manual tab compatibility: `TelegramTabRecord -> TelegramTopicRecord / WorkspaceRecord`, `tab-manager -> topic-runtime-manager`, `RuntimeTab -> TopicRuntime / WorkspaceRuntime`, plus the later internal `default -> general` migration.
-  - Exit: Design note and staged migration plan cover persisted state compatibility, tests, docs, and rollback before any broad rename lands.
+- [ ] Execute the Phase 7 `tab -> workspace` internal rename migration.
+  - Priority: Medium.
+  - Idea: The plan is now recorded in `planning.md`: use `workspace` for the durable logical unit, keep `topic` for Telegram forum source/UI scope, and keep `worker` for live RPC children. Rename internals gradually without breaking non-native/manual tab compatibility.
+  - Progress: Workspace-named state/helper exports now exist in `lib/tabs.ts`, with legacy tab-named aliases preserved.
+  - Exit: Types/helpers, modules/tests, persisted state, commands/callbacks, config, docs, and compatibility shims are migrated according to Phase 7.
 - [ ] Polish forum-native topic-worker internals.
   - Priority: Low.
   - Idea: Forum-native mode now treats each topic/workspace as owning one sticky worker after first use. Keep `maxWorkers == maxTabs` for Eddie's config and continue removing legacy tab/capacity naming internally when it clearly helps.

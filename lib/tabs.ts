@@ -1,32 +1,35 @@
 /**
- * Telegram tab state and command helpers
- * Zones: telegram controls, concurrent tabs, shared utils
- * Owns tab-name validation, durable tab records, command parsing, and compact status formatting
+ * Telegram workspace state and command helpers
+ * Zones: telegram controls, concurrent workspaces, shared utils
+ * Owns workspace-name validation, durable workspace records, command parsing, and compact status formatting.
+ * Legacy tab-named exports remain as compatibility aliases during the tab -> workspace rename migration.
  */
 
-export type TelegramTabStatus =
+export type TelegramWorkspaceStatus =
   | "idle"
   | "starting"
   | "running"
   | "exited"
   | "error";
 
-export interface TelegramTabsState {
+export interface TelegramWorkspacesState {
   version: 1;
+  /** Legacy persisted field name; migrated state-file schema will rename this later. */
   activeTab: string;
-  tabs: Record<string, TelegramTabRecord>;
+  /** Legacy persisted field name; migrated state-file schema will rename this later. */
+  tabs: Record<string, TelegramWorkspaceRecord>;
 }
 
-export interface TelegramTabSourceTelegramTopic {
+export interface TelegramWorkspaceSourceTelegramTopic {
   kind: "telegram-topic";
   chatId: number;
   messageThreadId?: number;
   topicTitle?: string;
 }
 
-export type TelegramTabSource = TelegramTabSourceTelegramTopic;
+export type TelegramWorkspaceSource = TelegramWorkspaceSourceTelegramTopic;
 
-export interface TelegramTabRecord {
+export interface TelegramWorkspaceRecord {
   name: string;
   cwd: string;
   sessionFile?: string;
@@ -36,7 +39,7 @@ export interface TelegramTabRecord {
   currentThinkingLevel?: string;
   createdAt: number;
   lastUsedAt: number;
-  status: TelegramTabStatus;
+  status: TelegramWorkspaceStatus;
   lastError?: string;
   lastAgentStartAt?: number;
   lastAgentEndAt?: number;
@@ -44,10 +47,10 @@ export interface TelegramTabRecord {
   lastMessageText?: string;
   lastMessageAt?: number;
   messageCount?: number;
-  source?: TelegramTabSource;
+  source?: TelegramWorkspaceSource;
 }
 
-export type TelegramTabCommand =
+export type TelegramWorkspaceCommand =
   | { kind: "list" }
   | { kind: "new"; name: string }
   | { kind: "rename"; oldName?: string; newName: string }
@@ -61,19 +64,19 @@ export type TelegramTabCommand =
   | { kind: "usage" }
   | { kind: "invalid"; message: string };
 
-export const TELEGRAM_DEFAULT_TAB_NAME = "default";
-export const TELEGRAM_GENERAL_TAB_DISPLAY_NAME = "General";
-export const TELEGRAM_TAB_NAME_PATTERN = /^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$/;
-export const TELEGRAM_TAB_NAME_MAX_LENGTH = 32;
-const TELEGRAM_TOPIC_TAB_HASH_MODULUS = 36 ** 6;
+export const TELEGRAM_DEFAULT_WORKSPACE_NAME = "default";
+export const TELEGRAM_GENERAL_WORKSPACE_DISPLAY_NAME = "General";
+export const TELEGRAM_WORKSPACE_NAME_PATTERN = /^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$/;
+export const TELEGRAM_WORKSPACE_NAME_MAX_LENGTH = 32;
+const TELEGRAM_TOPIC_WORKSPACE_HASH_MODULUS = 36 ** 6;
 
-export interface TelegramTabFilterTraceItem {
+export interface TelegramWorkspaceFilterTraceItem {
   filter: string;
   before: number;
   after: number;
 }
 
-const TELEGRAM_TAB_COMMAND_WORDS = new Set([
+const TELEGRAM_WORKSPACE_COMMAND_WORDS = new Set([
   "abort",
   "close",
   "list",
@@ -85,56 +88,58 @@ const TELEGRAM_TAB_COMMAND_WORDS = new Set([
   "switch",
 ]);
 
-function cleanTelegramTabText(s: string): string {
+function cleanTelegramWorkspaceText(s: string): string {
   return (s ?? "").replace(/\s+/g, " ").trim();
 }
 
-function normalizeTelegramTabFilterText(s: string): string {
-  return cleanTelegramTabText(s.normalize("NFKC")).toLowerCase();
+function normalizeTelegramWorkspaceFilterText(s: string): string {
+  return cleanTelegramWorkspaceText(s.normalize("NFKC")).toLowerCase();
 }
 
-export function normalizeTelegramTabName(name: string): string {
-  return cleanTelegramTabText(name);
+export function normalizeTelegramWorkspaceName(name: string): string {
+  return cleanTelegramWorkspaceText(name);
 }
 
-export function formatTelegramTabDisplayName(name: string): string {
-  return name === TELEGRAM_DEFAULT_TAB_NAME ? TELEGRAM_GENERAL_TAB_DISPLAY_NAME : name;
+export function formatTelegramWorkspaceDisplayName(name: string): string {
+  return name === TELEGRAM_DEFAULT_WORKSPACE_NAME
+    ? TELEGRAM_GENERAL_WORKSPACE_DISPLAY_NAME
+    : name;
 }
 
-export function formatTelegramTabRecordDisplayName(
-  tab: Pick<TelegramTabRecord, "name">,
+export function formatTelegramWorkspaceRecordDisplayName(
+  workspace: Pick<TelegramWorkspaceRecord, "name">,
 ): string {
-  return formatTelegramTabDisplayName(tab.name);
+  return formatTelegramWorkspaceDisplayName(workspace.name);
 }
 
-export function isValidTelegramTabName(name: string): boolean {
-  const normalized = normalizeTelegramTabName(name);
+export function isValidTelegramWorkspaceName(name: string): boolean {
+  const normalized = normalizeTelegramWorkspaceName(name);
   return (
     normalized.length > 0 &&
-    normalized.length <= TELEGRAM_TAB_NAME_MAX_LENGTH &&
-    TELEGRAM_TAB_NAME_PATTERN.test(normalized)
+    normalized.length <= TELEGRAM_WORKSPACE_NAME_MAX_LENGTH &&
+    TELEGRAM_WORKSPACE_NAME_PATTERN.test(normalized)
   );
 }
 
-export function validateTelegramTabName(name: string): string | undefined {
-  const normalized = normalizeTelegramTabName(name);
-  if (!normalized) return "Tab name is required.";
-  if (normalized.length > TELEGRAM_TAB_NAME_MAX_LENGTH) {
-    return `Tab names may be up to ${TELEGRAM_TAB_NAME_MAX_LENGTH} characters.`;
+export function validateTelegramWorkspaceName(name: string): string | undefined {
+  const normalized = normalizeTelegramWorkspaceName(name);
+  if (!normalized) return "Workspace name is required.";
+  if (normalized.length > TELEGRAM_WORKSPACE_NAME_MAX_LENGTH) {
+    return `Workspace names may be up to ${TELEGRAM_WORKSPACE_NAME_MAX_LENGTH} characters.`;
   }
-  if (!isValidTelegramTabName(normalized)) {
-    return "Tab names may use only A-Z, a-z, 0-9, _, -, and single spaces between words.";
+  if (!isValidTelegramWorkspaceName(normalized)) {
+    return "Workspace names may use only A-Z, a-z, 0-9, _, -, and single spaces between words.";
   }
   return undefined;
 }
 
-export function findTelegramTabNameCaseConflict(
-  tabs: Record<string, TelegramTabRecord>,
+export function findTelegramWorkspaceNameCaseConflict(
+  workspaces: Record<string, TelegramWorkspaceRecord>,
   name: string,
 ): string | undefined {
-  const normalizedName = normalizeTelegramTabName(name);
+  const normalizedName = normalizeTelegramWorkspaceName(name);
   const lowerName = normalizedName.toLowerCase();
-  return Object.keys(tabs).find(
+  return Object.keys(workspaces).find(
     (existing) => existing !== normalizedName && existing.toLowerCase() === lowerName,
   );
 }
@@ -146,54 +151,54 @@ function hashTelegramTopicChatId(chatId: number): string {
     hash ^= input.charCodeAt(index);
     hash = Math.imul(hash, 16777619) >>> 0;
   }
-  return (hash % TELEGRAM_TOPIC_TAB_HASH_MODULUS)
+  return (hash % TELEGRAM_TOPIC_WORKSPACE_HASH_MODULUS)
     .toString(36)
     .padStart(6, "0");
 }
 
-export function normalizeTelegramTopicTabName(
+export function normalizeTelegramTopicWorkspaceName(
   chatId: number,
   messageThreadId: number,
 ): string {
   return `tg-${hashTelegramTopicChatId(chatId)}-${messageThreadId.toString(36)}`;
 }
 
-export function findTelegramTabByTopic(
-  tabs: Record<string, TelegramTabRecord>,
+export function findTelegramWorkspaceByTopic(
+  workspaces: Record<string, TelegramWorkspaceRecord>,
   chatId: number,
   messageThreadId: number,
-): TelegramTabRecord | undefined {
-  return Object.values(tabs).find(
-    (tab) =>
-      tab.source?.kind === "telegram-topic" &&
-      tab.source.chatId === chatId &&
-      tab.source.messageThreadId === messageThreadId,
+): TelegramWorkspaceRecord | undefined {
+  return Object.values(workspaces).find(
+    (workspace) =>
+      workspace.source?.kind === "telegram-topic" &&
+      workspace.source.chatId === chatId &&
+      workspace.source.messageThreadId === messageThreadId,
   );
 }
 
-export function isTelegramTopicTabRecord(
-  tab: TelegramTabRecord,
+export function isTelegramTopicWorkspaceRecord(
+  workspace: TelegramWorkspaceRecord,
 ): boolean {
-  return tab.source?.kind === "telegram-topic";
+  return workspace.source?.kind === "telegram-topic";
 }
 
-export function formatTelegramTabTopicLabel(
-  tab: TelegramTabRecord,
+export function formatTelegramWorkspaceTopicLabel(
+  workspace: TelegramWorkspaceRecord,
 ): string | undefined {
-  if (tab.source?.kind !== "telegram-topic") return undefined;
-  const title = tab.source.topicTitle?.trim();
-  const topic = tab.source.messageThreadId === undefined
+  if (workspace.source?.kind !== "telegram-topic") return undefined;
+  const title = workspace.source.topicTitle?.trim();
+  const topic = workspace.source.messageThreadId === undefined
     ? "General"
-    : `topic #${tab.source.messageThreadId}`;
+    : `topic #${workspace.source.messageThreadId}`;
   return title ? `${title} · ${topic}` : topic;
 }
 
-export function createTelegramDefaultTabRecord(
+export function createTelegramDefaultWorkspaceRecord(
   cwd: string,
   now: number,
-): TelegramTabRecord {
+): TelegramWorkspaceRecord {
   return {
-    name: TELEGRAM_DEFAULT_TAB_NAME,
+    name: TELEGRAM_DEFAULT_WORKSPACE_NAME,
     cwd,
     createdAt: now,
     lastUsedAt: now,
@@ -201,20 +206,20 @@ export function createTelegramDefaultTabRecord(
   };
 }
 
-export function createDefaultTelegramTabsState(
+export function createDefaultTelegramWorkspacesState(
   cwd: string,
   now: number,
-): TelegramTabsState {
+): TelegramWorkspacesState {
   return {
     version: 1,
-    activeTab: TELEGRAM_DEFAULT_TAB_NAME,
+    activeTab: TELEGRAM_DEFAULT_WORKSPACE_NAME,
     tabs: {
-      [TELEGRAM_DEFAULT_TAB_NAME]: createTelegramDefaultTabRecord(cwd, now),
+      [TELEGRAM_DEFAULT_WORKSPACE_NAME]: createTelegramDefaultWorkspaceRecord(cwd, now),
     },
   };
 }
 
-function isTelegramTabSource(value: unknown): value is TelegramTabSource {
+function isTelegramWorkspaceSource(value: unknown): value is TelegramWorkspaceSource {
   if (typeof value !== "object" || value === null) return false;
   const source = value as Record<string, unknown>;
   return (
@@ -226,10 +231,10 @@ function isTelegramTabSource(value: unknown): value is TelegramTabSource {
   );
 }
 
-function normalizeTelegramTabSource(
+function normalizeTelegramWorkspaceSource(
   source: unknown,
-): TelegramTabSource | undefined {
-  if (!isTelegramTabSource(source)) return undefined;
+): TelegramWorkspaceSource | undefined {
+  if (!isTelegramWorkspaceSource(source)) return undefined;
   return {
     kind: "telegram-topic",
     chatId: source.chatId,
@@ -240,7 +245,7 @@ function normalizeTelegramTabSource(
   };
 }
 
-function isTelegramTabRecord(value: unknown): value is TelegramTabRecord {
+function isTelegramWorkspaceRecord(value: unknown): value is TelegramWorkspaceRecord {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
   return (
@@ -251,33 +256,33 @@ function isTelegramTabRecord(value: unknown): value is TelegramTabRecord {
   );
 }
 
-export function normalizeTelegramTabsState(
+export function normalizeTelegramWorkspacesState(
   value: unknown,
   cwd: string,
   now: number,
-): TelegramTabsState {
+): TelegramWorkspacesState {
   if (typeof value !== "object" || value === null) {
-    return createDefaultTelegramTabsState(cwd, now);
+    return createDefaultTelegramWorkspacesState(cwd, now);
   }
   const raw = value as {
     version?: unknown;
     activeTab?: unknown;
     tabs?: unknown;
   };
-  const tabs: Record<string, TelegramTabRecord> = {};
+  const workspaces: Record<string, TelegramWorkspaceRecord> = {};
   if (raw.tabs && typeof raw.tabs === "object") {
     for (const [name, record] of Object.entries(raw.tabs)) {
-      const normalizedName = normalizeTelegramTabName(name);
+      const normalizedName = normalizeTelegramWorkspaceName(name);
       if (
         name !== normalizedName ||
-        !isValidTelegramTabName(name) ||
-        !isTelegramTabRecord(record)
+        !isValidTelegramWorkspaceName(name) ||
+        !isTelegramWorkspaceRecord(record)
       ) {
         continue;
       }
-      const source = normalizeTelegramTabSource(record.source);
+      const source = normalizeTelegramWorkspaceSource(record.source);
       const { source: _discardedSource, ...rest } = record;
-      tabs[name] = {
+      workspaces[name] = {
         ...rest,
         name,
         status: record.status === "running" ? "exited" : record.status,
@@ -285,44 +290,44 @@ export function normalizeTelegramTabsState(
       };
     }
   }
-  if (!tabs[TELEGRAM_DEFAULT_TAB_NAME]) {
-    tabs[TELEGRAM_DEFAULT_TAB_NAME] = createTelegramDefaultTabRecord(cwd, now);
+  if (!workspaces[TELEGRAM_DEFAULT_WORKSPACE_NAME]) {
+    workspaces[TELEGRAM_DEFAULT_WORKSPACE_NAME] = createTelegramDefaultWorkspaceRecord(cwd, now);
   }
   const activeTab =
-    typeof raw.activeTab === "string" && tabs[raw.activeTab]
+    typeof raw.activeTab === "string" && workspaces[raw.activeTab]
       ? raw.activeTab
-      : TELEGRAM_DEFAULT_TAB_NAME;
+      : TELEGRAM_DEFAULT_WORKSPACE_NAME;
   return {
     version: 1,
     activeTab,
-    tabs,
+    tabs: workspaces,
   };
 }
 
-export function parseTelegramTabFilterTokens(args: string): string[] {
+export function parseTelegramWorkspaceFilterTokens(args: string): string[] {
   return args
     .split(/\s+/)
-    .map((token) => cleanTelegramTabText(token))
-    .filter((token) => normalizeTelegramTabFilterText(token).length > 0);
+    .map((token) => cleanTelegramWorkspaceText(token))
+    .filter((token) => normalizeTelegramWorkspaceFilterText(token).length > 0);
 }
 
-function buildTelegramTabRecordSearchText(tab: TelegramTabRecord): string {
-  return normalizeTelegramTabFilterText(
+function buildTelegramWorkspaceRecordSearchText(workspace: TelegramWorkspaceRecord): string {
+  return normalizeTelegramWorkspaceFilterText(
     [
-      tab.name,
-      tab.sessionName,
-      tab.status,
-      tab.currentModel ? `${tab.currentModel.provider}/${tab.currentModel.id}` : undefined,
-      tab.lastMessageText,
-      tab.lastAssistantText,
-      tab.source?.kind === "telegram-topic"
+      workspace.name,
+      workspace.sessionName,
+      workspace.status,
+      workspace.currentModel ? `${workspace.currentModel.provider}/${workspace.currentModel.id}` : undefined,
+      workspace.lastMessageText,
+      workspace.lastAssistantText,
+      workspace.source?.kind === "telegram-topic"
         ? [
             "telegram-topic",
-            String(tab.source.chatId),
-            tab.source.messageThreadId === undefined
+            String(workspace.source.chatId),
+            workspace.source.messageThreadId === undefined
               ? "general"
-              : String(tab.source.messageThreadId),
-            tab.source.topicTitle,
+              : String(workspace.source.messageThreadId),
+            workspace.source.topicTitle,
           ]
             .filter(Boolean)
             .join(" ")
@@ -333,42 +338,45 @@ function buildTelegramTabRecordSearchText(tab: TelegramTabRecord): string {
   );
 }
 
-export function filterTelegramTabRecords(
-  tabs: readonly TelegramTabRecord[],
+export function filterTelegramWorkspaceRecords(
+  workspaces: readonly TelegramWorkspaceRecord[],
   filters: readonly string[],
-): { tabs: TelegramTabRecord[]; trace: TelegramTabFilterTraceItem[] } {
-  let filtered = [...tabs];
-  const trace: TelegramTabFilterTraceItem[] = [];
+): { workspaces: TelegramWorkspaceRecord[]; trace: TelegramWorkspaceFilterTraceItem[] } {
+  let filtered = [...workspaces];
+  const trace: TelegramWorkspaceFilterTraceItem[] = [];
   for (const rawFilter of filters) {
-    const normalizedFilter = normalizeTelegramTabFilterText(rawFilter);
+    const normalizedFilter = normalizeTelegramWorkspaceFilterText(rawFilter);
     if (!normalizedFilter) continue;
     const before = filtered.length;
-    filtered = filtered.filter((tab) =>
-      buildTelegramTabRecordSearchText(tab).includes(normalizedFilter)
+    filtered = filtered.filter((workspace) =>
+      buildTelegramWorkspaceRecordSearchText(workspace).includes(normalizedFilter)
     );
-    trace.push({ filter: cleanTelegramTabText(rawFilter), before, after: filtered.length });
+    trace.push({ filter: cleanTelegramWorkspaceText(rawFilter), before, after: filtered.length });
   }
-  return { tabs: filtered, trace };
+  return { workspaces: filtered, trace };
 }
 
-export function parseTelegramTabCommand(args: string): TelegramTabCommand {
-  const cleanedArgs = cleanTelegramTabText(args);
+export function parseTelegramWorkspaceCommand(
+  args: string,
+  commandName = "/workspace",
+): TelegramWorkspaceCommand {
+  const cleanedArgs = cleanTelegramWorkspaceText(args);
   const tokens = cleanedArgs.split(/\s+/).filter(Boolean);
   const [head, ...tail] = tokens;
   if (!head) return { kind: "list" };
-  if (!TELEGRAM_TAB_COMMAND_WORDS.has(head)) {
+  if (!TELEGRAM_WORKSPACE_COMMAND_WORDS.has(head)) {
     return {
       kind: "query",
       query: cleanedArgs,
-      filters: parseTelegramTabFilterTokens(cleanedArgs),
+      filters: parseTelegramWorkspaceFilterTokens(cleanedArgs),
     };
   }
   switch (head) {
     case "list":
       return { kind: "list" };
     case "new": {
-      const name = normalizeTelegramTabName(tail.join(" "));
-      if (!name) return { kind: "invalid", message: "Usage: /tab new <name>" };
+      const name = normalizeTelegramWorkspaceName(tail.join(" "));
+      if (!name) return { kind: "invalid", message: `Usage: ${commandName} new <name>` };
       return { kind: "new", name };
     }
     case "rename": {
@@ -379,39 +387,39 @@ export function parseTelegramTabCommand(args: string): TelegramTabCommand {
         return { kind: "rename", oldName: tail[0]!, newName: tail[1]! };
       }
       if (tail.length > 2) {
-        return { kind: "rename", newName: normalizeTelegramTabName(tail.join(" ")) };
+        return { kind: "rename", newName: normalizeTelegramWorkspaceName(tail.join(" ")) };
       }
       return {
         kind: "invalid",
-        message: "Usage: /tab rename [old-name] <new-name>",
+        message: `Usage: ${commandName} rename [old-name] <new-name>`,
       };
     }
     case "switch": {
-      const name = normalizeTelegramTabName(tail.join(" "));
+      const name = normalizeTelegramWorkspaceName(tail.join(" "));
       if (!name) {
-        return { kind: "invalid", message: "Usage: /tab switch <name>" };
+        return { kind: "invalid", message: `Usage: ${commandName} switch <name>` };
       }
       return { kind: "switch", name };
     }
     case "close": {
       const force = tail.includes("--force");
-      const name = normalizeTelegramTabName(
+      const name = normalizeTelegramWorkspaceName(
         tail.filter((token) => token !== "--force").join(" "),
       );
       return name ? { kind: "close", name, force } : { kind: "close", force };
     }
     case "status": {
-      const name = normalizeTelegramTabName(tail.join(" "));
+      const name = normalizeTelegramWorkspaceName(tail.join(" "));
       return name ? { kind: "status", name } : { kind: "status" };
     }
     case "abort": {
-      const name = normalizeTelegramTabName(tail.join(" "));
+      const name = normalizeTelegramWorkspaceName(tail.join(" "));
       return name ? { kind: "abort", name } : { kind: "abort" };
     }
     case "restart": {
-      const name = normalizeTelegramTabName(tail.join(" "));
+      const name = normalizeTelegramWorkspaceName(tail.join(" "));
       if (!name) {
-        return { kind: "invalid", message: "Usage: /tab restart <name>" };
+        return { kind: "invalid", message: `Usage: ${commandName} restart <name>` };
       }
       return { kind: "restart", name };
     }
@@ -421,22 +429,22 @@ export function parseTelegramTabCommand(args: string): TelegramTabCommand {
   return { kind: "usage" };
 }
 
-export function formatTelegramTabUsage(): string {
+export function formatTelegramWorkspaceUsage(commandName = "/workspace"): string {
   return [
     "Usage:",
-    "/tab",
-    "/tab new <name>",
-    "/tab rename [old-name] <new-name>",
-    "/tab <name-or-filter...>",
-    "/tab close [name] [--force]",
-    "/tab status [name]",
-    "/tab abort [name]",
-    "/tab restart <name>",
-    "/tab sync-names",
+    commandName,
+    `${commandName} new <name>`,
+    `${commandName} rename [old-name] <new-name>`,
+    `${commandName} <name-or-filter...>`,
+    `${commandName} close [name] [--force]`,
+    `${commandName} status [name]`,
+    `${commandName} abort [name]`,
+    `${commandName} restart <name>`,
+    `${commandName} sync-names`,
   ].join("\n");
 }
 
-export function truncateTelegramTabText(text: string, limit = 1200): string {
+export function truncateTelegramWorkspaceText(text: string, limit = 1200): string {
   if (text.length <= limit) return text;
   const bodyLimit = Math.max(0, limit - 1);
   let body = "";
@@ -447,19 +455,19 @@ export function truncateTelegramTabText(text: string, limit = 1200): string {
   return `${body.trimEnd()}…`;
 }
 
-function formatTelegramTabAge(ms: number): string {
+function formatTelegramWorkspaceAge(ms: number): string {
   if (ms < 60_000) return `${Math.max(0, Math.floor(ms / 1000))}s`;
   if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
   if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
   return `${Math.floor(ms / 86_400_000)}d`;
 }
 
-export function formatTelegramTabStatusLabel(status: TelegramTabStatus): string {
+export function formatTelegramWorkspaceStatusLabel(status: TelegramWorkspaceStatus): string {
   return status === "exited" ? "stopped" : status;
 }
 
-export function formatTelegramTabFilterSummary(
-  filterTrace: readonly TelegramTabFilterTraceItem[],
+export function formatTelegramWorkspaceFilterSummary(
+  filterTrace: readonly TelegramWorkspaceFilterTraceItem[],
 ): string | undefined {
   if (filterTrace.length === 0) return undefined;
   return `Filters: ${filterTrace
@@ -467,6 +475,128 @@ export function formatTelegramTabFilterSummary(
     .join(", ")}`;
 }
 
+export function formatTelegramWorkspaceList(
+  state: TelegramWorkspacesState,
+  unreadByWorkspace: Record<string, number>,
+  now: number,
+  options: {
+    workspaces?: readonly TelegramWorkspaceRecord[];
+    filterTrace?: readonly TelegramWorkspaceFilterTraceItem[];
+    title?: string;
+    emptyText?: string;
+  } = {},
+): string {
+  const allWorkspaces = Object.values(state.tabs).sort((a, b) => a.createdAt - b.createdAt);
+  const visibleWorkspaces = options.workspaces ? [...options.workspaces] : allWorkspaces;
+  const filterSummary = formatTelegramWorkspaceFilterSummary(options.filterTrace ?? []);
+  const rows = visibleWorkspaces.map((workspace) => {
+    const displayName = formatTelegramWorkspaceRecordDisplayName(workspace);
+    const active = workspace.name === state.activeTab ? " *" : "";
+    const unread = unreadByWorkspace[workspace.name] ? " unread" : "";
+    const topic = formatTelegramWorkspaceTopicLabel(workspace);
+    const topicSuffix = topic ? ` · ${topic}` : "";
+    const age = workspace.lastAgentStartAt
+      ? ` ${formatTelegramWorkspaceAge(now - workspace.lastAgentStartAt)}`
+      : "";
+    const error = workspace.lastError ? ` (${workspace.lastError})` : "";
+    return `- ${displayName}${active}${topicSuffix} ${formatTelegramWorkspaceStatusLabel(workspace.status)}${age}${unread}${error}`;
+  });
+  const baseTitle = options.title ?? "Workspaces";
+  const title = filterSummary
+    ? `${baseTitle} (${visibleWorkspaces.length}/${allWorkspaces.length}):`
+    : `${baseTitle}:`;
+  return [
+    title,
+    ...(filterSummary ? [filterSummary] : []),
+    ...(rows.length > 0 ? rows : [options.emptyText ?? "No workspaces match filters."]),
+  ].join("\n");
+}
+
+export function formatTelegramWorkspaceStatus(
+  workspace: TelegramWorkspaceRecord,
+  unreadCount: number,
+  now: number,
+  options: { label?: string } = {},
+): string {
+  const label = options.label ?? "Workspace";
+  const lines = [
+    `${label}: ${formatTelegramWorkspaceRecordDisplayName(workspace)}`,
+    `Status: ${formatTelegramWorkspaceStatusLabel(workspace.status)}`,
+    `Cwd: ${workspace.cwd}`,
+    `Unread events: ${unreadCount}`,
+  ];
+  const topic = formatTelegramWorkspaceTopicLabel(workspace);
+  if (topic) lines.push(`Topic: ${topic}`);
+  if (workspace.sessionFile) lines.push(`Session: ${workspace.sessionFile}`);
+  if (workspace.sessionName) lines.push(`Name: ${workspace.sessionName}`);
+  if (workspace.lastAgentStartAt) {
+    lines.push(`Last start: ${formatTelegramWorkspaceAge(now - workspace.lastAgentStartAt)} ago`);
+  }
+  if (workspace.lastAgentEndAt) {
+    lines.push(`Last end: ${formatTelegramWorkspaceAge(now - workspace.lastAgentEndAt)} ago`);
+  }
+  if (workspace.lastError) lines.push(`Error: ${workspace.lastError}`);
+  if (workspace.lastAssistantText) {
+    lines.push("", "Last reply:", truncateTelegramWorkspaceText(workspace.lastAssistantText));
+  }
+  return lines.join("\n");
+}
+
+// Legacy tab compatibility exports. Keep these until the later command/state/config
+// migration phases have landed and downstream callers have moved to workspace names.
+export type TelegramTabStatus = TelegramWorkspaceStatus;
+export type TelegramTabsState = TelegramWorkspacesState;
+export type TelegramTabSourceTelegramTopic = TelegramWorkspaceSourceTelegramTopic;
+export type TelegramTabSource = TelegramWorkspaceSource;
+export type TelegramTabRecord = TelegramWorkspaceRecord;
+export type TelegramTabCommand = TelegramWorkspaceCommand;
+export type TelegramTabFilterTraceItem = TelegramWorkspaceFilterTraceItem;
+
+export const TELEGRAM_DEFAULT_TAB_NAME = TELEGRAM_DEFAULT_WORKSPACE_NAME;
+export const TELEGRAM_GENERAL_TAB_DISPLAY_NAME = TELEGRAM_GENERAL_WORKSPACE_DISPLAY_NAME;
+export const TELEGRAM_TAB_NAME_PATTERN = TELEGRAM_WORKSPACE_NAME_PATTERN;
+export const TELEGRAM_TAB_NAME_MAX_LENGTH = TELEGRAM_WORKSPACE_NAME_MAX_LENGTH;
+
+export const normalizeTelegramTabName = normalizeTelegramWorkspaceName;
+export const formatTelegramTabDisplayName = formatTelegramWorkspaceDisplayName;
+export const formatTelegramTabRecordDisplayName = formatTelegramWorkspaceRecordDisplayName;
+export const isValidTelegramTabName = isValidTelegramWorkspaceName;
+export function validateTelegramTabName(name: string): string | undefined {
+  const normalized = normalizeTelegramWorkspaceName(name);
+  if (!normalized) return "Tab name is required.";
+  if (normalized.length > TELEGRAM_WORKSPACE_NAME_MAX_LENGTH) {
+    return `Tab names may be up to ${TELEGRAM_WORKSPACE_NAME_MAX_LENGTH} characters.`;
+  }
+  if (!isValidTelegramWorkspaceName(normalized)) {
+    return "Tab names may use only A-Z, a-z, 0-9, _, -, and single spaces between words.";
+  }
+  return undefined;
+}
+export const findTelegramTabNameCaseConflict = findTelegramWorkspaceNameCaseConflict;
+export const normalizeTelegramTopicTabName = normalizeTelegramTopicWorkspaceName;
+export const findTelegramTabByTopic = findTelegramWorkspaceByTopic;
+export const isTelegramTopicTabRecord = isTelegramTopicWorkspaceRecord;
+export const formatTelegramTabTopicLabel = formatTelegramWorkspaceTopicLabel;
+export const createTelegramDefaultTabRecord = createTelegramDefaultWorkspaceRecord;
+export const createDefaultTelegramTabsState = createDefaultTelegramWorkspacesState;
+export const normalizeTelegramTabsState = normalizeTelegramWorkspacesState;
+export const parseTelegramTabFilterTokens = parseTelegramWorkspaceFilterTokens;
+export function filterTelegramTabRecords(
+  tabs: readonly TelegramTabRecord[],
+  filters: readonly string[],
+): { tabs: TelegramTabRecord[]; trace: TelegramTabFilterTraceItem[] } {
+  const result = filterTelegramWorkspaceRecords(tabs, filters);
+  return { tabs: result.workspaces, trace: result.trace };
+}
+export function parseTelegramTabCommand(args: string): TelegramTabCommand {
+  return parseTelegramWorkspaceCommand(args, "/tab");
+}
+export function formatTelegramTabUsage(): string {
+  return formatTelegramWorkspaceUsage("/tab");
+}
+export const truncateTelegramTabText = truncateTelegramWorkspaceText;
+export const formatTelegramTabStatusLabel = formatTelegramWorkspaceStatusLabel;
+export const formatTelegramTabFilterSummary = formatTelegramWorkspaceFilterSummary;
 export function formatTelegramTabList(
   state: TelegramTabsState,
   unreadByTab: Record<string, number>,
@@ -476,55 +606,17 @@ export function formatTelegramTabList(
     filterTrace?: readonly TelegramTabFilterTraceItem[];
   } = {},
 ): string {
-  const allTabs = Object.values(state.tabs).sort((a, b) => a.createdAt - b.createdAt);
-  const visibleTabs = options.tabs ? [...options.tabs] : allTabs;
-  const filterSummary = formatTelegramTabFilterSummary(options.filterTrace ?? []);
-  const rows = visibleTabs.map((tab) => {
-    const displayName = formatTelegramTabRecordDisplayName(tab);
-    const active = tab.name === state.activeTab ? " *" : "";
-    const unread = unreadByTab[tab.name] ? " unread" : "";
-    const topic = formatTelegramTabTopicLabel(tab);
-    const topicSuffix = topic ? ` · ${topic}` : "";
-    const age = tab.lastAgentStartAt
-      ? ` ${formatTelegramTabAge(now - tab.lastAgentStartAt)}`
-      : "";
-    const error = tab.lastError ? ` (${tab.lastError})` : "";
-    return `- ${displayName}${active}${topicSuffix} ${formatTelegramTabStatusLabel(tab.status)}${age}${unread}${error}`;
+  return formatTelegramWorkspaceList(state, unreadByTab, now, {
+    workspaces: options.tabs,
+    filterTrace: options.filterTrace,
+    title: "Tabs",
+    emptyText: "No tabs match filters.",
   });
-  const title = filterSummary
-    ? `Tabs (${visibleTabs.length}/${allTabs.length}):`
-    : "Tabs:";
-  return [
-    title,
-    ...(filterSummary ? [filterSummary] : []),
-    ...(rows.length > 0 ? rows : ["No tabs match filters."]),
-  ].join("\n");
 }
-
 export function formatTelegramTabStatus(
   tab: TelegramTabRecord,
   unreadCount: number,
   now: number,
 ): string {
-  const lines = [
-    `Tab: ${formatTelegramTabRecordDisplayName(tab)}`,
-    `Status: ${formatTelegramTabStatusLabel(tab.status)}`,
-    `Cwd: ${tab.cwd}`,
-    `Unread events: ${unreadCount}`,
-  ];
-  const topic = formatTelegramTabTopicLabel(tab);
-  if (topic) lines.push(`Topic: ${topic}`);
-  if (tab.sessionFile) lines.push(`Session: ${tab.sessionFile}`);
-  if (tab.sessionName) lines.push(`Name: ${tab.sessionName}`);
-  if (tab.lastAgentStartAt) {
-    lines.push(`Last start: ${formatTelegramTabAge(now - tab.lastAgentStartAt)} ago`);
-  }
-  if (tab.lastAgentEndAt) {
-    lines.push(`Last end: ${formatTelegramTabAge(now - tab.lastAgentEndAt)} ago`);
-  }
-  if (tab.lastError) lines.push(`Error: ${tab.lastError}`);
-  if (tab.lastAssistantText) {
-    lines.push("", "Last reply:", truncateTelegramTabText(tab.lastAssistantText));
-  }
-  return lines.join("\n");
+  return formatTelegramWorkspaceStatus(tab, unreadCount, now, { label: "Tab" });
 }
