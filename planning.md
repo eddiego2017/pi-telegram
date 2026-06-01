@@ -1183,13 +1183,15 @@ npm run pack:check
 git diff --check
 ```
 
-Latest recorded results after Phase 4 live orphan-cleanup validation and Phase 5 final validation:
+Latest recorded results after Phase 4 live orphan-cleanup validation, Phase 5 final validation, and the Telegram preview fallback fix:
 
 ```text
 npm run typecheck: pass
 PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test tests/commands.test.ts tests/tab-manager.test.ts tests/config.test.ts tests/routing.test.ts tests/invariants.test.ts: pass, 132 pass
+PI_TELEGRAM_DEBUG=0 PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND=0 PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE=0 node --experimental-strip-types --test tests/replies.test.ts tests/preview.test.ts tests/queue.test.ts tests/api.test.ts tests/tab-manager.test.ts tests/runtime.test.ts: pass, 212 pass
 git diff --check: pass
 live orphan cleanup smoke: pass; proven topic 8419 removed, session JSONL preserved, no-proof records untouched
+live preview ordering smoke after 71d9876 reload: pass; temporary topic 10572 showed Started run -> bash tool preview -> final marker reply, then Close topic removed the local record and Bot API deletion made Telegram return ForumTopicDeleted
 ```
 
 Previous full-suite result after Phase 6 worker-pool initial cut:
@@ -1223,5 +1225,5 @@ Persisted/live config now includes:
 - concurrentTabs.topicBinding.deleteTopicOnClose: true
 - concurrentTabs.topicBinding.trustedChatIds: [-1003961592045]
 
-Live runtime has loaded through commit 8a96d38 after /reload.
+Live runtime has loaded through commit 71d9876 after /reload.
 ```
