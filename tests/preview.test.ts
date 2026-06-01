@@ -554,6 +554,29 @@ test("Preview runtime handles assistant message lifecycle hooks", async () => {
         events.push(`markdown:${chatId}:${markdown}`);
         return true;
       },
+      ignoreMessageStart: (message) => message.text === "tool-only",
+    },
+  );
+  await handleTelegramAssistantMessagePreviewStart(
+    { role: "assistant", text: "tool-only" },
+    {
+      getActiveTurn: () => activeTurn,
+      isAssistantMessage: (message) => message.role === "assistant",
+      getState: () => previewState,
+      setState: (state) => {
+        previewState = state;
+        events.push(`unexpected-set:${state?.pendingText ?? "none"}`);
+      },
+      createPreviewState,
+      finalizePreview: async () => {
+        events.push("unexpected-finalize");
+        return true;
+      },
+      finalizeMarkdownPreview: async () => {
+        events.push("unexpected-markdown");
+        return true;
+      },
+      ignoreMessageStart: (message) => message.text === "tool-only",
     },
   );
   await handleTelegramAssistantMessagePreviewUpdate(

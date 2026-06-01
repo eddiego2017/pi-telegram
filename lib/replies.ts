@@ -86,6 +86,10 @@ const TELEGRAM_TOOL_CALL_ARGS_TAIL_LINES = 2;
 const TELEGRAM_TOOL_CALL_ARGS_LINE_LIMIT = 240;
 const TELEGRAM_TOOL_CALL_ARGS_PREVIEW_LIMIT = 400;
 const TELEGRAM_TOOL_CALL_ARGS_OMISSION = "   ......";
+const TELEGRAM_THINKING_PREVIEW_LIMIT = 1200;
+const TELEGRAM_THINKING_HEAD_LINES = 8;
+const TELEGRAM_THINKING_TAIL_LINES = 4;
+const TELEGRAM_THINKING_OMISSION = "......";
 
 function formatAgentToolCallArguments(args: unknown): string {
   if (args === undefined || args === null) return "";
@@ -161,22 +165,61 @@ export function formatAgentToolCallBlock(block: {
   return `\u{1F527} \`${name}\`\n\`\`\`json\n${preview}\n\`\`\``;
 }
 
-function extractAgentTextContent(content: unknown): string {
+function normalizeTelegramThinkingText(text: string): string {
+  return text.trim().replace(/\n{3,}/g, "\n\n");
+}
+
+function truncateTelegramThinkingPreview(text: string): string {
+  if (text.length <= TELEGRAM_THINKING_PREVIEW_LIMIT) return text;
+  const lines = text.split("\n");
+  if (lines.length > TELEGRAM_THINKING_HEAD_LINES + TELEGRAM_THINKING_TAIL_LINES) {
+    return [
+      ...lines.slice(0, TELEGRAM_THINKING_HEAD_LINES),
+      TELEGRAM_THINKING_OMISSION,
+      ...lines.slice(-TELEGRAM_THINKING_TAIL_LINES),
+    ].join("\n");
+  }
+  return `${text.slice(0, TELEGRAM_THINKING_PREVIEW_LIMIT)}…`;
+}
+
+export function formatAgentThinkingBlock(block: {
+  thinking?: unknown;
+  text?: unknown;
+}): string {
+  const rawText =
+    typeof block.thinking === "string"
+      ? block.thinking
+      : typeof block.text === "string"
+        ? block.text
+        : "";
+  const text = truncateTelegramThinkingPreview(
+    normalizeTelegramThinkingText(rawText),
+  );
+  if (!text) return "";
+  const quoted = text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  return `\u{1F4A1} Thinking\n${quoted}`;
+}
+
+function appendAgentRenderedContent(current: string, rendered: string): string {
+  if (rendered.length === 0) return current;
+  if (current.length === 0) return rendered;
+  const separator = current.endsWith("\n\n")
+    ? ""
+    : current.endsWith("\n")
+      ? "\n"
+      : "\n\n";
+  return `${current}${separator}${rendered}`;
+}
+
+function extractAgentTextContent(
+  content: unknown,
+  options: { includeNonTextBlocks?: boolean } = {},
+): string {
   const blocks = Array.isArray(content) ? content : [];
   let result = "";
-  const appendBlock = (rendered: string): void => {
-    if (rendered.length === 0) return;
-    if (result.length === 0) {
-      result = rendered;
-      return;
-    }
-    const separator = result.endsWith("\n\n")
-      ? ""
-      : result.endsWith("\n")
-        ? "\n"
-        : "\n\n";
-    result = `${result}${separator}${rendered}`;
-  };
   for (const block of blocks) {
     if (typeof block !== "object" || block === null || !("type" in block)) {
       continue;
@@ -187,8 +230,19 @@ function extractAgentTextContent(content: unknown): string {
       if (typeof text === "string") result += text;
       continue;
     }
+    if (!options.includeNonTextBlocks) continue;
+    if (type === "thinking") {
+      result = appendAgentRenderedContent(
+        result,
+        formatAgentThinkingBlock(
+          block as { thinking?: unknown; text?: unknown },
+        ),
+      );
+      continue;
+    }
     if (type === "toolCall") {
-      appendBlock(
+      result = appendAgentRenderedContent(
+        result,
         formatAgentToolCallBlock(
           block as { name?: unknown; arguments?: unknown },
         ),
@@ -200,6 +254,20 @@ function extractAgentTextContent(content: unknown): string {
 
 export function getAgentMessageText(message: unknown): string {
   return extractAgentTextContent(getAgentMessageField(message, "content"));
+}
+
+export function getAgentMessageBodyText(message: unknown): string {
+  return getAgentMessageText(message);
+}
+
+export function shouldIgnoreAgentMessagePreviewStart(message: unknown): boolean {
+  return !getAgentMessageBodyText(message);
+}
+
+export function getAgentMessagePreviewText(message: unknown): string {
+  return extractAgentTextContent(getAgentMessageField(message, "content"), {
+    includeNonTextBlocks: true,
+  });
 }
 
 function getNonNegativeNumber(value: unknown): number | undefined {

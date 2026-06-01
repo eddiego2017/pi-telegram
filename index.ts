@@ -380,7 +380,8 @@ export default function (pi: Pi.ExtensionAPI) {
   >({
     getActiveTurn: activeTurnRuntime.get,
     isAssistantMessage: Replies.isAssistantAgentMessage,
-    getMessageText: Replies.getAgentMessageText,
+    getMessageText: Replies.getAgentMessagePreviewText,
+    ignoreMessageStart: Replies.shouldIgnoreAgentMessagePreviewStart,
     getDefaultReplyToMessageId: activeTurnRuntime.getReplyToMessageId,
     sendDraft: sendMessageDraft,
     sendMessage,
@@ -846,6 +847,9 @@ export default function (pi: Pi.ExtensionAPI) {
     getActiveToolExecutions: lifecycle.getActiveToolExecutions,
     setActiveToolExecutions: lifecycle.setActiveToolExecutions,
     triggerPendingModelSwitchAbort: modelSwitchController.triggerPendingAbort,
+    ...Queue.createTelegramToolBoundaryPreviewHooks({
+      onMessageStart: previewRuntime.onMessageStart,
+    }),
     debugLogger,
   });
   // Wire transport-level reply dedup reset via lifecycle

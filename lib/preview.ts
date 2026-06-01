@@ -122,6 +122,7 @@ export interface TelegramAssistantMessagePreviewStartDeps<
     replyToMessageId?: number,
     options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<boolean>;
+  ignoreMessageStart?: (message: TMessage) => boolean;
 }
 
 export interface TelegramAssistantMessagePreviewUpdateDeps<TMessage> {
@@ -351,6 +352,7 @@ export interface TelegramAssistantPreviewRuntimeDeps<
   getActiveTurn: () => TelegramPreviewActiveTurn | undefined;
   isAssistantMessage: (message: TMessage) => boolean;
   getMessageText: (message: TMessage) => string;
+  ignoreMessageStart?: (message: TMessage) => boolean;
 }
 
 export type TelegramAssistantPreviewRuntime<
@@ -376,6 +378,7 @@ export function createTelegramAssistantPreviewRuntime<
       createPreviewState: controller.createState,
       finalizePreview: controller.finalize,
       finalizeMarkdownPreview: controller.finalizeMarkdown,
+      ignoreMessageStart: deps.ignoreMessageStart,
       getMessageText: deps.getMessageText,
       schedulePreviewFlush: controller.scheduleFlush,
     }),
@@ -504,6 +507,7 @@ export async function handleTelegramAssistantMessagePreviewStart<
 ): Promise<void> {
   const turn = deps.getActiveTurn();
   if (!turn || !deps.isAssistantMessage(message)) return;
+  if (deps.ignoreMessageStart?.(message)) return;
   const state = deps.getState();
   if (
     state &&

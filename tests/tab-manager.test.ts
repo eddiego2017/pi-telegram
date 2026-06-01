@@ -3731,7 +3731,10 @@ test("Tab manager relays active worker thinking and tool call output", async () 
     ],
   });
   await waitForTabStreamFlush();
-  assert.equal(markdownReplies.at(-1), "Done.");
+  assert.equal(
+    markdownReplies.at(-1),
+    ["💡 Thinking\n> I should inspect the repo.", "Done."].join("\n\n"),
+  );
 });
 
 test("Tab manager can compact tool previews into one status stream", async () => {
@@ -4457,5 +4460,6 @@ test("Tab manager does not reuse finalized thinking or tool streams", async () =
     ],
   });
   await waitForTabStreamFlush();
-  assert.equal(markdownReplies.length, 0);
+  assert.equal(markdownReplies.length, 1);
+  assert.match(markdownReplies[0] ?? "", /"command": "ls"/);
 });

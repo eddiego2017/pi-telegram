@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import testRoot, { mock, type TestContext } from "node:test";
+import testRoot, { beforeEach, mock, type TestContext } from "node:test";
 
 import * as Runtime from "../lib/runtime.ts";
 
@@ -17,6 +17,13 @@ type RuntimeTelegramExtension = (typeof import("../index.ts"))["default"];
 function test(name: string, fn: RuntimeTestHandler): void {
   void testRoot(name, { concurrency: false, timeout: 5000 }, fn);
 }
+
+beforeEach(() => {
+  delete process.env.PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND;
+  delete process.env.TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND;
+  delete process.env.PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE;
+  delete process.env.TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE;
+});
 
 let runtimeTelegramExtension: RuntimeTelegramExtension | undefined;
 let runtimeAgentDir: string | undefined;

@@ -17,8 +17,10 @@ import {
 } from "./rpc-child.ts";
 import {
   extractLatestAssistantMessageText,
+  formatAgentThinkingBlock,
   formatAgentToolCallBlock,
-  getAgentMessageText,
+  getAgentMessageBodyText,
+  getAgentMessagePreviewText,
   isAssistantAgentMessage,
   type TelegramRenderedChunk,
   type TelegramRenderMode,
@@ -267,6 +269,7 @@ interface RuntimeTab {
   toolCallStatuses: Map<string, TelegramTabToolStatusEntry>;
   sentThinkingTexts: Set<string>;
   sentToolCallMessages: Set<string>;
+  postRunMessages: TelegramTabPostRunMessage[];
   typingChatId?: number;
   typingMessageThreadId?: number;
   typingInterval?: ReturnType<typeof setInterval>;
@@ -284,6 +287,13 @@ interface RuntimeTab {
 }
 
 type TelegramTabToolStatusKind = "queued" | "running" | "done" | "failed";
+
+type TelegramTabPostRunMessageKind = "thinking" | "tool" | "text";
+
+interface TelegramTabPostRunMessage {
+  kind: TelegramTabPostRunMessageKind;
+  markdown: string;
+}
 
 interface TelegramTabToolStatusEntry {
   key: string;
@@ -1023,6 +1033,7 @@ function createRuntimeTab(record: TelegramTabRecord): RuntimeTab {
     toolCallStatuses: new Map(),
     sentThinkingTexts: new Set(),
     sentToolCallMessages: new Set(),
+    postRunMessages: [],
   };
 }
 
@@ -1031,6 +1042,22 @@ function clearTelegramTabStreamState(stream: TelegramTabStreamState): void {
     clearTimeout(stream.flushTimer);
     stream.flushTimer = undefined;
   }
+}
+
+function clearRuntimePostRunPreviewStreams(runtime: RuntimeTab): void {
+  for (const stream of runtime.thinkingStreams.values()) {
+    clearTelegramTabStreamState(stream);
+  }
+  for (const stream of runtime.toolCallStreams.values()) {
+    clearTelegramTabStreamState(stream);
+  }
+  if (runtime.toolCallStatusStream) {
+    clearTelegramTabStreamState(runtime.toolCallStatusStream);
+    runtime.toolCallStatusStream = undefined;
+  }
+  runtime.thinkingStreams.clear();
+  runtime.toolCallStreams.clear();
+  runtime.toolCallStatuses.clear();
 }
 
 function resetRuntimeTurnBuffers(runtime: RuntimeTab): void {
@@ -1045,21 +1072,10 @@ function resetRuntimeTurnBuffers(runtime: RuntimeTab): void {
     runtime.textStream = undefined;
   }
   runtime.thinkingBuffers.clear();
-  for (const stream of runtime.thinkingStreams.values()) {
-    clearTelegramTabStreamState(stream);
-  }
-  for (const stream of runtime.toolCallStreams.values()) {
-    clearTelegramTabStreamState(stream);
-  }
-  if (runtime.toolCallStatusStream) {
-    clearTelegramTabStreamState(runtime.toolCallStatusStream);
-    runtime.toolCallStatusStream = undefined;
-  }
-  runtime.thinkingStreams.clear();
-  runtime.toolCallStreams.clear();
-  runtime.toolCallStatuses.clear();
+  clearRuntimePostRunPreviewStreams(runtime);
   runtime.sentThinkingTexts.clear();
   runtime.sentToolCallMessages.clear();
+  runtime.postRunMessages = [];
 }
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1119,29 +1135,6 @@ function getAgentMessageContent(message: unknown): unknown[] {
   return Array.isArray(raw) ? raw : [];
 }
 
-function appendTelegramTabTextBlock(current: string, text: string): string {
-  if (!text) return current;
-  if (!current) return text;
-  const separator = current.endsWith("\n\n")
-    ? ""
-    : current.endsWith("\n")
-      ? "\n"
-      : "\n\n";
-  return `${current}${separator}${text}`;
-}
-
-function extractAgentBodyText(message: unknown): string {
-  let result = "";
-  for (const block of getAgentMessageContent(message)) {
-    const raw = getRecord(block);
-    if (!raw || raw.type !== "text" || typeof raw.text !== "string") {
-      continue;
-    }
-    result = appendTelegramTabTextBlock(result, raw.text);
-  }
-  return result.trim();
-}
-
 function extractAgentThinkingBlocks(
   message: unknown,
 ): Array<{ index: number; text: string }> {
@@ -1166,6 +1159,34 @@ function getAgentMessageContentBlock(
   index: number,
 ): unknown | undefined {
   return getAgentMessageContent(message)[index];
+}
+
+function pushTelegramTabPostRunMessage(
+  runtime: RuntimeTab,
+  kind: TelegramTabPostRunMessageKind,
+  markdown: string,
+): void {
+  const trimmed = markdown.trim();
+  if (!trimmed) return;
+  if (runtime.postRunMessages.some((message) => message.markdown === trimmed)) return;
+  runtime.postRunMessages.push({ kind, markdown: trimmed });
+}
+
+function removeTelegramTabPostRunMessage(
+  runtime: RuntimeTab,
+  markdown: string,
+): void {
+  const trimmed = markdown.trim();
+  if (!trimmed) return;
+  runtime.postRunMessages = runtime.postRunMessages.filter(
+    (message) => message.markdown !== trimmed,
+  );
+}
+
+function isTelegramTabPostRunTextMessage(
+  message: TelegramTabPostRunMessage,
+): boolean {
+  return message.kind === "text";
 }
 
 function formatTelegramTabToolCallPreview(block: unknown): string {
@@ -1274,11 +1295,11 @@ function getLatestAssistantMessage(messages: unknown): unknown | undefined {
 
 function extractRpcAssistantText(event: RpcChildBackendEvent): string {
   if (event.type === "message_end") {
-    return getAgentMessageText(event.message);
+    return getAgentMessagePreviewText(event.message);
   }
   if (event.type !== "agent_end") return "";
   const latestAssistant = getLatestAssistantMessage(event.messages);
-  return latestAssistant ? getAgentMessageText(latestAssistant) : "";
+  return latestAssistant ? getAgentMessagePreviewText(latestAssistant) : "";
 }
 
 function extractRpcAssistantError(event: RpcChildBackendEvent): string | undefined {
@@ -1296,12 +1317,7 @@ function extractRpcAssistantError(event: RpcChildBackendEvent): string | undefin
 }
 
 function formatTelegramTabThinkingMarkdown(text: string): string {
-  const quoted = text
-    .trim()
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n");
-  return `💡 Thinking\n${quoted}`;
+  return formatAgentThinkingBlock({ thinking: text });
 }
 
 function getSortedTelegramTabRecords(state: TelegramTabsState): TelegramTabRecord[] {
@@ -2295,6 +2311,7 @@ export function createTelegramTabManager<TContext>(
           if (deliveredMessageId !== undefined) stream.messageId = deliveredMessageId;
           unblockTabStreamDelivery(runtime, stream);
           stream.sentMarkdown = markdown;
+          removeTelegramTabPostRunMessage(runtime, markdown);
           stream.lastFlushAt = now();
           runtime.lastStreamFlushAt = stream.lastFlushAt;
         }
@@ -2401,24 +2418,23 @@ export function createTelegramTabManager<TContext>(
     force = false,
   ): void => {
     const trimmed = text.trim();
-    if (
-      !trimmed ||
-      !thinkingStreamPreviewsEnabled ||
-      runtime.sentThinkingTexts.has(trimmed)
-    ) {
-      return;
+    if (!trimmed || runtime.sentThinkingTexts.has(trimmed)) return;
+    const markdown = formatTelegramTabThinkingMarkdown(trimmed);
+    if (!markdown) return;
+    if (thinkingStreamPreviewsEnabled) {
+      const stream = getStreamState(runtime.thinkingStreams, index);
+      streamActiveTabMarkdown(
+        tabState,
+        tabName,
+        runtime,
+        stream,
+        markdown,
+        force,
+      );
     }
-    const stream = getStreamState(runtime.thinkingStreams, index);
-    streamActiveTabMarkdown(
-      tabState,
-      tabName,
-      runtime,
-      stream,
-      formatTelegramTabThinkingMarkdown(trimmed),
-      force,
-    );
     if (force) {
       runtime.sentThinkingTexts.add(trimmed);
+      pushTelegramTabPostRunMessage(runtime, "thinking", markdown);
       runtime.thinkingStreams.delete(index);
     }
   };
@@ -2445,6 +2461,7 @@ export function createTelegramTabManager<TContext>(
     streamActiveTabMarkdown(tabState, tabName, runtime, stream, markdown, final);
     if (final) {
       runtime.sentToolCallMessages.add(markdown);
+      pushTelegramTabPostRunMessage(runtime, "tool", markdown);
       runtime.toolCallStreams.delete(index);
     }
   };
@@ -2617,16 +2634,18 @@ export function createTelegramTabManager<TContext>(
         if (raw?.type !== "toolCall") return;
         const key =
           typeof raw.id === "string" && raw.id ? raw.id : `message-tool:${index}`;
+        const markdown = formatAgentToolCallBlock({
+          name: raw.name,
+          arguments: raw.arguments,
+        });
         streamActiveTabCompactToolStatus(tabState, tabName, runtime, {
           key,
-          markdown: formatAgentToolCallBlock({
-            name: raw.name,
-            arguments: raw.arguments,
-          }),
+          markdown,
           status: "queued",
         });
+        pushTelegramTabPostRunMessage(runtime, "tool", markdown);
       });
-      return extractAgentBodyText(message).length === 0;
+      return getAgentMessageBodyText(message).length === 0;
     }
     if (!toolCallStreamPreviewsEnabled) return false;
     if (
@@ -2635,17 +2654,21 @@ export function createTelegramTabManager<TContext>(
     ) {
       return true;
     }
-    const markdown = getAgentMessageText(message);
+    const markdown = getAgentMessagePreviewText(message);
     if (!markdown || runtime.sentToolCallMessages.has(markdown)) return true;
+    pushTelegramTabPostRunMessage(runtime, "tool", markdown);
     if (!isRuntimeDeliveryActive(tabState, tabName, runtime)) return false;
     runtime.sentToolCallMessages.add(markdown);
-    void runInTabThreadContext(runtime, () =>
-      sendTabMarkdownReply(
+    void runInTabThreadContext(runtime, async () => {
+      const messageId = await sendTabMarkdownReply(
         runtime.activeChatId,
         runtime.activeReplyToMessageId,
         markdown,
-      ),
-    );
+      );
+      if (messageId !== undefined) {
+        removeTelegramTabPostRunMessage(runtime, markdown);
+      }
+    });
     return true;
   };
   const handleChildEvent = (
@@ -2761,7 +2784,7 @@ export function createTelegramTabManager<TContext>(
         ...getTabTurnDetails(tabName, runtime),
         hasAssistantMessage: true,
       });
-      const finalBodyText = extractAgentBodyText(event.message);
+      const finalBodyText = getAgentMessageBodyText(event.message);
       if (runtime.textStream && finalBodyText) {
         runtime.activeBuffer = finalBodyText;
         streamActiveTabText(tabState, tabName, runtime, finalBodyText, true);
@@ -2800,14 +2823,14 @@ export function createTelegramTabManager<TContext>(
           );
         }
       }
-      const finalAlreadySentAsToolCall = latestAssistant
-        ? sendActiveTabToolCallMessage(
-            tabState,
-            tabName,
-            runtime,
-            latestAssistant,
-          )
-        : false;
+      if (latestAssistant) {
+        sendActiveTabToolCallMessage(
+          tabState,
+          tabName,
+          runtime,
+          latestAssistant,
+        );
+      }
       record.lastAgentEndAt = eventNow;
       const assistantError = extractRpcAssistantError(event);
       if (assistantError) {
@@ -2852,7 +2875,7 @@ export function createTelegramTabManager<TContext>(
       }
       const isActive = isRuntimeDeliveryActive(tabState, tabName, runtime);
       const finalBodyText = latestAssistant
-        ? extractAgentBodyText(latestAssistant)
+        ? getAgentMessageBodyText(latestAssistant)
         : runtime.activeBuffer;
       if (latestAssistantSummary.stopReason === "aborted") {
         void (async () => {
@@ -2882,7 +2905,21 @@ export function createTelegramTabManager<TContext>(
         return;
       }
       const finalReplyMarkdown = finalBodyText || runtime.activeAssistantText || "";
-      if (isActive && finalReplyMarkdown && !finalAlreadySentAsToolCall) {
+      const finalPostRunMarkdown = finalReplyMarkdown.trim()
+        ? [
+            ...runtime.postRunMessages.filter(
+              (message) => !isTelegramTabPostRunTextMessage(message),
+            ),
+            { kind: "text" as const, markdown: finalReplyMarkdown },
+          ]
+            .map((message) => message.markdown.trim())
+            .filter(Boolean)
+            .join("\n\n")
+        : runtime.postRunMessages
+            .map((message) => message.markdown.trim())
+            .filter(Boolean)
+            .join("\n\n");
+      if (isActive && finalPostRunMarkdown) {
         const deliveryTarget = {
           chatId: runtime.activeChatId,
           messageThreadId: runtime.activeMessageThreadId,
@@ -2949,7 +2986,7 @@ export function createTelegramTabManager<TContext>(
                   sendTabMarkdownReply(
                     deliveryTarget.chatId,
                     deliveryTarget.replyToMessageId,
-                    finalReplyMarkdown,
+                    finalPostRunMarkdown,
                   ),
               );
               fallbackSent = messageId !== undefined;
@@ -2964,6 +3001,15 @@ export function createTelegramTabManager<TContext>(
                 replyToMessageId: deliveryTarget.replyToMessageId,
               });
             }
+          }
+          if (streamDelivered) {
+            runtime.postRunMessages = runtime.postRunMessages.filter(
+              (message) => !isTelegramTabPostRunTextMessage(message),
+            );
+          }
+          if (fallbackSent) {
+            runtime.postRunMessages = [];
+            clearRuntimePostRunPreviewStreams(runtime);
           }
           if (stream || streamResult) {
             deps.debugLogger?.log("telegram.tab.stream.finalize.result", {

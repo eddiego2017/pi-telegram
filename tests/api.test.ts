@@ -14,7 +14,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import test from "node:test";
+import test, { after, beforeEach } from "node:test";
 
 import {
   answerTelegramCallbackQuery,
@@ -83,6 +83,47 @@ function setApiTestFetch(fetchImpl: typeof fetch): () => void {
     globalThis.fetch = originalFetch;
   };
 }
+
+const deliveryRateEnvSnapshot = {
+  global: process.env.PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND,
+  legacyGlobal: process.env.TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND,
+  group: process.env.PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE,
+  legacyGroup: process.env.TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE,
+};
+
+beforeEach(() => {
+  delete process.env.PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND;
+  delete process.env.TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND;
+  delete process.env.PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE;
+  delete process.env.TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE;
+});
+
+after(() => {
+  if (deliveryRateEnvSnapshot.global === undefined) {
+    delete process.env.PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND;
+  } else {
+    process.env.PI_TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND =
+      deliveryRateEnvSnapshot.global;
+  }
+  if (deliveryRateEnvSnapshot.legacyGlobal === undefined) {
+    delete process.env.TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND;
+  } else {
+    process.env.TELEGRAM_DELIVERY_GLOBAL_MESSAGES_PER_SECOND =
+      deliveryRateEnvSnapshot.legacyGlobal;
+  }
+  if (deliveryRateEnvSnapshot.group === undefined) {
+    delete process.env.PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE;
+  } else {
+    process.env.PI_TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE =
+      deliveryRateEnvSnapshot.group;
+  }
+  if (deliveryRateEnvSnapshot.legacyGroup === undefined) {
+    delete process.env.TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE;
+  } else {
+    process.env.TELEGRAM_DELIVERY_GROUP_MESSAGES_PER_MINUTE =
+      deliveryRateEnvSnapshot.legacyGroup;
+  }
+});
 
 function createApiRuntimeClient(
   overrides: Partial<TelegramApiClient> = {},
@@ -713,13 +754,20 @@ test("Telegram bridge API runtime drops preview delivery during backoff", async 
     }),
     "unchanged",
   );
+  assert.equal(
+    await runtime.sendMessage({
+      chat_id: -10042,
+      text: "\u{1F527} Tools\nrunning `bash`",
+    }),
+    undefined,
+  );
   assert.deepEqual(calls, [
     { method: "sendMessage", body: { chat_id: -10042, text: "normal" } },
   ]);
   assert.ok(debugEvents.includes("telegram.delivery.backoff.set"));
   assert.equal(
     debugEvents.filter((event) => event === "telegram.delivery.drop_stale").length,
-    2,
+    3,
   );
 });
 

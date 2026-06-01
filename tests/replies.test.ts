@@ -19,8 +19,11 @@ import {
   dedupSendTextReply,
   editTelegramRenderedMessage,
   extractLatestAssistantMessageText,
+  formatAgentThinkingBlock,
   formatAgentToolCallBlock,
   formatTelegramToolCallArgumentsPreview,
+  getAgentMessageBodyText,
+  getAgentMessagePreviewText,
   getAgentMessageText,
   isAssistantAgentMessage,
   resetTransportReplyDedup,
@@ -30,7 +33,7 @@ import {
 } from "../lib/replies.ts";
 import { createDedupAgentStartHook } from "../lib/lifecycle.ts";
 
-test("Reply helpers render tool call blocks alongside assistant text", () => {
+test("Reply helpers render thinking and tool call blocks alongside assistant text", () => {
   const toolCallBlock = formatAgentToolCallBlock({
     name: "telegram_attach",
     arguments: { local_path: "/tmp/foo.png" },
@@ -40,6 +43,7 @@ test("Reply helpers render tool call blocks alongside assistant text", () => {
   const message = {
     role: "assistant",
     content: [
+      { type: "thinking", thinking: "Need a tool." },
       { type: "text", text: "Before tool. " },
       {
         type: "toolCall",
@@ -50,11 +54,20 @@ test("Reply helpers render tool call blocks alongside assistant text", () => {
       { type: "text", text: " After tool." },
     ],
   };
-  const rendered = getAgentMessageText(message);
+  const rendered = getAgentMessagePreviewText(message);
+  assert.match(rendered, /💡 Thinking/);
+  assert.match(rendered, /Need a tool/);
   assert.match(rendered, /Before tool/);
   assert.match(rendered, /telegram_attach/);
   assert.match(rendered, /local_path/);
   assert.match(rendered, /After tool/);
+  assert.equal(getAgentMessageText(message), "Before tool.  After tool.");
+  assert.equal(getAgentMessageBodyText(message), "Before tool.  After tool.");
+});
+
+test("Reply helpers format thinking preview blocks", () => {
+  const rendered = formatAgentThinkingBlock({ thinking: "first\nsecond" });
+  assert.equal(rendered, "💡 Thinking\n> first\n> second");
 });
 
 test("Reply helpers roll long tool call argument previews", () => {
@@ -112,6 +125,7 @@ test("Reply helpers extract assistant message text and metadata", () => {
   ];
   assert.equal(isAssistantAgentMessage(messages[1]), true);
   assert.equal(getAgentMessageText(messages[1]), "hello world");
+  assert.equal(getAgentMessageBodyText(messages[1]), "hello world");
   assert.deepEqual(extractLatestAssistantMessageText(messages), {
     text: "hello world",
     stopReason: "error",

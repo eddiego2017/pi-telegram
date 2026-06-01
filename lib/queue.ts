@@ -563,9 +563,18 @@ export interface TelegramToolExecutionEndRuntimeDeps extends TelegramToolExecuti
   triggerPendingModelSwitchAbort: () => void;
 }
 
+export interface TelegramToolExecutionLifecycleHooks<
+  TContext,
+  TEvent = TelegramToolExecutionHookEvent,
+> {
+  onActiveToolExecutionStart?: (event: TEvent, ctx: TContext) => unknown;
+  onActiveToolExecutionEnd?: (event: TEvent, ctx: TContext) => unknown;
+}
+
 export interface TelegramToolExecutionHookRuntimeDeps<
   TContext,
-> extends TelegramToolExecutionRuntimeDeps {
+> extends TelegramToolExecutionRuntimeDeps,
+    TelegramToolExecutionLifecycleHooks<TContext> {
   triggerPendingModelSwitchAbort: (ctx: TContext) => unknown;
   debugLogger?: TelegramDebugLogger;
 }
@@ -698,6 +707,22 @@ export type TelegramAgentLifecycleHooksRuntimeDeps<
   TelegramAgentEndHookRuntimeDeps<TTurn, TContext, TMessage, TReplyMarkup> &
   TelegramToolExecutionHookRuntimeDeps<TContext>;
 
+export function createTelegramToolBoundaryPreviewHooks<TContext>(deps: {
+  onMessageStart: (
+    event: { message: { role: "assistant"; content: Array<{ type: "text"; text: string }> } },
+  ) => Promise<void> | void;
+}): TelegramToolExecutionLifecycleHooks<TContext> {
+  const triggerBoundaryPreview = (): void => {
+    void deps.onMessageStart({
+      message: { role: "assistant", content: [{ type: "text", text: "." }] },
+    });
+  };
+  return {
+    onActiveToolExecutionStart: triggerBoundaryPreview,
+    onActiveToolExecutionEnd: triggerBoundaryPreview,
+  };
+}
+
 export function createTelegramAgentLifecycleHooks<
   TTurn extends PendingTelegramTurn,
   TContext,
@@ -727,20 +752,26 @@ export function createTelegramToolExecutionHooks<TContext>(
   deps: TelegramToolExecutionHookRuntimeDeps<TContext>,
 ) {
   return {
-    onToolExecutionStart: (): void => {
-      deps.debugLogger?.log("telegram.tool.start", {
-        activeToolExecutions: deps.getActiveToolExecutions(),
-        hasActiveTurn: deps.hasActiveTurn(),
-      });
-      handleTelegramToolExecutionStartRuntime(deps);
-    },
-    onToolExecutionEnd: (
-      _event: TelegramToolExecutionHookEvent,
+    onToolExecutionStart: (
+      event: TelegramToolExecutionHookEvent,
       ctx: TContext,
     ): void => {
+      const hasActiveTurn = deps.hasActiveTurn();
+      deps.debugLogger?.log("telegram.tool.start", {
+        activeToolExecutions: deps.getActiveToolExecutions(),
+        hasActiveTurn,
+      });
+      handleTelegramToolExecutionStartRuntime(deps);
+      if (hasActiveTurn) void deps.onActiveToolExecutionStart?.(event, ctx);
+    },
+    onToolExecutionEnd: (
+      event: TelegramToolExecutionHookEvent,
+      ctx: TContext,
+    ): void => {
+      const hasActiveTurn = deps.hasActiveTurn();
       deps.debugLogger?.log("telegram.tool.end", {
         activeToolExecutions: deps.getActiveToolExecutions(),
-        hasActiveTurn: deps.hasActiveTurn(),
+        hasActiveTurn,
       });
       handleTelegramToolExecutionEndRuntime({
         hasActiveTurn: deps.hasActiveTurn,
@@ -750,6 +781,7 @@ export function createTelegramToolExecutionHooks<TContext>(
           deps.triggerPendingModelSwitchAbort(ctx);
         },
       });
+      if (hasActiveTurn) void deps.onActiveToolExecutionEnd?.(event, ctx);
     },
   };
 }

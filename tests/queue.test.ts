@@ -1455,9 +1455,15 @@ test("Agent lifecycle hooks bind start, end, and tool lifecycle ports", async ()
     triggerPendingModelSwitchAbort: (ctx) => {
       events.push(`switch:abort:${ctx}`);
     },
+    onActiveToolExecutionStart: (_event, ctx) => {
+      events.push(`tool-start-message:${ctx}`);
+    },
+    onActiveToolExecutionEnd: (_event, ctx) => {
+      events.push(`tool-end-message:${ctx}`);
+    },
   });
   await hooks.onAgentStart(undefined, "ctx");
-  hooks.onToolExecutionStart();
+  hooks.onToolExecutionStart(undefined, "ctx");
   hooks.onToolExecutionEnd(undefined, "ctx");
   await hooks.onAgentEnd({ messages: [] }, "ctx");
   assert.deepEqual(events, [
@@ -1471,8 +1477,10 @@ test("Agent lifecycle hooks bind start, end, and tool lifecycle ports", async ()
     "typing:ctx",
     "status:ctx",
     "tools:1",
+    "tool-start-message:ctx",
     "tools:0",
     "switch:abort:ctx",
+    "tool-end-message:ctx",
     "runtime:reset",
     "status:ctx",
     "pending:done",
@@ -1491,8 +1499,10 @@ test("Agent lifecycle hooks bind start, end, and tool lifecycle ports", async ()
     "typing:ctx",
     "status:ctx",
     "tools:1",
+    "tool-start-message:ctx",
     "tools:0",
     "switch:abort:ctx",
+    "tool-end-message:ctx",
     "runtime:reset",
     "status:ctx",
     "pending:done",
@@ -1615,11 +1625,17 @@ test("Tool execution hooks bind counter and pending model-switch abort ports", (
     triggerPendingModelSwitchAbort: (ctx) => {
       events.push(`abort:${ctx.id}`);
     },
+    onActiveToolExecutionStart: (_event, ctx) => {
+      events.push(`start:${ctx.id}`);
+    },
+    onActiveToolExecutionEnd: (_event, ctx) => {
+      events.push(`end:${ctx.id}`);
+    },
   });
-  hooks.onToolExecutionStart();
+  hooks.onToolExecutionStart({}, { id: "ctx" });
   hooks.onToolExecutionEnd({}, { id: "ctx" });
   assert.equal(count, 0);
-  assert.deepEqual(events, ["count:1", "count:0", "abort:ctx"]);
+  assert.deepEqual(events, ["count:1", "start:ctx", "count:0", "abort:ctx", "end:ctx"]);
 });
 
 test("Tool execution count helper respects active-turn presence", () => {

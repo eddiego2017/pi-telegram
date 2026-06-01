@@ -514,7 +514,11 @@ function isTelegramPreviewDelivery(
   if (method !== "sendMessage" && method !== "editMessageText") return false;
   const text = body.text;
   if (typeof text !== "string") return false;
-  return text.startsWith("\u{1F4A1} Thinking") || text.startsWith("\u{1F527} ");
+  return (
+    text.startsWith("\u{1F4A1} Thinking") ||
+    text.startsWith("\u{1F527} ") ||
+    text.startsWith("\u{1F527} Tools")
+  );
 }
 
 function isTelegramDroppableDelivery(
