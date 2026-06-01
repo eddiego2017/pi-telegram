@@ -1132,9 +1132,12 @@ Phased implementation plan:
    ```text
    lib/workspaces.ts is now the canonical workspace helper module.
    lib/tabs.ts remains as a legacy re-export shim.
+   lib/workspace-manager.ts is now the canonical workspace runtime module.
+   lib/tab-manager.ts remains as a legacy re-export shim.
    tests/workspaces.test.ts covers canonical helpers.
-   tests/tabs.test.ts keeps a small legacy module-path compatibility check.
-   tab-manager imports helpers from workspaces.ts.
+   tests/tabs.test.ts keeps a small legacy helper module-path compatibility check.
+   tests/workspace-manager.test.ts covers canonical runtime behavior.
+   tests/tab-manager.test.ts keeps a small legacy manager module-path compatibility check.
    ```
 
 3. Persisted state migration.
@@ -1206,8 +1209,7 @@ Validation plan:
 
 ```text
 npm run typecheck
-node --experimental-strip-types --test tests/tab-manager.test.ts tests/workspaces.test.ts tests/tabs.test.ts tests/config.test.ts tests/routing.test.ts tests/invariants.test.ts
-# after workspace-manager.ts exists, add/replace with tests/workspace-manager.test.ts
+node --experimental-strip-types --test tests/workspace-manager.test.ts tests/tab-manager.test.ts tests/workspaces.test.ts tests/tabs.test.ts tests/config.test.ts tests/routing.test.ts tests/invariants.test.ts
 
 git diff --check
 live smoke after state/command migration phases

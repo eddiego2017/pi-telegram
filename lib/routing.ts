@@ -27,7 +27,7 @@ import type { TelegramBridgeRuntime } from "./runtime.ts";
 import type {
   TelegramTabCallbackQuery,
   TelegramTabManager,
-} from "./tab-manager.ts";
+} from "./workspace-manager.ts";
 import * as TextGroups from "./text-groups.ts";
 import * as Turns from "./turns.ts";
 import {

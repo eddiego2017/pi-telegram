@@ -17,7 +17,7 @@ import {
   getAmbientTelegramThreadContext,
   runWithTelegramThreadContext,
 } from "../lib/thread-context.ts";
-import type { TelegramTabManager } from "../lib/tab-manager.ts";
+import type { TelegramTabManager } from "../lib/workspace-manager.ts";
 import type * as Updates from "../lib/updates.ts";
 
 interface TestContext {
