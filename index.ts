@@ -386,6 +386,7 @@ export default function (pi: Pi.ExtensionAPI) {
     sendDraft: sendMessageDraft,
     sendMessage,
     editMessageText: editTelegramMessageText,
+    deleteMessage: deleteTelegramMessage,
     canSend: lockOwnershipGuard.ownsCurrentProcess,
     recordRuntimeEvent,
     ...replyTransport,

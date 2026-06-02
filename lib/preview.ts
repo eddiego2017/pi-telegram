@@ -94,6 +94,7 @@ export interface TelegramPreviewRuntimeDeps<
     chunks: TelegramRenderedChunk[],
     options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<number | undefined>;
+  deleteMessage?: (chatId: number, messageId: number) => Promise<unknown>;
   canSend?: () => boolean;
   recordRuntimeEvent?: (
     category: string,
@@ -199,6 +200,7 @@ export interface TelegramPreviewControllerDeps<
     chunks: TelegramRenderedChunk[],
     options?: { replyMarkup?: TReplyMarkup },
   ) => Promise<number | undefined>;
+  deleteMessage?: (chatId: number, messageId: number) => Promise<unknown>;
   canSend?: () => boolean;
   throttleMs?: number;
   maxDraftId?: number;
@@ -443,6 +445,7 @@ export function createTelegramPreviewController<
         options,
       ),
     editRenderedMessage: deps.editRenderedMessage,
+    deleteMessage: deps.deleteMessage,
     canSend: deps.canSend,
     recordRuntimeEvent: deps.recordRuntimeEvent,
   });
@@ -756,6 +759,13 @@ export async function finalizeTelegramMarkdownPreview<
       chatId,
       messageId: state.messageId,
     });
+    // Delete the stale preview message so it doesn't remain as a
+    // fragment alongside the fallback sendMarkdownReply.
+    if (state.messageId !== undefined && deps.deleteMessage) {
+      try {
+        await deps.deleteMessage(chatId, state.messageId);
+      } catch { /* best-effort */ }
+    }
     return false;
   }
 }
