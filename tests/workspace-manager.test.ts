@@ -73,6 +73,7 @@ class FakeTabBackend implements TelegramTabBackend {
   readonly sessionNames: string[] = [];
   readonly newSessions: (string | undefined)[] = [];
   readonly switchSessions: string[] = [];
+  abortError: unknown;
   keepStateOnSwitch = false;
   nextSwitchSessionName: string | undefined;
   disposed = false;
@@ -127,6 +128,7 @@ class FakeTabBackend implements TelegramTabBackend {
 
   async abort(): Promise<void> {
     this.aborts.push(this.tabName);
+    if (this.abortError) throw this.abortError;
     this.state = { ...this.state, isStreaming: false };
   }
 
@@ -4055,6 +4057,7 @@ test("Tab manager falls back to a full reply when final stream edit fails", asyn
   const markdownReplies: string[] = [];
   const streamReplies: string[] = [];
   const streamEdits: string[] = [];
+  const deletedMessages: Array<{ chatId: number; messageId: number }> = [];
   const runtimeEvents: string[] = [];
   const backends = new Map<string, FakeTabBackend>();
   const manager = createTelegramTabManager<string>({
@@ -4084,6 +4087,9 @@ test("Tab manager falls back to a full reply when final stream edit fails", asyn
     editStreamMarkdownMessage: async (_chatId, messageId, markdown) => {
       streamEdits.push(`${messageId}:${markdown}`);
       throw new Error("Telegram edit failed");
+    },
+    deleteMessage: async (chatId, messageId) => {
+      deletedMessages.push({ chatId, messageId });
     },
     recordRuntimeEvent: (category, error, details) => {
       runtimeEvents.push(
@@ -4122,7 +4128,110 @@ test("Tab manager falls back to a full reply when final stream edit fails", asyn
   assert.deepEqual(streamReplies, ["partial"]);
   assert.deepEqual(streamEdits, ["101:complete final"]);
   assert.deepEqual(markdownReplies, ["complete final"]);
+  assert.deepEqual(deletedMessages, [{ chatId: 1, messageId: 101 }]);
   assert.match(runtimeEvents.join("\n"), /tabs:stream_markdown:Telegram edit failed/);
+});
+
+test("Tab manager deletes stale thinking preview when final fallback includes it", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-thinking-fallback-delete-"));
+  const markdownReplies: string[] = [];
+  const streamReplies: string[] = [];
+  const streamEdits: string[] = [];
+  const deletedMessages: Array<{ chatId: number; messageId: number }> = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async () => undefined,
+    sendMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+      markdownReplies.push(markdown);
+      return markdownReplies.length;
+    },
+    sendStreamMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+      streamReplies.push(markdown);
+      return 100 + streamReplies.length;
+    },
+    editStreamMarkdownMessage: async (_chatId, messageId, markdown) => {
+      streamEdits.push(`${messageId}:${markdown}`);
+      if (markdown === "final answer") throw new Error("Telegram edit failed");
+      return messageId;
+    },
+    deleteMessage: async (chatId, messageId) => {
+      deletedMessages.push({ chatId, messageId });
+    },
+    streamEditThrottleMs: 0,
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.dispatchPrompt(
+    {
+      chatId: 1,
+      replyToMessageId: 20,
+      content: [{ type: "text", text: "question" }],
+    },
+    "ctx",
+  );
+
+  const backend = backends.get("A");
+  assert.ok(backend);
+  backend.emit({ type: "agent_start" });
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "thinking_delta",
+      contentIndex: 0,
+      delta: "complete thought",
+    },
+  });
+  await waitForTabStreamFlush();
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: { type: "thinking_end", contentIndex: 0 },
+  });
+  await waitForTabStreamFlush();
+  backend.emit({
+    type: "message_update",
+    assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "partial" },
+  });
+  await waitForTabStreamFlush();
+  backend.emit({
+    type: "agent_end",
+    messages: [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "complete thought" },
+          { type: "text", text: "final answer" },
+        ],
+      },
+    ],
+  });
+  await waitForTabStreamFlush();
+
+  assert.equal(streamReplies[0], "💡 Thinking\n> complete thought");
+  assert.equal(streamReplies[1], "partial");
+  assert.deepEqual(streamEdits, ["102:final answer"]);
+  assert.deepEqual(
+    markdownReplies,
+    [["💡 Thinking\n> complete thought", "final answer"].join("\n\n")],
+  );
+  assert.deepEqual(deletedMessages, [
+    { chatId: 1, messageId: 102 },
+    { chatId: 1, messageId: 101 },
+  ]);
+  await manager.dispose();
 });
 
 test("Tab manager marks partial stream previews when a tab turn is aborted", async () => {
@@ -4186,6 +4295,62 @@ test("Tab manager marks partial stream previews when a tab turn is aborted", asy
   assert.deepEqual(streamReplies, ["partial answer"]);
   assert.equal(streamEdits.at(-1), "101:partial answer\n\n[aborted]");
   assert.deepEqual(backends.get("A")?.aborts, ["A"]);
+});
+
+test("Tab manager disposes unresponsive worker and clears busy state on abort failure", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-abort-unresponsive-"));
+  const backends = new Map<string, FakeTabBackend>();
+  const events: { area: string; action?: string; error: string }[] = [];
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async () => undefined,
+    recordRuntimeEvent: (area, error, details) => {
+      events.push({
+        area,
+        action: typeof details?.action === "string" ? details.action : undefined,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  await manager.dispatchPrompt(
+    {
+      chatId: 1,
+      replyToMessageId: 20,
+      content: [{ type: "text", text: "question" }],
+    },
+    "ctx",
+  );
+
+  const backend = backends.get("A");
+  assert.ok(backend);
+  backend.abortError = new Error("abort timed out");
+
+  assert.deepEqual(await manager.abortActive("ctx"), {
+    tabName: "A",
+    aborted: true,
+    message: "Aborted tab A after worker stopped responding.",
+  });
+
+  assert.deepEqual(backend.aborts, ["A"]);
+  assert.equal(backend.disposed, true);
+  assert.deepEqual(await manager.canSwitchActiveModel("ctx"), true);
+  assert.equal(events.some((event) => event.area === "tabs" && event.action === "abort" && event.error === "abort timed out"), true);
+  await manager.dispose();
 });
 
 test("Tab manager keeps stale final stream failures from blocking the next turn", async () => {

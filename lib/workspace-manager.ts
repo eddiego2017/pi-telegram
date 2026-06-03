@@ -199,6 +199,7 @@ export interface TelegramTabManagerDeps<TContext> {
     messageId: number,
     markdown: string,
   ) => Promise<number | undefined>;
+  deleteMessage?: (chatId: number, messageId: number) => Promise<unknown>;
   sendInteractiveMessage?: (
     chatId: number,
     text: string,
@@ -293,6 +294,7 @@ type TelegramTabPostRunMessageKind = "thinking" | "tool" | "text";
 interface TelegramTabPostRunMessage {
   kind: TelegramTabPostRunMessageKind;
   markdown: string;
+  stream?: TelegramTabStreamState;
 }
 
 interface TelegramTabToolStatusEntry {
@@ -1195,11 +1197,18 @@ function pushTelegramTabPostRunMessage(
   runtime: WorkspaceRuntime,
   kind: TelegramTabPostRunMessageKind,
   markdown: string,
+  stream?: TelegramTabStreamState,
 ): void {
   const trimmed = markdown.trim();
   if (!trimmed) return;
-  if (runtime.postRunMessages.some((message) => message.markdown === trimmed)) return;
-  runtime.postRunMessages.push({ kind, markdown: trimmed });
+  const existing = runtime.postRunMessages.find(
+    (message) => message.markdown === trimmed,
+  );
+  if (existing) {
+    existing.stream ??= stream;
+    return;
+  }
+  runtime.postRunMessages.push({ kind, markdown: trimmed, stream });
 }
 
 function removeTelegramTabPostRunMessage(
@@ -2455,8 +2464,9 @@ export function createTelegramTabManager<TContext>(
     if (!trimmed || runtime.sentThinkingTexts.has(trimmed)) return;
     const markdown = formatTelegramTabThinkingMarkdown(trimmed);
     if (!markdown) return;
+    let stream: TelegramTabStreamState | undefined;
     if (thinkingStreamPreviewsEnabled) {
-      const stream = getStreamState(runtime.thinkingStreams, index);
+      stream = getStreamState(runtime.thinkingStreams, index);
       streamActiveTabMarkdown(
         tabState,
         tabName,
@@ -2468,7 +2478,7 @@ export function createTelegramTabManager<TContext>(
     }
     if (force) {
       runtime.sentThinkingTexts.add(trimmed);
-      pushTelegramTabPostRunMessage(runtime, "thinking", markdown);
+      pushTelegramTabPostRunMessage(runtime, "thinking", markdown, stream);
       runtime.thinkingStreams.delete(index);
     }
   };
@@ -2495,7 +2505,7 @@ export function createTelegramTabManager<TContext>(
     streamActiveTabMarkdown(tabState, tabName, runtime, stream, markdown, final);
     if (final) {
       runtime.sentToolCallMessages.add(markdown);
-      pushTelegramTabPostRunMessage(runtime, "tool", markdown);
+      pushTelegramTabPostRunMessage(runtime, "tool", markdown, stream);
       runtime.toolCallStreams.delete(index);
     }
   };
@@ -2583,6 +2593,46 @@ export function createTelegramTabManager<TContext>(
       allowStaleDelivery: true,
       retryOnFailure: false,
     });
+  };
+  const deleteTabStreamPreviewMessage = async (
+    runtime: WorkspaceRuntime,
+    stream: TelegramTabStreamState | undefined,
+    deletedMessageIds?: Set<number>,
+  ): Promise<void> => {
+    if (!stream || stream.messageId === undefined || !deps.deleteMessage) return;
+    if (deletedMessageIds?.has(stream.messageId)) return;
+    const target = getTabStreamDeliveryTarget(runtime, stream);
+    if (target.chatId === undefined) return;
+    try {
+      await deps.deleteMessage(target.chatId, stream.messageId);
+      deletedMessageIds?.add(stream.messageId);
+    } catch (error) {
+      deps.recordRuntimeEvent?.("tabs", error, {
+        tab: runtime.record.name,
+        action: "stream_preview_delete",
+        turnId: stream.turnId,
+        chatId: target.chatId,
+        messageThreadId: target.messageThreadId,
+        streamMessageId: stream.messageId,
+      });
+    }
+  };
+  const deleteRuntimePostRunPreviewMessages = async (
+    runtime: WorkspaceRuntime,
+    textStream: TelegramTabStreamState | undefined,
+  ): Promise<void> => {
+    const deletedMessageIds = new Set<number>();
+    await deleteTabStreamPreviewMessage(runtime, textStream, deletedMessageIds);
+    for (const message of runtime.postRunMessages) {
+      await deleteTabStreamPreviewMessage(runtime, message.stream, deletedMessageIds);
+    }
+    if (runtime.postRunMessages.some((message) => message.kind === "tool")) {
+      await deleteTabStreamPreviewMessage(
+        runtime,
+        runtime.toolCallStatusStream,
+        deletedMessageIds,
+      );
+    }
   };
   const markActiveTabTextStreamAborted = async (
     runtime: WorkspaceRuntime,
@@ -3042,6 +3092,7 @@ export function createTelegramTabManager<TContext>(
             );
           }
           if (fallbackSent) {
+            await deleteRuntimePostRunPreviewMessages(runtime, stream);
             runtime.postRunMessages = [];
             clearRuntimePostRunPreviewStreams(runtime);
           }
@@ -4006,7 +4057,22 @@ export function createTelegramTabManager<TContext>(
             : `No active worker for tab ${formatTelegramWorkspaceDisplayName(targetName)}.`,
         };
       }
-      await runtime.backend.abort();
+      let abortError: unknown;
+      try {
+        await runtime.backend.abort();
+      } catch (error) {
+        abortError = error;
+        deps.recordRuntimeEvent?.("tabs", error, {
+          tab: targetName,
+          action: "abort",
+        });
+        await disposeRuntimeBackend(runtime).catch((disposeError) => {
+          deps.recordRuntimeEvent?.("tabs", disposeError, {
+            tab: targetName,
+            action: "abort_dispose",
+          });
+        });
+      }
       stopTabTyping(runtime);
       await markActiveTabTextStreamAborted(runtime).catch((error) => {
         deps.recordRuntimeEvent?.("tabs", error, {
@@ -4016,11 +4082,14 @@ export function createTelegramTabManager<TContext>(
         });
       });
       runtime.record.status = "idle";
+      runtime.record.lastError = undefined;
       await persist();
       return {
         tabName: targetName,
         aborted: true,
-        message: `Aborted ${formatRuntimeUserScopeTarget(runtime)}.`,
+        message: abortError
+          ? `Aborted ${formatRuntimeUserScopeTarget(runtime)} after worker stopped responding.`
+          : `Aborted ${formatRuntimeUserScopeTarget(runtime)}.`,
       };
     },
     abort: async (

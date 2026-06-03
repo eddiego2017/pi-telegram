@@ -59,6 +59,7 @@ type PendingRpcRequest = {
 
 const DEFAULT_RPC_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_RPC_COMPACT_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_RPC_DISPOSE_ABORT_GRACE_MS = 1_000;
 
 export function createJsonlLineSplitter(
   onLine: (line: string) => void,
@@ -182,7 +183,12 @@ export class RpcChildBackend {
       return;
     }
     if (child.exitCode === null) {
-      await this.abort().catch(() => undefined);
+      await Promise.race([
+        this.abort().catch(() => undefined),
+        new Promise<void>((resolve) =>
+          setTimeout(resolve, DEFAULT_RPC_DISPOSE_ABORT_GRACE_MS),
+        ),
+      ]);
       this.disposed = true;
       child.kill("SIGTERM");
       await new Promise<void>((resolve) => {

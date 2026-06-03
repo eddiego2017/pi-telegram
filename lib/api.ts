@@ -539,7 +539,9 @@ function getDroppedTelegramDeliveryResult<TResponse>(
   method: string,
 ): TResponse {
   if (method === "sendChatAction") return true as TResponse;
-  if (method === "editMessageText") return "unchanged" as TResponse;
+  if (method === "editMessageText") {
+    throw new Error("Telegram delivery dropped editMessageText while rate-limited");
+  }
   return undefined as TResponse;
 }
 

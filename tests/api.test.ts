@@ -746,13 +746,14 @@ test("Telegram bridge API runtime drops preview delivery during backoff", async 
     }),
     undefined,
   );
-  assert.equal(
-    await runtime.editMessageText({
-      chat_id: -10042,
-      message_id: 10,
-      text: "\u{1F4A1} Thinking\npreview update",
-    }),
-    "unchanged",
+  await assert.rejects(
+    () =>
+      runtime.editMessageText({
+        chat_id: -10042,
+        message_id: 10,
+        text: "\u{1F4A1} Thinking\npreview update",
+      }),
+    { message: "Telegram delivery dropped editMessageText while rate-limited" },
   );
   assert.equal(
     await runtime.sendMessage({

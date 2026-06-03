@@ -300,6 +300,7 @@ export default function (pi: Pi.ExtensionAPI) {
       renderTelegramMessage: Replies.renderTelegramMessage,
       editRenderedMessage: replyTransport.editRenderedMessage,
     }),
+    deleteMessage: deleteTelegramMessage,
     sendInteractiveMessage,
     editInteractiveMessage,
     answerCallbackQuery,
