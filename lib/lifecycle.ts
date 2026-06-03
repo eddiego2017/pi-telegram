@@ -78,6 +78,10 @@ export interface TelegramLifecycleRegistrationDeps {
     event: { message: TelegramLifecycleMessage },
     ctx: ExtensionContext,
   ) => Promise<void>;
+  onMessageEnd: (
+    event: { message: TelegramLifecycleMessage },
+    ctx: ExtensionContext,
+  ) => Promise<void>;
   onAgentEnd: (event: AgentEndEvent, ctx: ExtensionContext) => Promise<void>;
 }
 
@@ -159,6 +163,9 @@ export function registerTelegramLifecycleHooks(
   });
   pi.on("message_update", async (event, ctx) => {
     await deps.onMessageUpdate(event, ctx);
+  });
+  pi.on("message_end", async (event, ctx) => {
+    await deps.onMessageEnd(event, ctx);
   });
   pi.on("agent_end", async (event, ctx) => {
     await deps.onAgentEnd(event, ctx);

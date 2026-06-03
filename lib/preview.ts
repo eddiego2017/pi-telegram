@@ -136,11 +136,15 @@ export interface TelegramAssistantMessagePreviewUpdateDeps<TMessage> {
   schedulePreviewFlush: (chatId: number) => void;
 }
 
+export type TelegramAssistantMessagePreviewEndDeps<TMessage> =
+  TelegramAssistantMessagePreviewUpdateDeps<TMessage>;
+
 export type TelegramAssistantMessagePreviewHookDeps<
   TMessage,
   TReplyMarkup = TelegramPreviewReplyMarkup,
 > = TelegramAssistantMessagePreviewStartDeps<TMessage, TReplyMarkup> &
-  TelegramAssistantMessagePreviewUpdateDeps<TMessage>;
+  TelegramAssistantMessagePreviewUpdateDeps<TMessage> &
+  TelegramAssistantMessagePreviewEndDeps<TMessage>;
 
 export interface TelegramAssistantMessagePreviewHookEvent<TMessage> {
   message: TMessage;
@@ -151,6 +155,9 @@ export interface TelegramAssistantMessagePreviewHooks<TMessage> {
     event: TelegramAssistantMessagePreviewHookEvent<TMessage>,
   ) => Promise<void>;
   onMessageUpdate: (
+    event: TelegramAssistantMessagePreviewHookEvent<TMessage>,
+  ) => Promise<void>;
+  onMessageEnd: (
     event: TelegramAssistantMessagePreviewHookEvent<TMessage>,
   ) => Promise<void>;
 }
@@ -498,6 +505,11 @@ export function createTelegramAssistantMessagePreviewHooks<
     ): Promise<void> => {
       await handleTelegramAssistantMessagePreviewUpdate(event.message, deps);
     },
+    onMessageEnd: async (
+      event: TelegramAssistantMessagePreviewHookEvent<TMessage>,
+    ): Promise<void> => {
+      await handleTelegramAssistantMessagePreviewEnd(event.message, deps);
+    },
   };
 }
 
@@ -541,6 +553,23 @@ export async function handleTelegramAssistantMessagePreviewUpdate<TMessage>(
   state.pendingText = stripTelegramCommentMarkupForPreview(
     deps.getMessageText(message),
   );
+  deps.schedulePreviewFlush(turn.chatId);
+}
+
+export async function handleTelegramAssistantMessagePreviewEnd<TMessage>(
+  message: TMessage,
+  deps: TelegramAssistantMessagePreviewEndDeps<TMessage>,
+): Promise<void> {
+  const turn = deps.getActiveTurn();
+  if (!turn || !deps.isAssistantMessage(message)) return;
+  const text = stripTelegramCommentMarkupForPreview(deps.getMessageText(message));
+  if (!text) return;
+  let state = deps.getState();
+  if (!state) {
+    state = deps.createPreviewState();
+    deps.setState(state);
+  }
+  state.pendingText = text;
   deps.schedulePreviewFlush(turn.chatId);
 }
 

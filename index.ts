@@ -869,5 +869,6 @@ export default function (pi: Pi.ExtensionAPI) {
     onModelSelect: currentModelRuntime.onModelSelect,
     onMessageStart: previewRuntime.onMessageStart,
     onMessageUpdate: previewRuntime.onMessageUpdate,
+    onMessageEnd: previewRuntime.onMessageEnd,
   });
 }

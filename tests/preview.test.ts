@@ -27,6 +27,7 @@ import {
   finalizeTelegramMarkdownPreview,
   finalizeTelegramPreview,
   flushTelegramPreview,
+  handleTelegramAssistantMessagePreviewEnd,
   handleTelegramAssistantMessagePreviewStart,
   handleTelegramAssistantMessagePreviewUpdate,
   shouldUseTelegramDraftPreview,
@@ -447,11 +448,15 @@ test("Assistant preview runtime binds controller and message hooks", async () =>
     },
   });
   assert.equal(runtime.getState()?.pendingText, "hello");
+  await runtime.onMessageEnd({
+    message: { role: "assistant", text: "hello final" },
+  });
+  assert.equal(runtime.getState()?.pendingText, "hello final");
   activeTurn = undefined;
   await runtime.onMessageUpdate({
     message: { role: "assistant", text: "ignored" },
   });
-  assert.equal(runtime.getState()?.pendingText, "hello");
+  assert.equal(runtime.getState()?.pendingText, "hello final");
   assert.deepEqual(events, []);
 });
 
@@ -596,6 +601,23 @@ test("Preview runtime handles assistant message lifecycle hooks", async () => {
       },
     },
   );
+  await handleTelegramAssistantMessagePreviewEnd(
+    { role: "assistant", text: "hello final" },
+    {
+      getActiveTurn: () => activeTurn,
+      isAssistantMessage: (message) => message.role === "assistant",
+      getState: () => previewState,
+      setState: (state) => {
+        previewState = state;
+        events.push(`set:${state?.pendingText ?? "none"}`);
+      },
+      createPreviewState,
+      getMessageText: (message) => message.text,
+      schedulePreviewFlush: (chatId) => {
+        events.push(`flush:${chatId}`);
+      },
+    },
+  );
   activeTurn = undefined;
   await handleTelegramAssistantMessagePreviewUpdate(
     { role: "assistant", text: "ignored" },
@@ -613,8 +635,13 @@ test("Preview runtime handles assistant message lifecycle hooks", async () => {
       },
     },
   );
-  assert.deepEqual(events, ["markdown:7:previous markdown", "set:", "flush:7"]);
-  assert.equal(previewState?.pendingText, "hello");
+  assert.deepEqual(events, [
+    "markdown:7:previous markdown",
+    "set:",
+    "flush:7",
+    "flush:7",
+  ]);
+  assert.equal(previewState?.pendingText, "hello final");
 });
 
 test("Preview hook runtime binds assistant message start and update deps", async () => {
@@ -661,8 +688,16 @@ test("Preview hook runtime binds assistant message start and update deps", async
   await hooks.onMessageUpdate({
     message: { role: "assistant", text: "next markdown" },
   });
-  assert.deepEqual(events, ["markdown:7:previous markdown", "set:", "flush:7"]);
-  assert.equal(previewState?.pendingText, "next markdown");
+  await hooks.onMessageEnd({
+    message: { role: "assistant", text: "final markdown" },
+  });
+  assert.deepEqual(events, [
+    "markdown:7:previous markdown",
+    "set:",
+    "flush:7",
+    "flush:7",
+  ]);
+  assert.equal(previewState?.pendingText, "final markdown");
 });
 
 test("Preview runtime prefers editable rich previews when stable blocks are available", async () => {

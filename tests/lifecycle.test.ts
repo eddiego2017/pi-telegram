@@ -102,6 +102,9 @@ test("Lifecycle helpers register pi hooks and delegate to handlers", async () =>
     onMessageUpdate: async () => {
       events.push("message-update");
     },
+    onMessageEnd: async () => {
+      events.push("message-end");
+    },
     onAgentEnd: async () => {
       events.push("agent-end");
     },
@@ -118,6 +121,7 @@ test("Lifecycle helpers register pi hooks and delegate to handlers", async () =>
       "tool_execution_end",
       "message_start",
       "message_update",
+      "message_end",
       "agent_end",
     ],
   );
@@ -146,6 +150,7 @@ test("Lifecycle helpers register pi hooks and delegate to handlers", async () =>
     {},
     ctx,
   );
+  await getRequiredLifecycleHandler(harness.handlers, "message_end")({}, ctx);
   await getRequiredLifecycleHandler(harness.handlers, "agent_end")({}, ctx);
   assert.deepEqual(beforeAgentStartResult, { systemPrompt: "prompt" });
   assert.deepEqual(events, [
@@ -158,6 +163,7 @@ test("Lifecycle helpers register pi hooks and delegate to handlers", async () =>
     "tool-end",
     "message-start",
     "message-update",
+    "message-end",
     "agent-end",
   ]);
 });
