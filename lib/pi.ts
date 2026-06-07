@@ -23,6 +23,10 @@ import {
   type TelegramContextUsageSnapshot,
   type TelegramPromptCacheUsageSnapshot,
 } from "./context-usage.ts";
+import {
+  parseTelegramCliScopedModelPatterns,
+  resolveScopedModelPatterns,
+} from "./model.ts";
 
 export type {
   AgentEndEvent,
@@ -285,6 +289,21 @@ export function listExtensionContextAvailableModels(
     provider: model.provider,
     id: model.id,
   }));
+}
+
+export function listExtensionContextScopedModels(
+  ctx: ExtensionContext,
+): readonly { provider: string; id: string }[] {
+  const all = listExtensionContextAvailableModels(ctx);
+  const cliPatterns = parseTelegramCliScopedModelPatterns(
+    process.argv.slice(2),
+  );
+  const settingsManager = createSettingsManager(ctx.cwd);
+  const patterns = cliPatterns ?? settingsManager.getEnabledModels() ?? [];
+  if (patterns.length === 0) return all;
+  const scoped = resolveScopedModelPatterns(patterns, [...all]);
+  // Fall back to all models if scoping matched nothing (mirrors /model menu).
+  return scoped.length > 0 ? scoped.map((entry) => entry.model) : all;
 }
 
 export function findExtensionContextAvailableModel(

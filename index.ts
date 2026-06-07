@@ -672,7 +672,7 @@ export default function (pi: Pi.ExtensionAPI) {
       clearCachedModelMenuInputs: modelMenuRuntime.clearCachedInputs,
     }),
     setModel,
-    listAvailableModels: Pi.listExtensionContextAvailableModels,
+    listAvailableModels: Pi.listExtensionContextScopedModels,
     findActiveModelByIdentity: Pi.findExtensionContextAvailableModel,
     sendUserMessage,
     isIdle,
