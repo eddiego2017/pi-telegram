@@ -1074,7 +1074,33 @@ Earlier worker-cap experiments passed tests and live reload validation when maxW
 
 ### Phase 7 — Internal `tab -> workspace` rename migration
 
-Status: planned, not started. This is a semantic rename, not a mechanical `tab -> topic` replacement.
+Status: completed as a full deletion of the legacy `tab` vocabulary (no compatibility shims).
+
+What shipped (commit `ca5f477`):
+
+```text
+TelegramTab* types/helpers/runtime -> TelegramWorkspace* (no tab-named aliases remain)
+lib/tabs.ts, lib/tab-manager.ts re-export shims -> removed
+tests/tabs.test.ts, tests/tab-manager.test.ts compat tests -> removed
+in-memory activeTab/tabs state aliases -> removed (activeWorkspace/workspaces only)
+command /tab -> /workspace; callback prefix tab: -> workspace:
+env PI_TELEGRAM_TAB -> PI_TELEGRAM_WORKSPACE
+config concurrentTabs -> concurrentWorkspaces; maxTabs -> maxWorkspaces
+state file telegram-workspaces.json only; telegram-tabs.json fallback removed
+README/architecture/BACKLOG wording -> workspace/topic/worker
+```
+
+Deviation from the original compatibility-first plan below: per operator decision
+this was done as plan B (full deletion), so the legacy aliases, dual config/state
+reads, and `/tab` legacy command described in the sub-steps were dropped rather
+than kept. Live config/state migration (`concurrentTabs`->`concurrentWorkspaces`,
+`telegram-tabs.json`->`telegram-workspaces.json`) must be applied atomically with
+`/reload` because the package loads directly from this repo. CHANGELOG and
+`concurrent_chat_plan.md` keep historical `tab` names intentionally.
+
+Original compatibility-first plan (superseded by full deletion):
+
+This is a semantic rename, not a mechanical `tab -> topic` replacement.
 
 Vocabulary target:
 
