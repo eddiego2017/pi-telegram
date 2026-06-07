@@ -74,6 +74,29 @@ test("Underscores inside words do not become italic", () => {
   assert.match(chunks[0]?.text ?? "", /<b>bold<\/b>/);
 });
 
+test("Bold and italic adjacent to CJK characters render with balanced tags", () => {
+  const chunks = renderTelegramMessage(
+    "結果**今天（6 月 6 號）**，我又收到**另一封**信",
+    { mode: "markdown" },
+  );
+  assert.equal(chunks.length, 1);
+  const text = chunks[0]?.text ?? "";
+  // The bold runs must be recognized even though they are flanked by CJK letters.
+  assert.match(text, /<b>今天（6 月 6 號）<\/b>/);
+  assert.match(text, /<b>另一封<\/b>/);
+  // No stray single-asterisk italics, and no interleaved <b>/<i> nesting that
+  // Telegram rejects ("Unmatched end tag").
+  assert.equal(text.includes("<i>"), false);
+  const tags = [...text.matchAll(/<\/?[a-z]+>/g)];
+  const stack: string[] = [];
+  for (const tag of tags) {
+    const name = tag[0];
+    if (name[1] !== "/") stack.push(name.slice(1, -1));
+    else assert.equal(stack.pop(), name.slice(2, -1));
+  }
+  assert.equal(stack.length, 0);
+});
+
 test("Quoted nested lists stay in blockquote rendering", () => {
   const chunks = renderTelegramMessage(
     "> Quoted intro\n> - nested item\n>   - deeper item",

@@ -842,10 +842,21 @@ function renderDelimitedInlineStyle(
   render: (content: string) => string,
 ): string {
   const escapedDelimiter = delimiter.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(
-    `(^|[^\\p{L}\\p{N}\\\\])(${escapedDelimiter})(?=\\S)(.+?)(?<=\\S)\\2(?=[^\\p{L}\\p{N}]|$)`,
-    "gu",
-  );
+  // Asterisk (*, **, ***) and strikethrough (~~) delimiters are used as emphasis
+  // even when adjacent to letters/numbers (common in CJK text like `結果**今天**`),
+  // so we only guard against an escaping backslash. Underscore delimiters keep an
+  // ASCII-word boundary so identifiers like `foo_bar_baz` are not treated as emphasis.
+  const isLooseDelimiter =
+    delimiter.startsWith("*") || delimiter.startsWith("~");
+  const pattern = isLooseDelimiter
+    ? new RegExp(
+        `(^|[^\\\\])(${escapedDelimiter})(?=\\S)(.+?)(?<=\\S)\\2`,
+        "gu",
+      )
+    : new RegExp(
+        `(^|[^A-Za-z0-9\\\\])(${escapedDelimiter})(?=\\S)(.+?)(?<=\\S)\\2(?=[^A-Za-z0-9]|$)`,
+        "gu",
+      );
   return text.replace(
     pattern,
     (_match, prefix: string, _wrapped: string, content: string) => {
