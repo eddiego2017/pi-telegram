@@ -176,10 +176,10 @@ test("Workspace topic helpers build stable names and find topic-bound records", 
 
 test("Workspace state normalization preserves records and marks stale running workspaces exited", () => {
   const defaultState = normalizeTelegramWorkspacesState(undefined, "/repo", 1000);
-  assert.equal(defaultState.activeWorkspace, "default");
+  assert.equal(defaultState.activeWorkspace, "general");
   assert.deepEqual(defaultState.workspaces, {
-    default: {
-      name: "default",
+    general: {
+      name: "general",
       cwd: "/repo",
       createdAt: 1000,
       lastUsedAt: 1000,
@@ -208,7 +208,7 @@ test("Workspace state normalization preserves records and marks stale running wo
   assert.equal(normalized.activeWorkspace, "A");
   assert.equal(normalized.workspaces.A?.status, "exited");
   assert.equal(normalized.workspaces.A?.status, "exited");
-  assert.equal(normalized.workspaces.default?.status, "idle");
+  assert.equal(normalized.workspaces.general?.status, "idle");
   const normalizedWithSource = normalizeTelegramWorkspacesState(
     {
       version: 1,
@@ -290,7 +290,7 @@ test("Workspace filters and formatters keep list and status compact", () => {
 test("Workspace formatters keep list and status compact", () => {
   const defaultState = createDefaultTelegramWorkspacesState("/repo", 1000);
   assert.match(formatTelegramWorkspaceList(defaultState, {}, 1000), /- General \* idle/);
-  assert.match(formatTelegramWorkspaceStatus(defaultState.workspaces.default!, 0, 1000), /Workspace: General/);
+  assert.match(formatTelegramWorkspaceStatus(defaultState.workspaces.general!, 0, 1000), /Workspace: General/);
 
   const state = createDefaultTelegramWorkspacesState("/repo", 1000);
   state.workspaces.A = {

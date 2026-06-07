@@ -1253,14 +1253,21 @@ live smoke after state/command migration phases
 
 ### Phase 8 — Internal `default -> general` migration
 
-Later migration:
+Status: completed as a full deletion (no legacy alias).
+
+What shipped:
 
 ```text
-internal default record -> general record
-legacy alias default -> general
+TELEGRAM_DEFAULT_WORKSPACE_NAME value "default" -> "general" (identifier kept; DEFAULT here means the fallback/reserved record, not its name)
+reserved record key and activeWorkspace persist as "general"
+display stays "General" via TELEGRAM_GENERAL_WORKSPACE_DISPLAY_NAME
+tests/docs updated; live telegram-workspaces.json migrated atomically with /reload
+no default -> general read alias kept
 ```
 
-Only after display rename and topic-native routing are stable.
+turnId safety: turnId is an opaque equality-compared string and is never split
+back into fields, so the thread segment `general` and the name segment `general`
+do not collide.
 
 ## Security / Safety Rules
 

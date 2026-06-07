@@ -61,7 +61,7 @@ export type TelegramWorkspaceCommand =
   | { kind: "usage" }
   | { kind: "invalid"; message: string };
 
-export const TELEGRAM_DEFAULT_WORKSPACE_NAME = "default";
+export const TELEGRAM_DEFAULT_WORKSPACE_NAME = "general";
 export const TELEGRAM_GENERAL_WORKSPACE_DISPLAY_NAME = "General";
 export const TELEGRAM_WORKSPACE_NAME_PATTERN = /^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$/;
 export const TELEGRAM_WORKSPACE_NAME_MAX_LENGTH = 32;

@@ -472,8 +472,8 @@ test("Workspace manager reads and writes the workspaces state file", async () =>
       version: 1,
       activeWorkspace: "A",
       workspaces: {
-        default: {
-          name: "default",
+        general: {
+          name: "general",
           cwd: "/repo",
           createdAt: 1000,
           lastUsedAt: 1000,
@@ -1083,7 +1083,7 @@ test("Workspace manager routes forum topic prompts to topic-bound workspaces wit
     },
     "ctx",
   );
-  assert.deepEqual(backends.get("default")?.prompts, ["general prompt"]);
+  assert.deepEqual(backends.get("general")?.prompts, ["general prompt"]);
   assert.match(textReplies.at(-1) ?? "", /Started workspace General/);
   assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, "A");
 
@@ -2201,7 +2201,7 @@ test("Workspace manager rejects unknown forum topics at max workspace capacity",
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
     workspaces: Record<string, unknown>;
   };
-  assert.deepEqual(Object.keys(saved.workspaces), ["default"]);
+  assert.deepEqual(Object.keys(saved.workspaces), ["general"]);
 });
 
 test("Workspace manager reports worker API errors instead of replaying stale text", async () => {
@@ -3567,7 +3567,7 @@ test("Workspace dashboard closes multiple selected workspaces", async () => {
     workspaces: Record<string, unknown>;
   };
   assert.equal(saved.activeWorkspace, "C");
-  assert.deepEqual(Object.keys(saved.workspaces).sort(), ["C", "default"]);
+  assert.deepEqual(Object.keys(saved.workspaces).sort(), ["C", "general"]);
   assert.equal(backends.get("A")?.disposed, true);
   assert.equal(backends.get("B")?.disposed, true);
   assert.equal(backends.get("C")?.disposed, false);
@@ -3630,9 +3630,9 @@ test("Workspace manager renames workspaces without discarding session state", as
 
   await manager.handleCommand("rename Alpha", 1, 13, "ctx");
   assert.match(replies.at(-1) ?? "", /already named Alpha/);
-  await manager.handleCommand("rename Alpha default", 1, 14, "ctx");
+  await manager.handleCommand("rename Alpha general", 1, 14, "ctx");
   assert.match(replies.at(-1) ?? "", /Workspace General already exists/);
-  await manager.handleCommand("rename default Other", 1, 15, "ctx");
+  await manager.handleCommand("rename general Other", 1, 15, "ctx");
   assert.match(replies.at(-1) ?? "", /Cannot rename General/);
 });
 
