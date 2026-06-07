@@ -284,6 +284,7 @@ interface WorkspaceRuntime {
   agentStartedAt?: number;
   firstOutputAt?: number;
   firstOutputLogged?: boolean;
+  pendingCompactionTurns?: TelegramTabPromptTurn[];
   unsubscribe?: () => void;
 }
 
@@ -4048,6 +4049,16 @@ export function createTelegramTabManager<TContext>(
     ): Promise<TelegramTabAbortResult> => {
       const targetName = name ?? tabState.activeTab;
       const runtime = getWorkspaceRuntime(tabState, targetName);
+      if (runtime) {
+        const droppedTurns = runtime.pendingCompactionTurns ?? [];
+        runtime.pendingCompactionTurns = undefined;
+        for (const droppedTurn of droppedTurns) {
+          await sendTurnTextReply(
+            droppedTurn,
+            "Aborted; this queued prompt was dropped.",
+          ).catch(() => undefined);
+        }
+      }
       if (!runtime?.backend) {
         return {
           tabName: targetName,
@@ -4264,6 +4275,109 @@ export function createTelegramTabManager<TContext>(
       );
     },
   };
+  const deliverPromptTurn = async (
+    runtime: WorkspaceRuntime,
+    turn: TelegramTabPromptTurn,
+    ctx: TContext,
+    options: { wasRunning: boolean; replyOnSuccess?: boolean },
+  ): Promise<void> => {
+    const { wasRunning } = options;
+    const replyOnSuccess = options.replyOnSuccess ?? true;
+    const promptText = buildTelegramTabPromptText(turn);
+    if (!promptText) return;
+    const promptNow = now();
+    runtime.activeChatId = turn.chatId;
+    runtime.activeMessageThreadId = turn.messageThreadId;
+    runtime.activeReplyToMessageId = turn.replyToMessageId;
+    runtime.activeTopicDelivery = isTopicBindingEnabled() &&
+      (turn.messageThreadId !== undefined ||
+        runtime.record.name === TELEGRAM_DEFAULT_WORKSPACE_NAME ||
+        runtime.record.source?.kind === "telegram-topic");
+    runtime.activeTurnId = `tab:${runtime.record.name}:${turn.chatId}:${turn.messageThreadId ?? "general"}:${turn.replyToMessageId}:${promptNow}`;
+    runtime.promptStartedAt = promptNow;
+    runtime.promptSentAt = undefined;
+    runtime.agentStartedAt = undefined;
+    runtime.firstOutputAt = undefined;
+    runtime.firstOutputLogged = false;
+    runtime.record.lastUsedAt = promptNow;
+    runtime.record.lastMessageText = promptText;
+    runtime.record.lastMessageAt = promptNow;
+    await persist();
+    startTabTyping(runtime.record.name, runtime);
+    try {
+      deps.debugLogger?.log(
+        "telegram.tab.prompt.start",
+        {
+          ...getTabTurnDetails(runtime.record.name, runtime),
+          wasRunning,
+        },
+        promptText,
+      );
+      const promptStartedAt = Date.now();
+      const backend = await ensureBackend(runtime, ctx);
+      if (wasRunning) {
+        await backend.followUp(promptText);
+      } else {
+        await backend.prompt(promptText);
+      }
+      runtime.promptSentAt = now();
+      deps.debugLogger?.log("telegram.tab.prompt.sent", {
+        ...getTabTurnDetails(runtime.record.name, runtime),
+        elapsedMs: Date.now() - promptStartedAt,
+        wasRunning,
+      });
+      runtime.record.status = "running";
+      await persist();
+      if (replyOnSuccess) {
+        await sendTurnTextReply(
+          turn,
+          wasRunning
+            ? `Queued follow-up in ${formatRuntimeUserScopeTarget(runtime, turn)}.`
+            : formatRuntimeStartedMessage(runtime, turn),
+        );
+      }
+    } catch (error) {
+      deps.debugLogger?.log("telegram.tab.prompt.error", {
+        ...getTabTurnDetails(runtime.record.name, runtime),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      logTabTurnSummary(
+        runtime.record.name,
+        runtime,
+        "error",
+        error instanceof Error ? error.message : String(error),
+      );
+      stopTabTyping(runtime);
+      runtime.record.status = "error";
+      runtime.record.lastError = getErrorMessage(error);
+      deps.recordRuntimeEvent?.("tabs", error, {
+        tab: runtime.record.name,
+        action: "prompt",
+      });
+      await persist();
+      await sendTurnTextReply(
+        turn,
+        formatRuntimeFailureMessage(runtime, getErrorMessage(error), turn),
+      );
+    }
+  };
+  const flushPendingCompactionTurns = async (
+    runtime: WorkspaceRuntime,
+    ctx: TContext,
+  ): Promise<void> => {
+    const pending = runtime.pendingCompactionTurns;
+    if (!pending || pending.length === 0) return;
+    runtime.pendingCompactionTurns = undefined;
+    for (let index = 0; index < pending.length; index += 1) {
+      const wasRunning = runtime.record.status === "running";
+      await deliverPromptTurn(runtime, pending[index], ctx, { wasRunning });
+    }
+  };
+  const clearPendingCompactionTurns = (runtime: WorkspaceRuntime): number => {
+    const count = runtime.pendingCompactionTurns?.length ?? 0;
+    runtime.pendingCompactionTurns = undefined;
+    return count;
+  };
   return {
     isEnabled,
     getActiveModel: async (ctx) => {
@@ -4426,6 +4540,7 @@ export function createTelegramTabManager<TContext>(
           runtime.record.lastUsedAt = now();
           await persist();
           callbacks.onComplete();
+          await flushPendingCompactionTurns(runtime, ctx);
         } catch (error) {
           runtime.record.status = "error";
           runtime.record.lastError = getErrorMessage(error);
@@ -4435,6 +4550,14 @@ export function createTelegramTabManager<TContext>(
           });
           await persist();
           callbacks.onError(error);
+          const droppedTurns = runtime.pendingCompactionTurns ?? [];
+          clearPendingCompactionTurns(runtime);
+          for (const droppedTurn of droppedTurns) {
+            await sendTurnTextReply(
+              droppedTurn,
+              "Compaction failed; this queued prompt was dropped. Resend after the worker recovers.",
+            ).catch(() => undefined);
+          }
         }
       })();
       return true;
@@ -5198,83 +5321,21 @@ export function createTelegramTabManager<TContext>(
       const isCompacting = childState?.isCompacting === true;
       const isStarting = runtime.record.status === "starting";
       const wasRunning = runtime.record.status === "running";
-      if (isStarting || isCompacting) {
+      if (isCompacting) {
+        const queued = runtime.pendingCompactionTurns ?? [];
+        queued.push(turn);
+        runtime.pendingCompactionTurns = queued;
+        await sendTurnTextReply(
+          turn,
+          `Queued in ${formatRuntimeUserScopeTarget(runtime, turn)} (compaction in progress, ${queued.length} waiting).`,
+        );
+        return true;
+      }
+      if (isStarting) {
         await sendTurnTextReply(turn, formatRuntimeBusyMessage(runtime, turn));
         return true;
       }
-      const promptNow = now();
-      runtime.activeChatId = turn.chatId;
-      runtime.activeMessageThreadId = turn.messageThreadId;
-      runtime.activeReplyToMessageId = turn.replyToMessageId;
-      runtime.activeTopicDelivery = isTopicBindingEnabled() &&
-        (turn.messageThreadId !== undefined ||
-          runtime.record.name === TELEGRAM_DEFAULT_WORKSPACE_NAME ||
-          runtime.record.source?.kind === "telegram-topic");
-      runtime.activeTurnId = `tab:${runtime.record.name}:${turn.chatId}:${turn.messageThreadId ?? "general"}:${turn.replyToMessageId}:${promptNow}`;
-      runtime.promptStartedAt = promptNow;
-      runtime.promptSentAt = undefined;
-      runtime.agentStartedAt = undefined;
-      runtime.firstOutputAt = undefined;
-      runtime.firstOutputLogged = false;
-      runtime.record.lastUsedAt = promptNow;
-      runtime.record.lastMessageText = promptText;
-      runtime.record.lastMessageAt = promptNow;
-      await persist();
-      startTabTyping(runtime.record.name, runtime);
-      try {
-        deps.debugLogger?.log(
-          "telegram.tab.prompt.start",
-          {
-            ...getTabTurnDetails(runtime.record.name, runtime),
-            wasRunning,
-          },
-          promptText,
-        );
-        const promptStartedAt = Date.now();
-        const backend = await ensureBackend(runtime, ctx);
-        if (wasRunning) {
-          await backend.followUp(promptText);
-        } else {
-          await backend.prompt(promptText);
-        }
-        runtime.promptSentAt = now();
-        deps.debugLogger?.log("telegram.tab.prompt.sent", {
-          ...getTabTurnDetails(runtime.record.name, runtime),
-          elapsedMs: Date.now() - promptStartedAt,
-          wasRunning,
-        });
-        runtime.record.status = "running";
-        await persist();
-        await sendTurnTextReply(
-          turn,
-          wasRunning
-            ? `Queued follow-up in ${formatRuntimeUserScopeTarget(runtime, turn)}.`
-            : formatRuntimeStartedMessage(runtime, turn),
-        );
-      } catch (error) {
-        deps.debugLogger?.log("telegram.tab.prompt.error", {
-          ...getTabTurnDetails(runtime.record.name, runtime),
-          error: error instanceof Error ? error.message : String(error),
-        });
-        logTabTurnSummary(
-          runtime.record.name,
-          runtime,
-          "error",
-          error instanceof Error ? error.message : String(error),
-        );
-        stopTabTyping(runtime);
-        runtime.record.status = "error";
-        runtime.record.lastError = getErrorMessage(error);
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: runtime.record.name,
-          action: "prompt",
-        });
-        await persist();
-        await sendTurnTextReply(
-          turn,
-          formatRuntimeFailureMessage(runtime, getErrorMessage(error), turn),
-        );
-      }
+      await deliverPromptTurn(runtime, turn, ctx, { wasRunning });
       return true;
     },
     dispose: async () => {

@@ -132,12 +132,21 @@ class FakeTabBackend implements TelegramTabBackend {
     this.state = { ...this.state, isStreaming: false };
   }
 
+  compactDeferred: ReturnType<typeof createDeferred<void>> | undefined;
+  compactError: unknown;
+
   async compact(): Promise<void> {
     this.compactions.push(this.tabName);
+    this.state = { ...this.state, isStreaming: false, isCompacting: true };
+    if (this.compactDeferred) await this.compactDeferred.promise;
+    if (this.compactError) {
+      this.state = { ...this.state, isCompacting: false };
+      throw this.compactError;
+    }
     this.state = {
       ...this.state,
       messageCount: (this.state.messageCount ?? 0) + 1,
-      isStreaming: false,
+      isCompacting: false,
     };
   }
 
@@ -652,6 +661,132 @@ test("Tab manager compacts the active tab worker", async () => {
   assert.deepEqual(backends.get("A")?.compactions, ["A"]);
   assert.deepEqual(events, ["complete"]);
   assert.equal(manager.getActiveSessionReference("ctx")?.sessionId, "session-A");
+});
+
+test("Tab manager queues prompts during compaction and flushes them after", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-compact-queue-"));
+  const replies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  const backend = backends.get("A");
+  assert.ok(backend);
+  backend.compactDeferred = createDeferred<void>();
+
+  const compactDone = new Promise<void>((resolve) => {
+    manager.compactActive("ctx", {
+      onComplete: () => resolve(),
+      onError: () => resolve(),
+    });
+  });
+  while (backend.compactions.length === 0) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  // While compaction is mid-flight, queue two prompts instead of rejecting.
+  await manager.dispatchPrompt(
+    { chatId: 1, replyToMessageId: 20, content: [{ type: "text", text: "first" }] },
+    "ctx",
+  );
+  await manager.dispatchPrompt(
+    { chatId: 1, replyToMessageId: 21, content: [{ type: "text", text: "second" }] },
+    "ctx",
+  );
+  assert.deepEqual(backend.prompts, []);
+  assert.deepEqual(backend.followUps, []);
+  assert.ok(
+    replies.some((r) => r.includes("compaction in progress") && r.includes("1 waiting")),
+  );
+  assert.ok(
+    replies.some((r) => r.includes("compaction in progress") && r.includes("2 waiting")),
+  );
+
+  backend.compactDeferred.resolve();
+  await compactDone;
+  while (backend.prompts.length === 0 || backend.followUps.length === 0) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  // After compaction the queued prompts are delivered in order.
+  assert.deepEqual(backend.prompts, ["first"]);
+  assert.deepEqual(backend.followUps, ["second"]);
+});
+
+test("Tab manager drops compaction queue on abort", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-compact-abort-"));
+  const replies: string[] = [];
+  const backends = new Map<string, FakeTabBackend>();
+  const manager = createTelegramTabManager<string>({
+    getConfig: () => ({
+      enabled: true,
+      maxTabs: 4,
+      inactiveNotify: true,
+      workerExtensions: [],
+    }),
+    getCwd: () => "/repo",
+    statePath: join(tempDir, "tabs.json"),
+    sessionDir: join(tempDir, "sessions"),
+    createBackend: (options) => {
+      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      backends.set(options.tabName, backend);
+      return backend;
+    },
+    sendTextReply: async (_chatId, _replyToMessageId, text) => {
+      replies.push(text);
+      return replies.length;
+    },
+  });
+
+  await manager.handleCommand("new A", 1, 10, "ctx");
+  const backend = backends.get("A");
+  assert.ok(backend);
+  backend.compactDeferred = createDeferred<void>();
+
+  const compactDone = new Promise<void>((resolve) => {
+    manager.compactActive("ctx", {
+      onComplete: () => resolve(),
+      onError: () => resolve(),
+    });
+  });
+  while (backend.compactions.length === 0) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  await manager.dispatchPrompt(
+    { chatId: 1, replyToMessageId: 20, content: [{ type: "text", text: "queued" }] },
+    "ctx",
+  );
+
+  const abortResult = await manager.abortActive("ctx");
+  assert.ok(abortResult?.aborted);
+  assert.ok(replies.some((r) => r === "Aborted; this queued prompt was dropped."));
+
+  backend.compactDeferred.resolve();
+  await compactDone;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  // The dropped prompt is never delivered.
+  assert.deepEqual(backend.prompts, []);
+  assert.deepEqual(backend.followUps, []);
 });
 
 test("Tab manager routes prompts to active workers and notifies inactive completion", async () => {
@@ -2503,7 +2638,7 @@ test("Tab manager uses current-topic wording for native worker lifecycle errors"
       );
       assert.equal(
         replies.at(-1),
-        "Current topic is busy. Wait for it to go idle or send /stop first.",
+        "Queued in current topic (compaction in progress, 1 waiting).",
       );
       assert.deepEqual(backend.followUps, []);
       await assert.rejects(
