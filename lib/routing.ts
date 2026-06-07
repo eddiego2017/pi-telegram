@@ -25,8 +25,8 @@ import * as PromptTemplates from "./prompt-templates.ts";
 import * as Queue from "./queue.ts";
 import type { TelegramBridgeRuntime } from "./runtime.ts";
 import type {
-  TelegramTabCallbackQuery,
-  TelegramTabManager,
+  TelegramWorkspaceCallbackQuery,
+  TelegramWorkspaceManager,
 } from "./workspace-manager.ts";
 import * as TextGroups from "./text-groups.ts";
 import * as Turns from "./turns.ts";
@@ -47,7 +47,7 @@ export type TelegramRoutedCallbackQuery = Updates.TelegramCallbackQuery &
   Menu.MenuCallbackQuery &
   MenuDump.TelegramDumpMenuCallbackQuery &
   MenuSession.TelegramSessionMenuCallbackQuery &
-  TelegramTabCallbackQuery &
+  TelegramWorkspaceCallbackQuery &
   MenuTree.TelegramTreeMenuCallbackQuery;
 
 export interface TelegramInboundRouteRuntimeDeps<
@@ -61,7 +61,7 @@ export interface TelegramInboundRouteRuntimeDeps<
     | "getAllowedUserId"
     | "setAllowedUserId"
     | "persist"
-    | "getConcurrentTabsConfig"
+    | "getConcurrentWorkspacesConfig"
   >;
   bridgeRuntime: TelegramBridgeRuntime;
   activeTurnRuntime: Queue.TelegramActiveTurnStore;
@@ -118,7 +118,7 @@ export interface TelegramInboundRouteRuntimeDeps<
     message: TMessage,
     ctx: TContext,
   ) => Promise<boolean>;
-  tabManager?: TelegramTabManager<TContext>;
+  workspaceManager?: TelegramWorkspaceManager<TContext>;
   openResumeMenu?: (
     chatId: number,
     replyToMessageId: number,
@@ -223,7 +223,7 @@ const TELEGRAM_OWNED_CALLBACK_PREFIXES = [
   "session:",
   "settings:",
   "status:",
-  "tab:",
+  "workspace:",
   "tgbtn:",
   "thinking:",
   "tree:",
@@ -242,13 +242,13 @@ function getTelegramTurnId(chatId: unknown, messageId: unknown): string | undefi
 }
 
 function getTelegramTopicBindingTrustedChatIds(
-  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
+  configStore: Pick<TelegramConfigStore, "getConcurrentWorkspacesConfig">,
 ): readonly number[] {
-  return configStore.getConcurrentTabsConfig().topicBinding?.trustedChatIds ?? [];
+  return configStore.getConcurrentWorkspacesConfig().topicBinding?.trustedChatIds ?? [];
 }
 
 function isTelegramTrustedTopicBindingChat(
-  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
+  configStore: Pick<TelegramConfigStore, "getConcurrentWorkspacesConfig">,
   chatId: unknown,
 ): boolean {
   return isTelegramTrustedChat(
@@ -258,7 +258,7 @@ function isTelegramTrustedTopicBindingChat(
 }
 
 function shouldIgnoreTelegramUntrustedForumChat(
-  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
+  configStore: Pick<TelegramConfigStore, "getConcurrentWorkspacesConfig">,
   message: Updates.TelegramUpdateMessage | undefined,
 ): boolean {
   const trustedChatIds = getTelegramTopicBindingTrustedChatIds(configStore);
@@ -268,7 +268,7 @@ function shouldIgnoreTelegramUntrustedForumChat(
 }
 
 function isTelegramChatAllowedForTopicBinding(
-  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
+  configStore: Pick<TelegramConfigStore, "getConcurrentWorkspacesConfig">,
   chat: Updates.TelegramChat | undefined,
 ): boolean {
   return !shouldIgnoreTelegramUntrustedForumChat(
@@ -299,18 +299,18 @@ export function createTelegramInboundRouteRuntime<
   const getActiveMenuModel = async (
     ctx: TContext,
   ): Promise<TModel | undefined> => {
-    if (!deps.tabManager?.isEnabled()) {
+    if (!deps.workspaceManager?.isEnabled()) {
       return deps.currentModelRuntime.get(ctx);
     }
-    const tabModel = await deps.tabManager.getActiveModel(ctx);
-    if (!tabModel) return undefined;
+    const workspaceModel = await deps.workspaceManager.getActiveModel(ctx);
+    if (!workspaceModel) return undefined;
     return (
-      deps.findActiveModelByIdentity(tabModel, ctx) ?? (tabModel as TModel)
+      deps.findActiveModelByIdentity(workspaceModel, ctx) ?? (workspaceModel as TModel)
     );
   };
   const isMenuModelSwitchAllowed = (ctx: TContext): Promise<boolean> | boolean =>
-    deps.tabManager?.isEnabled()
-      ? deps.tabManager.canSwitchActiveModel(ctx)
+    deps.workspaceManager?.isEnabled()
+      ? deps.workspaceManager.canSwitchActiveModel(ctx)
       : deps.isIdle(ctx);
   const menuCallbackHandler = Menu.createTelegramMenuCallbackHandlerForContext<
     TCallbackQuery,
@@ -321,8 +321,8 @@ export function createTelegramInboundRouteRuntime<
     getActiveModel: getActiveMenuModel,
     getThinkingLevel: deps.getThinkingLevel,
     setThinkingLevel: async (level, ctx) => {
-      if (deps.tabManager?.isEnabled()) {
-        const effectiveLevel = await deps.tabManager.setActiveThinkingLevel(
+      if (deps.workspaceManager?.isEnabled()) {
+        const effectiveLevel = await deps.workspaceManager.setActiveThinkingLevel(
           level,
           ctx,
         );
@@ -341,20 +341,20 @@ export function createTelegramInboundRouteRuntime<
     answerCallbackQuery: deps.answerCallbackQuery,
     isIdle: isMenuModelSwitchAllowed,
     hasActiveTelegramTurn: () =>
-      !deps.tabManager?.isEnabled() && deps.activeTurnRuntime.has(),
+      !deps.workspaceManager?.isEnabled() && deps.activeTurnRuntime.has(),
     hasAbortHandler: () =>
-      !deps.tabManager?.isEnabled() && deps.bridgeRuntime.abort.hasHandler(),
+      !deps.workspaceManager?.isEnabled() && deps.bridgeRuntime.abort.hasHandler(),
     getActiveToolExecutions: () =>
-      deps.tabManager?.isEnabled()
+      deps.workspaceManager?.isEnabled()
         ? 0
         : deps.bridgeRuntime.lifecycle.getActiveToolExecutions(),
     persistScopedModelPatterns: deps.persistScopedModelPatterns,
     setModel: async (model, ctx) =>
-      deps.tabManager?.isEnabled()
-        ? deps.tabManager.selectActiveModel(model, ctx)
+      deps.workspaceManager?.isEnabled()
+        ? deps.workspaceManager.selectActiveModel(model, ctx)
         : deps.setModel(model),
     setCurrentModel: (model, ctx) => {
-      if (!deps.tabManager?.isEnabled()) {
+      if (!deps.workspaceManager?.isEnabled()) {
         deps.currentModelRuntime.setCurrentModel(model, ctx);
       }
     },
@@ -464,8 +464,8 @@ export function createTelegramInboundRouteRuntime<
     if (handledByTree) return;
     const handledByDump = await deps.dumpMenuCallbackHandler?.(query, ctx);
     if (handledByDump) return;
-    const handledByTab = await deps.tabManager?.handleCallbackQuery(query, ctx);
-    if (handledByTab) return;
+    const handledByWorkspace = await deps.workspaceManager?.handleCallbackQuery(query, ctx);
+    if (handledByWorkspace) return;
     const callbackData = query.data;
     if (
       deps.sendUserMessage &&
@@ -556,8 +556,8 @@ export function createTelegramInboundRouteRuntime<
     stopTypingLoop: deps.stopTypingLoop,
     enqueueContinueTurn,
     compact: deps.compact,
-    compactActiveTab: deps.tabManager
-      ? (ctx, callbacks) => deps.tabManager?.compactActive(ctx, callbacks) ?? false
+    compactActiveWorkspace: deps.workspaceManager
+      ? (ctx, callbacks) => deps.workspaceManager?.compactActive(ctx, callbacks) ?? false
       : undefined,
     queueReloadRuntimeCommand: async () => {
       if (deps.injectReloadRuntime) {
@@ -573,8 +573,8 @@ export function createTelegramInboundRouteRuntime<
     },
     injectNewSession: deps.injectNewSession,
     injectClone: deps.injectClone,
-    abortActiveTab: deps.tabManager
-      ? async (ctx) => deps.tabManager?.abortActive(ctx)
+    abortActiveWorkspace: deps.workspaceManager
+      ? async (ctx) => deps.workspaceManager?.abortActive(ctx)
       : undefined,
     getSessionName: deps.getSessionName,
     setSessionName: deps.setSessionName,
@@ -586,13 +586,13 @@ export function createTelegramInboundRouteRuntime<
     listAvailableModels: deps.listAvailableModels,
     getActiveLlmModel: getActiveMenuModel,
     isModelSwitchAllowed: (ctx) =>
-      deps.tabManager?.isEnabled()
-        ? deps.tabManager.canSwitchActiveModel(ctx)
+      deps.workspaceManager?.isEnabled()
+        ? deps.workspaceManager.canSwitchActiveModel(ctx)
         : deps.isIdle(ctx) ||
           deps.modelSwitchController.canOfferInFlightSwitch(ctx),
     selectLlmModel: async (target, ctx) => {
-      if (deps.tabManager?.isEnabled()) {
-        return deps.tabManager.selectActiveModel(target, ctx);
+      if (deps.workspaceManager?.isEnabled()) {
+        return deps.workspaceManager.selectActiveModel(target, ctx);
       }
       const fullModel = deps.findActiveModelByIdentity(target, ctx);
       if (!fullModel) return false;
@@ -614,9 +614,9 @@ export function createTelegramInboundRouteRuntime<
     openSessionMenu: deps.openSessionMenu,
     openTreeMenu: deps.openTreeMenu,
     openDumpMenu: deps.openDumpMenu,
-    handleTabCommand: deps.tabManager
+    handleWorkspaceCommand: deps.workspaceManager
       ? async (message, args, ctx) => {
-          await deps.tabManager?.handleCommand(
+          await deps.workspaceManager?.handleCommand(
             args,
             message.chat.id,
             message.message_id,
@@ -624,9 +624,9 @@ export function createTelegramInboundRouteRuntime<
           );
         }
       : undefined,
-    handleTopicCommand: deps.tabManager?.handleTopicCommand
+    handleTopicCommand: deps.workspaceManager?.handleTopicCommand
       ? async (message, args, ctx) => {
-          await deps.tabManager?.handleTopicCommand?.(
+          await deps.workspaceManager?.handleTopicCommand?.(
             args,
             message.chat.id,
             message.message_id,
@@ -638,7 +638,7 @@ export function createTelegramInboundRouteRuntime<
     setAllowedUserId: deps.configStore.setAllowedUserId,
     setMyCommands: deps.setMyCommands,
     isForumNativeMode: () => isTelegramForumNativeModeEnabled(
-      deps.configStore.getConcurrentTabsConfig(),
+      deps.configStore.getConcurrentWorkspacesConfig(),
     ),
     getPromptTemplateCommands,
     persistConfig: deps.configStore.persist,
@@ -672,11 +672,11 @@ export function createTelegramInboundRouteRuntime<
       ),
     replaceMessageText: (message, text) =>
       ({ ...message, text, caption: undefined }) as TMessage,
-    dispatchPrompt: deps.tabManager
+    dispatchPrompt: deps.workspaceManager
       ? async (messages, ctx) => {
-          if (!deps.tabManager?.isEnabled()) return false;
+          if (!deps.workspaceManager?.isEnabled()) return false;
           const turn = await promptTurnBuilder(messages, [], ctx);
-          return deps.tabManager.dispatchPrompt(turn, ctx);
+          return deps.workspaceManager.dispatchPrompt(turn, ctx);
         }
       : undefined,
     enqueueTurn: promptEnqueue,
@@ -856,7 +856,7 @@ export function createTelegramInboundRouteRuntime<
             return;
           }
           const handledByTopic =
-            await deps.tabManager?.handleTopicServiceMessage(message, ctx);
+            await deps.workspaceManager?.handleTopicServiceMessage(message, ctx);
           if (handledByTopic !== false) return;
         }
         const handledByTree = await deps.treeMenuMessageHandler?.(message, ctx);

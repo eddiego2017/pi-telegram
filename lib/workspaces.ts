@@ -2,7 +2,6 @@
  * Telegram workspace state and command helpers
  * Zones: telegram controls, concurrent workspaces, shared utils
  * Owns workspace-name validation, durable workspace records, command parsing, and compact status formatting.
- * Legacy tab-named exports remain as compatibility aliases during the tab -> workspace rename migration.
  */
 
 export type TelegramWorkspaceStatus =
@@ -16,10 +15,6 @@ export interface TelegramWorkspacesState {
   version: 1;
   activeWorkspace: string;
   workspaces: Record<string, TelegramWorkspaceRecord>;
-  /** Legacy in-memory compatibility alias for activeWorkspace. Not persisted by workspace writers. */
-  activeTab: string;
-  /** Legacy in-memory compatibility alias for workspaces. Not persisted by workspace writers. */
-  tabs: Record<string, TelegramWorkspaceRecord>;
 }
 
 export interface TelegramWorkspaceSourceTelegramTopic {
@@ -208,44 +203,17 @@ export function createTelegramDefaultWorkspaceRecord(
   };
 }
 
-function withTelegramLegacyTabStateAliases(
-  state: Pick<TelegramWorkspacesState, "version" | "activeWorkspace" | "workspaces">,
-): TelegramWorkspacesState {
-  return Object.defineProperties(state, {
-    activeTab: {
-      get() {
-        return this.activeWorkspace;
-      },
-      set(value: string) {
-        this.activeWorkspace = value;
-      },
-      enumerable: false,
-      configurable: true,
-    },
-    tabs: {
-      get() {
-        return this.workspaces;
-      },
-      set(value: Record<string, TelegramWorkspaceRecord>) {
-        this.workspaces = value;
-      },
-      enumerable: false,
-      configurable: true,
-    },
-  }) as TelegramWorkspacesState;
-}
-
 export function createDefaultTelegramWorkspacesState(
   cwd: string,
   now: number,
 ): TelegramWorkspacesState {
-  return withTelegramLegacyTabStateAliases({
+  return {
     version: 1,
     activeWorkspace: TELEGRAM_DEFAULT_WORKSPACE_NAME,
     workspaces: {
       [TELEGRAM_DEFAULT_WORKSPACE_NAME]: createTelegramDefaultWorkspaceRecord(cwd, now),
     },
-  });
+  };
 }
 
 function isTelegramWorkspaceSource(value: unknown): value is TelegramWorkspaceSource {
@@ -297,11 +265,9 @@ export function normalizeTelegramWorkspacesState(
     version?: unknown;
     activeWorkspace?: unknown;
     workspaces?: unknown;
-    activeTab?: unknown;
-    tabs?: unknown;
   };
-  const rawWorkspaces = raw.workspaces ?? raw.tabs;
-  const rawActiveWorkspace = raw.activeWorkspace ?? raw.activeTab;
+  const rawWorkspaces = raw.workspaces;
+  const rawActiveWorkspace = raw.activeWorkspace;
   const workspaces: Record<string, TelegramWorkspaceRecord> = {};
   if (rawWorkspaces && typeof rawWorkspaces === "object") {
     for (const [name, record] of Object.entries(rawWorkspaces)) {
@@ -330,11 +296,11 @@ export function normalizeTelegramWorkspacesState(
     typeof rawActiveWorkspace === "string" && workspaces[rawActiveWorkspace]
       ? rawActiveWorkspace
       : TELEGRAM_DEFAULT_WORKSPACE_NAME;
-  return withTelegramLegacyTabStateAliases({
+  return {
     version: 1,
     activeWorkspace,
     workspaces,
-  });
+  };
 }
 
 export function parseTelegramWorkspaceFilterTokens(args: string): string[] {
@@ -573,83 +539,4 @@ export function formatTelegramWorkspaceStatus(
     lines.push("", "Last reply:", truncateTelegramWorkspaceText(workspace.lastAssistantText));
   }
   return lines.join("\n");
-}
-
-// Legacy tab compatibility exports. Keep these until the later command/state/config
-// migration phases have landed and downstream callers have moved to workspace names.
-export type TelegramTabStatus = TelegramWorkspaceStatus;
-export type TelegramTabsState = TelegramWorkspacesState;
-export type TelegramTabSourceTelegramTopic = TelegramWorkspaceSourceTelegramTopic;
-export type TelegramTabSource = TelegramWorkspaceSource;
-export type TelegramTabRecord = TelegramWorkspaceRecord;
-export type TelegramTabCommand = TelegramWorkspaceCommand;
-export type TelegramTabFilterTraceItem = TelegramWorkspaceFilterTraceItem;
-
-export const TELEGRAM_DEFAULT_TAB_NAME = TELEGRAM_DEFAULT_WORKSPACE_NAME;
-export const TELEGRAM_GENERAL_TAB_DISPLAY_NAME = TELEGRAM_GENERAL_WORKSPACE_DISPLAY_NAME;
-export const TELEGRAM_TAB_NAME_PATTERN = TELEGRAM_WORKSPACE_NAME_PATTERN;
-export const TELEGRAM_TAB_NAME_MAX_LENGTH = TELEGRAM_WORKSPACE_NAME_MAX_LENGTH;
-
-export const normalizeTelegramTabName = normalizeTelegramWorkspaceName;
-export const formatTelegramTabDisplayName = formatTelegramWorkspaceDisplayName;
-export const formatTelegramTabRecordDisplayName = formatTelegramWorkspaceRecordDisplayName;
-export const isValidTelegramTabName = isValidTelegramWorkspaceName;
-export function validateTelegramTabName(name: string): string | undefined {
-  const normalized = normalizeTelegramWorkspaceName(name);
-  if (!normalized) return "Tab name is required.";
-  if (normalized.length > TELEGRAM_WORKSPACE_NAME_MAX_LENGTH) {
-    return `Tab names may be up to ${TELEGRAM_WORKSPACE_NAME_MAX_LENGTH} characters.`;
-  }
-  if (!isValidTelegramWorkspaceName(normalized)) {
-    return "Tab names may use only A-Z, a-z, 0-9, _, -, and single spaces between words.";
-  }
-  return undefined;
-}
-export const findTelegramTabNameCaseConflict = findTelegramWorkspaceNameCaseConflict;
-export const normalizeTelegramTopicTabName = normalizeTelegramTopicWorkspaceName;
-export const findTelegramTabByTopic = findTelegramWorkspaceByTopic;
-export const isTelegramTopicTabRecord = isTelegramTopicWorkspaceRecord;
-export const formatTelegramTabTopicLabel = formatTelegramWorkspaceTopicLabel;
-export const createTelegramDefaultTabRecord = createTelegramDefaultWorkspaceRecord;
-export const createDefaultTelegramTabsState = createDefaultTelegramWorkspacesState;
-export const normalizeTelegramTabsState = normalizeTelegramWorkspacesState;
-export const parseTelegramTabFilterTokens = parseTelegramWorkspaceFilterTokens;
-export function filterTelegramTabRecords(
-  tabs: readonly TelegramTabRecord[],
-  filters: readonly string[],
-): { tabs: TelegramTabRecord[]; trace: TelegramTabFilterTraceItem[] } {
-  const result = filterTelegramWorkspaceRecords(tabs, filters);
-  return { tabs: result.workspaces, trace: result.trace };
-}
-export function parseTelegramTabCommand(args: string): TelegramTabCommand {
-  return parseTelegramWorkspaceCommand(args, "/tab");
-}
-export function formatTelegramTabUsage(): string {
-  return formatTelegramWorkspaceUsage("/tab");
-}
-export const truncateTelegramTabText = truncateTelegramWorkspaceText;
-export const formatTelegramTabStatusLabel = formatTelegramWorkspaceStatusLabel;
-export const formatTelegramTabFilterSummary = formatTelegramWorkspaceFilterSummary;
-export function formatTelegramTabList(
-  state: TelegramTabsState,
-  unreadByTab: Record<string, number>,
-  now: number,
-  options: {
-    tabs?: readonly TelegramTabRecord[];
-    filterTrace?: readonly TelegramTabFilterTraceItem[];
-  } = {},
-): string {
-  return formatTelegramWorkspaceList(state, unreadByTab, now, {
-    workspaces: options.tabs,
-    filterTrace: options.filterTrace,
-    title: "Tabs",
-    emptyText: "No tabs match filters.",
-  });
-}
-export function formatTelegramTabStatus(
-  tab: TelegramTabRecord,
-  unreadCount: number,
-  now: number,
-): string {
-  return formatTelegramWorkspaceStatus(tab, unreadCount, now, { label: "Tab" });
 }

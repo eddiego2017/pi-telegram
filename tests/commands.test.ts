@@ -100,7 +100,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.tree, "🌳");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.dump, "🧾");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.reload, "🔄");
-  assert.deepEqual(TELEGRAM_COMMAND_EMOJI.tab, "🗂️");
+  assert.deepEqual(TELEGRAM_COMMAND_EMOJI.workspace, "🗂️");
   assert.deepEqual(TELEGRAM_COMMAND_EMOJI.topic, "🧵");
   assert.equal(formatTelegramCommandEmojiPrefix("model"), "🤖 ");
   const expectedBuiltins = [
@@ -121,7 +121,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
     { command: "dump", description: "🧾 Export visible transcript" },
     { command: "name", description: "🏷️ Set current session name" },
     { command: "llm", description: "🧬 List available LLM models" },
-    { command: "tab", description: "🗂️ Manage concurrent tabs" },
+    { command: "workspace", description: "🗂️ Manage concurrent workspaces" },
     {
       command: "next",
       description: "⏩ Force next turn",
@@ -143,7 +143,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
   assert.deepEqual(
     getTelegramBotCommands({ forumNativeMode: true }),
     expectedBuiltins
-      .filter((command) => command.command !== "tab")
+      .filter((command) => command.command !== "workspace")
       .map((command) => {
         switch (command.command) {
           case "compact":
@@ -744,8 +744,8 @@ test("Command helpers build command actions", () => {
     args: "apple cat",
     executionMode: "immediate",
   });
-  assert.deepEqual(buildTelegramCommandAction("tab", "new A"), {
-    kind: "tab",
+  assert.deepEqual(buildTelegramCommandAction("workspace", "new A"), {
+    kind: "workspace",
     args: "new A",
     executionMode: "immediate",
   });
@@ -782,7 +782,7 @@ test("Command execution mode contract keeps Telegram controls immediate", () => 
     ["name", "immediate"],
     ["session", "immediate"],
     ["dump", "immediate"],
-    ["tab", "immediate"],
+    ["workspace", "immediate"],
     ["topic", "immediate"],
     ["unknown", "ignored"],
     [undefined, "ignored"],
@@ -1278,9 +1278,9 @@ test("Command handler target runtime binds command targets into command handling
     },
     injectNewSession: async () => true,
     injectClone: async () => undefined,
-    abortActiveTab: async (ctx) => {
-      calls.push(`tab-abort:${ctx}`);
-      return { aborted: true, message: "Aborted tab hk." };
+    abortActiveWorkspace: async (ctx) => {
+      calls.push(`workspace-abort:${ctx}`);
+      return { aborted: true, message: "Aborted workspace hk." };
     },
     getSessionName: () => undefined,
     setSessionName: () => undefined,
@@ -1300,8 +1300,8 @@ test("Command handler target runtime binds command targets into command handling
     selectLlmModel: async () => true,
     openThinkingMenu: async () => {},
     openQueueMenu: async () => {},
-    handleTabCommand: async (_message, args, ctx) => {
-      calls.push(`tab:${args}:${ctx}`);
+    handleWorkspaceCommand: async (_message, args, ctx) => {
+      calls.push(`workspace:${args}:${ctx}`);
     },
     handleTopicCommand: async (_message, args, ctx) => {
       calls.push(`topic:${args}:${ctx}`);
@@ -1327,7 +1327,7 @@ test("Command handler target runtime binds command targets into command handling
   );
   assert.equal(
     await handleCommand(
-      "tab",
+      "workspace",
       "new A",
       { chat: { id: 7 }, message_id: 11 },
       "ctx",
@@ -1363,19 +1363,19 @@ test("Command handler target runtime binds command targets into command handling
   );
   assert.deepEqual(calls, [
     "show:ctx",
-    "tab:new A:ctx",
+    "workspace:new A:ctx",
     "topic:orphans:ctx",
-    "tab-abort:ctx",
+    "workspace-abort:ctx",
     "clear-switch",
     "preserve:true",
     "status",
-    "reply:7:11:Aborted tab hk.",
-    "tab-abort:ctx",
+    "reply:7:11:Aborted workspace hk.",
+    "workspace-abort:ctx",
     "clear-switch",
     "clear-queue",
     "preserve:false",
     "status",
-    "reply:7:11:Aborted tab hk. Cleared 2 queued turns.",
+    "reply:7:11:Aborted workspace hk. Cleared 2 queued turns.",
   ]);
 });
 
@@ -1685,7 +1685,7 @@ test("Command runtime routes commands through runtime ports", async () => {
   ]);
 });
 
-test("Command runtime routes abort and stop to the active tab when available", async () => {
+test("Command runtime routes abort and stop to the active workspace when available", async () => {
   const events: string[] = [];
   const message = { chat: { id: 42 }, message_id: 99 };
   let queuedCount = 2;
@@ -1728,9 +1728,9 @@ test("Command runtime routes abort and stop to the active tab when available", a
     queueReloadRuntimeCommand: () => undefined,
     injectNewSession: async () => true,
     injectClone: async () => undefined,
-    abortActiveTab: async () => {
-      events.push("tab-abort");
-      return { aborted: true, message: "Aborted tab A." };
+    abortActiveWorkspace: async () => {
+      events.push("workspace-abort");
+      return { aborted: true, message: "Aborted workspace A." };
     },
     enqueueControlItem: () => undefined,
     showStatus: async () => undefined,
@@ -1760,21 +1760,21 @@ test("Command runtime routes abort and stop to the active tab when available", a
   assert.equal(await handleCommand("stop", "", message, { id: "ctx" }), true);
 
   assert.deepEqual(events, [
-    "tab-abort",
+    "workspace-abort",
     "clear-switch",
     "preserve:true",
     "status",
-    "reply:Aborted tab A.",
-    "tab-abort",
+    "reply:Aborted workspace A.",
+    "workspace-abort",
     "clear-switch",
     "clear-queue",
     "preserve:false",
     "status",
-    "reply:Aborted tab A. Cleared 2 queued turns.",
+    "reply:Aborted workspace A. Cleared 2 queued turns.",
   ]);
 });
 
-test("Command runtime routes compact to the active tab when available", async () => {
+test("Command runtime routes compact to the active workspace when available", async () => {
   const events: string[] = [];
   const message = { chat: { id: 42 }, message_id: 99 };
   let compactComplete: (() => void) | undefined;
@@ -1806,8 +1806,8 @@ test("Command runtime routes compact to the active tab when available", async ()
     compact: () => {
       events.push("parent-compact");
     },
-    compactActiveTab: (_ctx, callbacks) => {
-      events.push("tab-compact");
+    compactActiveWorkspace: (_ctx, callbacks) => {
+      events.push("workspace-compact");
       compactComplete = callbacks.onComplete;
       return true;
     },
@@ -1843,7 +1843,7 @@ test("Command runtime routes compact to the active tab when available", async ()
   assert.deepEqual(events, [
     "compact:true",
     "status",
-    "tab-compact",
+    "workspace-compact",
     "reply:Compaction started.",
     "compact:false",
     "status",
@@ -1886,7 +1886,7 @@ test("Command or prompt runtime routes commands before enqueue fallback", async 
   ]);
 });
 
-test("Command or prompt runtime can route prompt fallback to concurrent tabs", async () => {
+test("Command or prompt runtime can route prompt fallback to concurrent workspaces", async () => {
   const events: string[] = [];
   const runtime = createTelegramCommandOrPromptRuntime<
     { text: string },
@@ -1899,7 +1899,7 @@ test("Command or prompt runtime can route prompt fallback to concurrent tabs", a
       commandName === "review" ? `expanded:${args}` : undefined,
     replaceMessageText: (message, text) => ({ ...message, text }),
     dispatchPrompt: async (messages, ctx) => {
-      events.push(`tab:${messages[0]?.text}:${ctx.id}`);
+      events.push(`workspace:${messages[0]?.text}:${ctx.id}`);
       return true;
     },
     enqueueTurn: async (messages, ctx) => {
@@ -1908,7 +1908,7 @@ test("Command or prompt runtime can route prompt fallback to concurrent tabs", a
   });
   await runtime.dispatchMessages([{ text: "/review staged" }], { id: "ctx" });
   await runtime.dispatchMessages([{ text: "hello" }], { id: "ctx" });
-  assert.deepEqual(events, ["tab:expanded:staged:ctx", "tab:hello:ctx"]);
+  assert.deepEqual(events, ["workspace:expanded:staged:ctx", "workspace:hello:ctx"]);
 });
 
 test("Command helpers execute command actions through provided handlers", async () => {
@@ -1932,8 +1932,8 @@ test("Command helpers execute command actions through provided handlers", async 
     handleLlm: async () => {
       events.push("llm");
     },
-    handleTab: async (_message: unknown, args: string) => {
-      events.push(`tab:${args}`);
+    handleWorkspace: async (_message: unknown, args: string) => {
+      events.push(`workspace:${args}`);
     },
     handleTopic: async (_message: unknown, args: string) => {
       events.push(`topic:${args}`);
@@ -2043,7 +2043,7 @@ test("Command helpers execute command actions through provided handlers", async 
   );
   assert.equal(
     await executeTelegramCommandAction(
-      { kind: "tab", args: "new A", executionMode: "immediate" },
+      { kind: "workspace", args: "new A", executionMode: "immediate" },
       {},
       {},
       deps,
@@ -2066,7 +2066,7 @@ test("Command helpers execute command actions through provided handlers", async 
     "name:label",
     "resume:apple cat",
     "dump:20",
-    "tab:new A",
+    "workspace:new A",
     "topic:orphans",
   ]);
 });

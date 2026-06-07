@@ -181,7 +181,7 @@ export function createTelegramSessionFileTreeBranchCursor(
   customType = TELEGRAM_TREE_BRANCH_CURSOR_CUSTOM_TYPE,
 ): PiTelegramTreeBranchCursorResult {
   if (!reference.sessionFile) {
-    throw new Error("Active tab has no session file.");
+    throw new Error("Active workspace has no session file.");
   }
   const sessionManager = SessionManager.open(
     reference.sessionFile,
@@ -225,7 +225,7 @@ export function setTelegramSessionFileBranchName(
   name: string | undefined,
 ): void {
   if (!reference.sessionFile) {
-    throw new Error("Active tab has no session file.");
+    throw new Error("Active workspace has no session file.");
   }
   const sessionManager = SessionManager.open(
     reference.sessionFile,
@@ -243,7 +243,7 @@ export function deleteTelegramSessionFileBranch(
   customType: string,
 ): void {
   if (!reference.sessionFile) {
-    throw new Error("Active tab has no session file.");
+    throw new Error("Active workspace has no session file.");
   }
   const sessionManager = SessionManager.open(
     reference.sessionFile,
@@ -542,7 +542,7 @@ export function getSessionSnapshotFromReference(
         ),
       };
     } catch {
-      // Fall through to a minimal snapshot so tab-owned menus do not drift
+      // Fall through to a minimal snapshot so workspace-owned menus do not drift
       // back to the parent session when a worker file is temporarily missing.
     }
   }

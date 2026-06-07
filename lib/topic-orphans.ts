@@ -1,7 +1,7 @@
 /**
  * Telegram forum-topic orphan proof store
  * Zones: telegram diagnostics, forum topics, shared utils
- * Tracks conservative Bot API missing-topic proofs for repair commands without coupling API transport to tab records.
+ * Tracks conservative Bot API missing-topic proofs for repair commands without coupling API transport to workspace records.
  */
 
 export interface TelegramTopicOrphanProof {

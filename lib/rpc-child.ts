@@ -1,6 +1,6 @@
 /**
  * Pi RPC child process backend
- * Zones: pi agent, concurrent tabs, process lifecycle
+ * Zones: pi agent, concurrent workspaces, process lifecycle
  * Owns JSONL RPC child supervision, command response correlation, and child event extraction helpers
  */
 
@@ -24,7 +24,7 @@ export interface RpcChildSessionState {
 }
 
 export interface RpcChildBackendOptions {
-  tabName: string;
+  workspaceName: string;
   cwd: string;
   sessionDir?: string;
   sessionFile?: string;
@@ -112,7 +112,7 @@ export function buildRpcChildArgs(options: {
 
 export class RpcChildBackend {
   readonly kind = "rpc-child" as const;
-  readonly tabName: string;
+  readonly workspaceName: string;
 
   private options: RpcChildBackendOptions;
   private process?: ChildProcessWithoutNullStreams;
@@ -125,7 +125,7 @@ export class RpcChildBackend {
 
   constructor(options: RpcChildBackendOptions) {
     this.options = options;
-    this.tabName = options.tabName;
+    this.workspaceName = options.workspaceName;
   }
 
   async start(): Promise<RpcChildSessionState> {
@@ -143,7 +143,7 @@ export class RpcChildBackend {
         ...this.options.env,
         PI_SKIP_VERSION_CHECK: "1",
         PI_TELEGRAM_CHILD: "1",
-        PI_TELEGRAM_TAB: this.tabName,
+        PI_TELEGRAM_WORKSPACE: this.workspaceName,
         PI_TELEGRAM_PARENT_PID: String(process.pid),
       },
       stdio: "pipe",
@@ -320,7 +320,7 @@ export class RpcChildBackend {
     if (!this.process?.stdin || this.process.exitCode !== null) {
       throw new Error("RPC child is not running");
     }
-    const id = `tg_${this.tabName}_${++this.nextRequestId}`;
+    const id = `tg_${this.workspaceName}_${++this.nextRequestId}`;
     const payload = `${JSON.stringify({ ...command, id })}\n`;
     return new Promise<RpcChildResponse>((resolve, reject) => {
       const timer = setTimeout(() => {

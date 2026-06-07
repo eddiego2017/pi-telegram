@@ -42,7 +42,7 @@ import * as Routing from "./lib/routing.ts";
 import * as Runtime from "./lib/runtime.ts";
 import * as Setup from "./lib/setup.ts";
 import * as Status from "./lib/status.ts";
-import * as TabManager from "./lib/tab-manager.ts";
+import * as WorkspaceManager from "./lib/workspace-manager.ts";
 import * as TextGroups from "./lib/text-groups.ts";
 import * as ThreadContext from "./lib/thread-context.ts";
 import * as TopicOrphans from "./lib/topic-orphans.ts";
@@ -68,8 +68,8 @@ export default function (pi: Pi.ExtensionAPI) {
   Config.setGlobalTelegramConfigStore(configStore);
   const isProactivePushEnabled =
     Config.createTelegramProactivePushChecker(configStore);
-  const getConcurrentTabsConfig =
-    Config.createTelegramConcurrentTabsConfigGetter(configStore);
+  const getConcurrentWorkspacesConfig =
+    Config.createTelegramConcurrentWorkspacesConfigGetter(configStore);
   const isForumNativeMode =
     Config.createTelegramForumNativeModeChecker(configStore);
   const setProactivePushEnabled =
@@ -281,22 +281,22 @@ export default function (pi: Pi.ExtensionAPI) {
       sendMultipart: callMultipart,
       sendTextReply,
     });
-  const sendTabLastTurnsOnSwitch =
-    MenuSession.createTelegramTabSwitchReplaySender<
-      TabManager.TelegramTabSessionReference
+  const sendWorkspaceLastTurnsOnSwitch =
+    MenuSession.createTelegramWorkspaceSwitchReplaySender<
+      WorkspaceManager.TelegramWorkspaceSessionReference
     >({
       getSnapshot: Pi.getSessionSnapshotFromReference,
       sendReplayMessage: sendMarkdownReply,
       sendReplayAttachment: sendSessionReplayAttachment,
     });
-  const tabManager = TabManager.createTelegramTabManager<Pi.ExtensionContext>({
-    getConfig: getConcurrentTabsConfig,
+  const workspaceManager = WorkspaceManager.createTelegramWorkspaceManager<Pi.ExtensionContext>({
+    getConfig: getConcurrentWorkspacesConfig,
     getCwd: Pi.getExtensionContextCwd,
     getSessionDir: Pi.getExtensionContextSessionDir,
     sendTextReply,
     sendMarkdownReply,
     sendStreamMarkdownReply: replyRuntime.sendMarkdownReply,
-    editStreamMarkdownMessage: TabManager.createTelegramTabMarkdownMessageEditor({
+    editStreamMarkdownMessage: WorkspaceManager.createTelegramWorkspaceMarkdownMessageEditor({
       renderTelegramMessage: Replies.renderTelegramMessage,
       editRenderedMessage: replyTransport.editRenderedMessage,
     }),
@@ -304,7 +304,7 @@ export default function (pi: Pi.ExtensionAPI) {
     sendInteractiveMessage,
     editInteractiveMessage,
     answerCallbackQuery,
-    sendLastTurnsOnSwitch: sendTabLastTurnsOnSwitch,
+    sendLastTurnsOnSwitch: sendWorkspaceLastTurnsOnSwitch,
     sendTypingAction,
     recordRuntimeEvent,
     debugLogger,
@@ -312,51 +312,51 @@ export default function (pi: Pi.ExtensionAPI) {
     deleteForumTopic,
     topicOrphanProofStore,
   });
-  const getTabReferenceContextWindow =
-    TabManager.createTelegramTabReferenceContextWindowGetter<
+  const getWorkspaceReferenceContextWindow =
+    WorkspaceManager.createTelegramWorkspaceReferenceContextWindowGetter<
       Pi.ExtensionContext,
       ActivePiModel
     >({
       getParentModel: currentModelRuntime.get,
       findModel: Pi.findExtensionContextAvailableModel,
     });
-  const getTabSessionSnapshot =
+  const getWorkspaceSessionSnapshot =
     Pi.createSessionSnapshotFromReferenceGetter<
       Pi.ExtensionContext,
-      TabManager.TelegramTabSessionReference
+      WorkspaceManager.TelegramWorkspaceSessionReference
     >({
-      getContextWindow: getTabReferenceContextWindow,
+      getContextWindow: getWorkspaceReferenceContextWindow,
     });
-  const tabAwareSessionSnapshotPorts =
-    TabManager.createTelegramTabAwareSessionSnapshotPorts({
-      tabManager,
+  const workspaceAwareSessionSnapshotPorts =
+    WorkspaceManager.createTelegramWorkspaceAwareSessionSnapshotPorts({
+      workspaceManager,
       getParentSnapshot: Pi.getExtensionContextSessionSnapshot,
-      getTabSnapshot: getTabSessionSnapshot,
+      getWorkspaceSnapshot: getWorkspaceSessionSnapshot,
     });
-  const tabAwareSessionNamePorts =
-    TabManager.createTelegramTabAwareSessionNamePorts({
-      tabManager,
+  const workspaceAwareSessionNamePorts =
+    WorkspaceManager.createTelegramWorkspaceAwareSessionNamePorts({
+      workspaceManager,
       getParentSessionName: Pi.getExtensionContextSessionName,
       setParentSessionName: Pi.setExtensionContextSessionName,
     });
-  const tabAwareCompactPorts =
-    TabManager.createTelegramTabAwareCompactPorts({
-      tabManager,
+  const workspaceAwareCompactPorts =
+    WorkspaceManager.createTelegramWorkspaceAwareCompactPorts({
+      workspaceManager,
       compactParent: compact,
     });
-  const tabAwareNewSessionPorts =
-    TabManager.createTelegramTabAwareNewSessionPorts({
-      tabManager,
+  const workspaceAwareNewSessionPorts =
+    WorkspaceManager.createTelegramWorkspaceAwareNewSessionPorts({
+      workspaceManager,
       injectParentNewSession,
     });
-  const tabAwareSessionDeletePorts =
-    TabManager.createTelegramTabAwareSessionDeletePorts({
-      tabManager,
+  const workspaceAwareSessionDeletePorts =
+    WorkspaceManager.createTelegramWorkspaceAwareSessionDeletePorts({
+      workspaceManager,
       injectParentDeleteCurrentSession: injectDeleteCurrentSessionExec,
     });
-  const tabAwareResumeMenuPorts =
-    TabManager.createTelegramTabAwareResumeMenuPorts<Pi.ExtensionContext>({
-      tabManager,
+  const workspaceAwareResumeMenuPorts =
+    WorkspaceManager.createTelegramWorkspaceAwareResumeMenuPorts<Pi.ExtensionContext>({
+      workspaceManager,
       injectParentResumeExec: injectResumeExec,
     });
   const dispatchNextQueuedTelegramTurn =
@@ -426,24 +426,24 @@ export default function (pi: Pi.ExtensionAPI) {
       getCommands,
       reservedCommandNames: Commands.TELEGRAM_RESERVED_COMMAND_NAMES,
     });
-  const tabAwareModelMenuPorts =
-    TabManager.createTelegramTabAwareModelMenuPorts<
+  const workspaceAwareModelMenuPorts =
+    WorkspaceManager.createTelegramWorkspaceAwareModelMenuPorts<
       Pi.ExtensionContext,
       ActivePiModel
     >({
-      tabManager,
+      workspaceManager,
       getParentModel: currentModelRuntime.get,
       findModel: Pi.findExtensionContextAvailableModel,
       isParentIdle: isIdle,
       canOfferParentInFlightModelSwitch:
         modelSwitchController.canOfferInFlightSwitch,
     });
-  const buildStatusHtml = Status.createTelegramTabAwareStatusHtmlBuilder<
+  const buildStatusHtml = Status.createTelegramWorkspaceAwareStatusHtmlBuilder<
     Pi.ExtensionContext,
     ActivePiModel,
-    TabManager.TelegramTabSessionReference
+    WorkspaceManager.TelegramWorkspaceSessionReference
   >({
-    getActiveReference: tabManager.getActiveSessionReference,
+    getActiveReference: workspaceManager.getActiveSessionReference,
     getParentActiveModel: currentModelRuntime.get,
     findModel: Pi.findExtensionContextAvailableModel,
     getSnapshotFromReference: Pi.getSessionSnapshotFromReference,
@@ -455,8 +455,8 @@ export default function (pi: Pi.ExtensionAPI) {
       getPromptTemplateCommands,
       isForumNativeMode,
     });
-  const getTabAwareThinkingLevel = TabManager.createTelegramTabAwareThinkingLevelGetter({
-    tabManager,
+  const getWorkspaceAwareThinkingLevel = WorkspaceManager.createTelegramWorkspaceAwareThinkingLevelGetter({
+    workspaceManager,
     getParentThinkingLevel: getThinkingLevel,
   });
   const menuActions = Menu.createTelegramMenuActionRuntimeWithStateBuilder<
@@ -465,14 +465,14 @@ export default function (pi: Pi.ExtensionAPI) {
   >({
     runtime: modelMenuRuntime,
     createSettingsManager: Pi.createSettingsManager,
-    getActiveModel: tabAwareModelMenuPorts.getActiveModel,
-    getThinkingLevel: getTabAwareThinkingLevel,
+    getActiveModel: workspaceAwareModelMenuPorts.getActiveModel,
+    getThinkingLevel: getWorkspaceAwareThinkingLevel,
     getQueueItemCount,
     buildStatusHtml: buildAppStatusHtml,
     storeModelMenuState: modelMenuRuntime.storeState,
-    isIdle: tabAwareModelMenuPorts.canSwitchModel,
+    isIdle: workspaceAwareModelMenuPorts.canSwitchModel,
     canOfferInFlightModelSwitch:
-      tabAwareModelMenuPorts.canOfferInFlightModelSwitch,
+      workspaceAwareModelMenuPorts.canOfferInFlightModelSwitch,
     sendTextReply,
     editInteractiveMessage,
     sendInteractiveMessage,
@@ -484,7 +484,7 @@ export default function (pi: Pi.ExtensionAPI) {
   const getQueueMenuState = Menu.createTelegramModelMenuStateBuilder({
     runtime: modelMenuRuntime,
     createSettingsManager: Pi.createSettingsManager,
-    getActiveModel: tabAwareModelMenuPorts.getActiveModel,
+    getActiveModel: workspaceAwareModelMenuPorts.getActiveModel,
   });
   const queueMenuRuntime = MenuQueue.createTelegramQueueMenuRuntime({
     telegramQueueStore,
@@ -516,23 +516,23 @@ export default function (pi: Pi.ExtensionAPI) {
   >({
     getCwd: Pi.getExtensionContextCwd,
     getCurrentSessionFile: Pi.getExtensionContextSessionFile,
-    getSessionScope: tabAwareResumeMenuPorts.getSessionScope,
+    getSessionScope: workspaceAwareResumeMenuPorts.getSessionScope,
     sendInteractiveMessage,
     editInteractiveMessage,
     answerCallbackQuery,
-    injectResumeExec: tabAwareResumeMenuPorts.injectResumeExec,
+    injectResumeExec: workspaceAwareResumeMenuPorts.injectResumeExec,
   });
   const sessionMenuRuntime = MenuSession.createTelegramSessionMenuRuntime<
     Pi.ExtensionContext
   >({
-    getSnapshot: tabAwareSessionSnapshotPorts.getSnapshot,
-    canDeleteCurrent: tabAwareSessionSnapshotPorts.canDeleteCurrent,
+    getSnapshot: workspaceAwareSessionSnapshotPorts.getSnapshot,
+    canDeleteCurrent: workspaceAwareSessionSnapshotPorts.canDeleteCurrent,
     sendInteractiveMessage,
     editInteractiveMessage,
     sendReplayMessage: sendMarkdownReply,
     sendReplayAttachment: sendSessionReplayAttachment,
     answerCallbackQuery,
-    injectDeleteCurrentSession: tabAwareSessionDeletePorts.injectDeleteCurrentSession,
+    injectDeleteCurrentSession: workspaceAwareSessionDeletePorts.injectDeleteCurrentSession,
   });
   const canNavigateTree = MenuTree.createTelegramTreeNavigationGate<
     Pi.ExtensionContext
@@ -548,40 +548,40 @@ export default function (pi: Pi.ExtensionAPI) {
     pi,
     MenuTree.TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE,
   );
-  const tabAwareTreeMenuPorts =
-    TabManager.createTelegramTabAwareTreeMenuPorts({
-      tabManager,
+  const workspaceAwareTreeMenuPorts =
+    WorkspaceManager.createTelegramWorkspaceAwareTreeMenuPorts({
+      workspaceManager,
       injectParentTreeExec: injectTreeExec,
     });
-  const tabAwareTreeBranchMutators =
-    TabManager.createTelegramTabAwareTreeBranchMutators({
-      tabManager,
+  const workspaceAwareTreeBranchMutators =
+    WorkspaceManager.createTelegramWorkspaceAwareTreeBranchMutators({
+      workspaceManager,
       setParentBranchName: treeBranchMutators.setBranchName,
       deleteParentBranch: treeBranchMutators.deleteBranch,
-      setTabBranchName: Pi.setTelegramSessionFileBranchName,
-      deleteTabBranch: Pi.deleteTelegramSessionFileBranch,
+      setWorkspaceBranchName: Pi.setTelegramSessionFileBranchName,
+      deleteWorkspaceBranch: Pi.deleteTelegramSessionFileBranch,
       branchMetadataCustomType: MenuTree.TELEGRAM_TREE_BRANCH_METADATA_CUSTOM_TYPE,
     });
   const treeMenuRuntime = MenuTree.buildTelegramTreeMenuRuntime<
     Pi.ExtensionContext
   >({
-    getSnapshot: tabAwareSessionSnapshotPorts.getSnapshot,
-    isReadOnly: tabAwareTreeMenuPorts.isReadOnly,
+    getSnapshot: workspaceAwareSessionSnapshotPorts.getSnapshot,
+    isReadOnly: workspaceAwareTreeMenuPorts.isReadOnly,
     sendInteractiveMessage,
     editInteractiveMessage,
     answerCallbackQuery,
-    injectTreeExec: tabAwareTreeMenuPorts.injectTreeExec,
-    canForkTree: tabAwareTreeMenuPorts.canForkTree,
-    canMutateBranches: tabAwareTreeMenuPorts.canForkTree,
-    forkTreeEntry: tabAwareTreeMenuPorts.forkTreeEntry,
+    injectTreeExec: workspaceAwareTreeMenuPorts.injectTreeExec,
+    canForkTree: workspaceAwareTreeMenuPorts.canForkTree,
+    canMutateBranches: workspaceAwareTreeMenuPorts.canForkTree,
+    forkTreeEntry: workspaceAwareTreeMenuPorts.forkTreeEntry,
     canNavigate: canNavigateTree,
     renderTreeExport: TreeExport.renderTelegramTreeExportFiles,
     sendTreeExportFiles,
     publishTreeGist: TreeExport.publishTelegramTreeSvgGist,
     deleteTreeGist: TreeExport.deleteTelegramTreeGist,
     sendTextReply,
-    setBranchName: tabAwareTreeBranchMutators.setBranchName,
-    deleteBranch: tabAwareTreeBranchMutators.deleteBranch,
+    setBranchName: workspaceAwareTreeBranchMutators.setBranchName,
+    deleteBranch: workspaceAwareTreeBranchMutators.deleteBranch,
   });
   const dumpMenuRuntime = MenuDump.createTelegramDumpMenuRuntime<
     Pi.ExtensionContext
@@ -643,7 +643,7 @@ export default function (pi: Pi.ExtensionAPI) {
     treeMenuMessageHandler: treeMenuRuntime.handleTextMessage,
     openDumpMenu: dumpMenuRuntime.openDumpMenu,
     dumpMenuCallbackHandler: dumpMenuRuntime.handleCallbackQuery,
-    tabManager,
+    workspaceManager,
     sectionRegistry,
     buttonActionStore,
     inboundHandlerRuntime,
@@ -662,7 +662,7 @@ export default function (pi: Pi.ExtensionAPI) {
     setMyCommands,
     getCommands,
     downloadFile: downloadTelegramBridgeFile,
-    getThinkingLevel: getTabAwareThinkingLevel,
+    getThinkingLevel: getWorkspaceAwareThinkingLevel,
     setThinkingLevel: Pi.createEffectiveThinkingLevelSetter({
       setThinkingLevel,
       getThinkingLevel,
@@ -677,12 +677,12 @@ export default function (pi: Pi.ExtensionAPI) {
     sendUserMessage,
     isIdle,
     hasPendingMessages,
-    compact: tabAwareCompactPorts.compact,
-    injectNewSession: tabAwareNewSessionPorts.injectNewSession,
+    compact: workspaceAwareCompactPorts.compact,
+    injectNewSession: workspaceAwareNewSessionPorts.injectNewSession,
     injectClone,
     injectReloadRuntime,
-    getSessionName: tabAwareSessionNamePorts.getSessionName,
-    setSessionName: tabAwareSessionNamePorts.setSessionName,
+    getSessionName: workspaceAwareSessionNamePorts.getSessionName,
+    setSessionName: workspaceAwareSessionNamePorts.setSessionName,
     recordRuntimeEvent,
     debugLogger,
   });
@@ -744,8 +744,8 @@ export default function (pi: Pi.ExtensionAPI) {
     queueSessionLifecycle,
     {
       onSessionStart: lockedPollingRuntime.onSessionStart,
-      onSessionShutdown: TabManager.createTelegramTabManagerShutdownHook(
-        tabManager,
+      onSessionShutdown: WorkspaceManager.createTelegramWorkspaceManagerShutdownHook(
+        workspaceManager,
       ),
     },
   );

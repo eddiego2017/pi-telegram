@@ -404,7 +404,7 @@ test("Tree menu read-only mode hides and blocks mutation callbacks", async () =>
   ]);
 });
 
-test("Tree menu read-only mode can create active-tab branch", async () => {
+test("Tree menu read-only mode can create active-workspace branch", async () => {
   const snapshot = createSnapshot();
   const entries = buildTelegramTreeMenuEntries(snapshot);
   const store = createTelegramTreeMenuStore();

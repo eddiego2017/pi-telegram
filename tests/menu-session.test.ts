@@ -19,7 +19,7 @@ import {
   buildTelegramSessionReplayPlan,
   buildTelegramSessionReplayTurns,
   buildTelegramSessionStats,
-  createTelegramTabSwitchReplaySender,
+  createTelegramWorkspaceSwitchReplaySender,
   createTelegramSessionMenuRuntime,
   createTelegramSessionReplayAttachmentSender,
   formatTelegramSessionReplayMessage,
@@ -459,7 +459,7 @@ test("Session replay callback sends image attachments after their text", async (
   ]);
 });
 
-test("Tab switch replay cleans Telegram reply quotes and empty thinking blocks", () => {
+test("Workspace switch replay cleans Telegram reply quotes and empty thinking blocks", () => {
   const snapshot: TelegramSessionSnapshot = {
     cwd: "/repo",
     sessionId: "session-current",
@@ -501,7 +501,7 @@ test("Tab switch replay cleans Telegram reply quotes and empty thinking blocks",
   ]);
 });
 
-test("Session reference tab-switch replay sender replays latest turn capped to five full messages", async () => {
+test("Session reference workspace-switch replay sender replays latest turn capped to five full messages", async () => {
   const branch: TelegramSessionSnapshot["branch"] = [
     {
       type: "message",
@@ -559,7 +559,7 @@ test("Session reference tab-switch replay sender replays latest turn capped to f
     branch,
   };
   const events: string[] = [];
-  const sender = createTelegramTabSwitchReplaySender<string>({
+  const sender = createTelegramWorkspaceSwitchReplaySender<string>({
     getSnapshot: (reference) => {
       events.push(`snapshot:${reference}`);
       return snapshot;
@@ -570,9 +570,9 @@ test("Session reference tab-switch replay sender replays latest turn capped to f
     },
   });
 
-  await sender("tab-A", 7, 77);
+  await sender("workspace-A", 7, 77);
 
-  assert.equal(events[0], "snapshot:tab-A");
+  assert.equal(events[0], "snapshot:workspace-A");
   assert.equal(events.length, 6);
   assert.doesNotMatch(events.join("\n"), /prompt|answer 1/);
   assert.match(events[1], /Replay msg 2026-05-18 01:00 agent\n💭 Thinking/);

@@ -185,7 +185,7 @@ test("openTelegramResumeMenu includes current session as a read-only row", async
   assert.equal(sentMarkup?.inline_keyboard[0]?.[0]?.callback_data, "resume:open:0");
 });
 
-test("openTelegramResumeMenu keeps tab scope while listing global sessions", async () => {
+test("openTelegramResumeMenu keeps workspace scope while listing global sessions", async () => {
   const sessions = [
     {
       path: "/sessions/current.jsonl",
@@ -205,8 +205,8 @@ test("openTelegramResumeMenu keeps tab scope while listing global sessions", asy
     getCwd: () => "/cwd",
     getCurrentSessionFile: () => "/host/current.jsonl",
     getSessionScope: () => ({
-      kind: "tab",
-      tabName: "A",
+      kind: "workspace",
+      workspaceName: "A",
       sessionDir: "/sessions/shared",
       currentSessionFile: "/sessions/current.jsonl",
     }),
@@ -221,7 +221,7 @@ test("openTelegramResumeMenu keeps tab scope while listing global sessions", asy
     now: () => 0,
   });
   assert.equal(listedSessionDir, undefined);
-  assert.equal(stored?.sessionScope?.tabName, "A");
+  assert.equal(stored?.sessionScope?.workspaceName, "A");
   assert.equal(stored?.currentSessionFile, "/sessions/current.jsonl");
   assert.equal(stored?.sessions[0]?.isCurrent, true);
 });
@@ -544,10 +544,10 @@ function makeCallbackDeps(
       },
       injectResumeExec: async (
         path: string,
-        scope?: { tabName?: string },
+        scope?: { workspaceName?: string },
       ) => {
         events.push(
-          scope?.tabName ? `inject:${path}:${scope.tabName}` : `inject:${path}`,
+          scope?.workspaceName ? `inject:${path}:${scope.workspaceName}` : `inject:${path}`,
         );
       },
       deleteSessionFile: async (path: string) => {
@@ -698,11 +698,11 @@ test("handleTelegramResumeMenuCallback opens entry using global index", async ()
   ]);
 });
 
-test("handleTelegramResumeMenuCallback resumes through captured tab scope", async () => {
+test("handleTelegramResumeMenuCallback resumes through captured workspace scope", async () => {
   const state = makeState(3, 0);
   state.sessionScope = {
-    kind: "tab",
-    tabName: "A",
+    kind: "workspace",
+    workspaceName: "A",
     sessionDir: "/sessions/shared",
     currentSessionFile: "/sessions/s0.json",
   };
@@ -712,7 +712,7 @@ test("handleTelegramResumeMenuCallback resumes through captured tab scope", asyn
   );
   await handleTelegramResumeMenuCallback(
     {
-      id: "tab-open",
+      id: "workspace-open",
       data: "resume:open:1",
       message: { chat: { id: 1 }, message_id: 100 },
     },
@@ -721,7 +721,7 @@ test("handleTelegramResumeMenuCallback resumes through captured tab scope", asyn
   assert.deepEqual(events, [
     "inject:/sessions/s1.json:A",
     "edit:1:100:plain",
-    "answer:tab-open:Session switching…",
+    "answer:workspace-open:Session switching…",
   ]);
 });
 

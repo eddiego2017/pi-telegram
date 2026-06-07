@@ -1258,14 +1258,14 @@ export interface TelegramSessionReferenceReplaySenderDeps<TReference> {
   ) => Promise<number | undefined>;
 }
 
-export function createTelegramTabSwitchReplaySender<TReference>(
+export function createTelegramWorkspaceSwitchReplaySender<TReference>(
   deps: TelegramSessionReferenceReplaySenderDeps<TReference>,
 ): (
   reference: TReference,
   chatId: number,
   replyToMessageId: number,
 ) => Promise<void> {
-  return async function sendTelegramTabSwitchReplayFromReference(
+  return async function sendTelegramWorkspaceSwitchReplayFromReference(
     reference,
     chatId,
     _replyToMessageId,
@@ -1291,7 +1291,7 @@ export function createTelegramTabSwitchReplaySender<TReference>(
   };
 }
 
-export const createTelegramLastTurnsReplaySender = createTelegramTabSwitchReplaySender;
+export const createTelegramLastTurnsReplaySender = createTelegramWorkspaceSwitchReplaySender;
 
 export interface TelegramSessionMenuCallbackDeps {
   getState: (messageId: number | undefined) => TelegramSessionMenuState | undefined;

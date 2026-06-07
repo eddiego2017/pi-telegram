@@ -2,7 +2,7 @@
  * Telegram resume menu UI helpers
  * Zones: telegram ui, session resume, menu composition
  * Owns the /resume inline keyboard, session-list cache, manage-mode deletion, and callback dispatching;
- * active tabs resume through the tab worker RPC, with tmux-injected `/telegram-resume-exec <path>` as
+ * active workspaces resume through the workspace worker RPC, with tmux-injected `/telegram-resume-exec <path>` as
  * the host fallback path (see lib/pi.ts createTmuxDynamicSlashCommandInjector + index.ts wiring).
  */
 
@@ -59,7 +59,7 @@ export type TelegramMaybePromise<T> = T | Promise<T>;
 
 export interface TelegramResumeMenuSessionScope {
   kind?: string;
-  tabName?: string;
+  workspaceName?: string;
   cwd?: string;
   sessionDir?: string;
   currentSessionFile?: string;
@@ -114,7 +114,7 @@ export interface TelegramResumeMenuState {
   filters?: string[];
   /** Whether filters search full session text instead of the displayed headline. */
   fullTextSearch?: boolean;
-  /** Optional host/tab session scope captured when this menu was opened. */
+  /** Optional host/workspace session scope captured when this menu was opened. */
   sessionScope?: TelegramResumeMenuSessionScope;
   /** Per-filter before/after counts for rendering the filtered menu header. */
   filterTrace?: TelegramResumeFilterTraceItem[];

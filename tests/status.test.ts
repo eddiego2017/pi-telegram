@@ -14,7 +14,7 @@ import {
   createTelegramRuntimeEventRecorder,
   createTelegramStatusHtmlBuilder,
   createTelegramStatusRuntime,
-  createTelegramTabAwareStatusHtmlBuilder,
+  createTelegramWorkspaceAwareStatusHtmlBuilder,
   getTelegramStatusBarProcessingStatus,
   recordStructuredTelegramRuntimeEvent,
   recordTelegramRuntimeEvent,
@@ -372,21 +372,21 @@ test("Status HTML builder binds active model lookup", () => {
   assert.match(html, /Context.*0\.0%\/1\.0k/s);
 });
 
-test("Tab-aware status HTML uses active tab context usage", () => {
+test("Workspace-aware status HTML uses active workspace context usage", () => {
   const parentModel = { provider: "openai", id: "gpt-5", contextWindow: 1000 };
-  const tabModel = {
+  const workspaceModel = {
     provider: "openai",
     id: "gpt-5.5",
     contextWindow: 2000,
   };
-  const buildStatusHtml = createTelegramTabAwareStatusHtmlBuilder({
+  const buildStatusHtml = createTelegramWorkspaceAwareStatusHtmlBuilder({
     getActiveReference: () => ({
-      tabName: "work",
+      workspaceName: "work",
       cwd: "/repo",
       currentModel: { provider: "openai", id: "gpt-5.5" },
     }),
     getParentActiveModel: () => parentModel,
-    findModel: () => tabModel,
+    findModel: () => workspaceModel,
     getSnapshotFromReference: (_reference, options) => ({
       contextUsage: {
         percent: 25,

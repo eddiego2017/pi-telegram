@@ -34,22 +34,22 @@ import {
   formatTelegramWorkspaceFilterSummary,
   formatTelegramWorkspaceList,
   formatTelegramWorkspaceRecordDisplayName,
-  formatTelegramTabStatus,
+  formatTelegramWorkspaceStatus,
   formatTelegramWorkspaceStatusLabel,
-  formatTelegramTabUsage,
+  formatTelegramWorkspaceUsage,
   normalizeTelegramWorkspaceName,
   normalizeTelegramWorkspacesState,
   normalizeTelegramTopicWorkspaceName,
-  parseTelegramTabCommand,
+  parseTelegramWorkspaceCommand,
   TELEGRAM_DEFAULT_WORKSPACE_NAME,
-  truncateTelegramTabText,
+  truncateTelegramWorkspaceText,
   validateTelegramWorkspaceName,
   type TelegramWorkspaceFilterTraceItem,
   type TelegramWorkspaceRecord,
   type TelegramWorkspaceSourceTelegramTopic,
   type TelegramWorkspacesState,
 } from "./workspaces.ts";
-import type { TelegramNormalizedConcurrentTabsConfig } from "./config.ts";
+import type { TelegramNormalizedConcurrentWorkspacesConfig } from "./config.ts";
 import { isTelegramForumTopicPermissionError } from "./api.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./model.ts";
 import { getTelegramAgentDir, isTelegramTrustedChat } from "./config.ts";
@@ -68,17 +68,17 @@ import {
   runWithTelegramThreadContext,
 } from "./thread-context.ts";
 
-const TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS = 10_000;
-const TELEGRAM_TAB_STREAM_FAILURE_BASE_RETRY_MS = 30_000;
-const TELEGRAM_TAB_STREAM_FAILURE_MAX_RETRY_MS = 10 * 60 * 1000;
-const TELEGRAM_TAB_STREAM_MARKDOWN_LIMIT = 3600;
-const TELEGRAM_TAB_TYPING_ACTION_INTERVAL_MS = 8_000;
-const TELEGRAM_TAB_DASHBOARD_STATE_TTL_MS = 10 * 60 * 1000;
-const TELEGRAM_TAB_TOOL_STATUS_MAX_ENTRIES = 6;
-const TELEGRAM_FORUM_NATIVE_TAB_LIFECYCLE_DISABLED_MESSAGE =
+const TELEGRAM_WORKSPACE_STREAM_EDIT_THROTTLE_MS = 10_000;
+const TELEGRAM_WORKSPACE_STREAM_FAILURE_BASE_RETRY_MS = 30_000;
+const TELEGRAM_WORKSPACE_STREAM_FAILURE_MAX_RETRY_MS = 10 * 60 * 1000;
+const TELEGRAM_WORKSPACE_STREAM_MARKDOWN_LIMIT = 3600;
+const TELEGRAM_WORKSPACE_TYPING_ACTION_INTERVAL_MS = 8_000;
+const TELEGRAM_WORKSPACE_DASHBOARD_STATE_TTL_MS = 10 * 60 * 1000;
+const TELEGRAM_WORKSPACE_TOOL_STATUS_MAX_ENTRIES = 6;
+const TELEGRAM_FORUM_NATIVE_WORKSPACE_LIFECYCLE_DISABLED_MESSAGE =
   "Forum-native mode is enabled. Use Telegram topics to create, switch, and close workspaces.";
 
-function getTelegramTabBooleanEnv(
+function getTelegramWorkspaceBooleanEnv(
   name: string,
   defaultValue: boolean,
 ): boolean {
@@ -89,32 +89,32 @@ function getTelegramTabBooleanEnv(
   return defaultValue;
 }
 
-type TelegramTabToolPreviewMode = "off" | "stream" | "compact";
+type TelegramWorkspaceToolPreviewMode = "off" | "stream" | "compact";
 
-function getTelegramTabToolPreviewMode(): TelegramTabToolPreviewMode {
+function getTelegramWorkspaceToolPreviewMode(): TelegramWorkspaceToolPreviewMode {
   const value = process.env.PI_TELEGRAM_TOOL_PREVIEW_MODE?.trim().toLowerCase();
   if (value === "compact" || value === "summary") return "compact";
   if (value === "stream" || value === "full" || value === "on") return "stream";
   if (value === "off" || value === "0" || value === "false") return "off";
-  return getTelegramTabBooleanEnv("PI_TELEGRAM_TOOL_PREVIEWS", true)
+  return getTelegramWorkspaceBooleanEnv("PI_TELEGRAM_TOOL_PREVIEWS", true)
     ? "stream"
     : "off";
 }
 
-export interface TelegramTabPromptContent {
+export interface TelegramWorkspacePromptContent {
   type: string;
   text?: string;
 }
 
-export interface TelegramTabPromptTurn {
+export interface TelegramWorkspacePromptTurn {
   chatId: number;
   messageThreadId?: number;
   replyToMessageId: number;
-  content: readonly TelegramTabPromptContent[];
+  content: readonly TelegramWorkspacePromptContent[];
   statusSummary?: string;
 }
 
-export interface TelegramTabForumTopicServiceMessage {
+export interface TelegramWorkspaceForumTopicServiceMessage {
   chat: { id?: number };
   message_id?: number;
   message_thread_id?: number;
@@ -126,7 +126,7 @@ export interface TelegramTabForumTopicServiceMessage {
   general_forum_topic_unhidden?: Record<string, never>;
 }
 
-export interface TelegramTabBackend {
+export interface TelegramWorkspaceBackend {
   start: () => Promise<RpcChildSessionState>;
   dispose: () => Promise<void>;
   onEvent: (listener: (event: RpcChildBackendEvent) => void) => () => void;
@@ -142,42 +142,42 @@ export interface TelegramTabBackend {
   setSessionName: (name: string) => Promise<void>;
 }
 
-export interface TelegramTabModelSelection {
+export interface TelegramWorkspaceModelSelection {
   provider: string;
   id: string;
 }
 
-export interface TelegramTabSessionReference {
-  tabName: string;
+export interface TelegramWorkspaceSessionReference {
+  workspaceName: string;
   cwd: string;
   sessionFile?: string;
   sessionId?: string;
   sessionName?: string;
-  currentModel?: TelegramTabModelSelection;
+  currentModel?: TelegramWorkspaceModelSelection;
 }
 
-export interface TelegramTabResumeSessionScope {
-  kind: "tab";
-  tabName: string;
+export interface TelegramWorkspaceResumeSessionScope {
+  kind: "workspace";
+  workspaceName: string;
   cwd: string;
   sessionDir?: string;
   currentSessionFile?: string;
 }
 
-export interface TelegramTabAbortResult {
-  tabName: string;
+export interface TelegramWorkspaceAbortResult {
+  workspaceName: string;
   aborted: boolean;
   message: string;
 }
 
-export interface TelegramTabTreeBranchResult {
+export interface TelegramWorkspaceTreeBranchResult {
   text?: string;
   cancelled: boolean;
   markerId?: string;
 }
 
-export interface TelegramTabManagerDeps<TContext> {
-  getConfig: () => TelegramNormalizedConcurrentTabsConfig;
+export interface TelegramWorkspaceManagerDeps<TContext> {
+  getConfig: () => TelegramNormalizedConcurrentWorkspacesConfig;
   getCwd: (ctx: TContext) => string;
   sendTextReply: (
     chatId: number,
@@ -218,7 +218,7 @@ export interface TelegramTabManagerDeps<TContext> {
     text?: string,
   ) => Promise<void>;
   sendLastTurnsOnSwitch?: (
-    reference: TelegramTabSessionReference,
+    reference: TelegramWorkspaceSessionReference,
     chatId: number,
     replyToMessageId: number,
   ) => Promise<void>;
@@ -232,7 +232,7 @@ export interface TelegramTabManagerDeps<TContext> {
   statePath?: string;
   sessionDir?: string;
   getSessionDir?: (ctx: TContext) => string | undefined;
-  createBackend?: (options: RpcChildBackendOptions) => TelegramTabBackend;
+  createBackend?: (options: RpcChildBackendOptions) => TelegramWorkspaceBackend;
   recordRuntimeEvent?: (
     category: string,
     error: unknown,
@@ -240,9 +240,9 @@ export interface TelegramTabManagerDeps<TContext> {
   ) => void;
   debugLogger?: TelegramDebugLogger;
   createTreeBranch?: (
-    reference: TelegramTabSessionReference,
+    reference: TelegramWorkspaceSessionReference,
     entryId: string,
-  ) => Promise<TelegramTabTreeBranchResult> | TelegramTabTreeBranchResult;
+  ) => Promise<TelegramWorkspaceTreeBranchResult> | TelegramWorkspaceTreeBranchResult;
   deleteSessionFile?: (sessionPath: string) => Promise<void>;
   deleteForumTopic?: (
     chatId: number,
@@ -253,7 +253,7 @@ export interface TelegramTabManagerDeps<TContext> {
 
 interface WorkspaceRuntime {
   record: TelegramWorkspaceRecord;
-  backend?: TelegramTabBackend;
+  backend?: TelegramWorkspaceBackend;
   closing?: boolean;
   unreadEvents: number;
   activeBuffer: string;
@@ -262,15 +262,15 @@ interface WorkspaceRuntime {
   streamDeliveryFailureCount?: number;
   streamDeliveryBlockedUntil?: number;
   lastStreamFlushAt?: number;
-  textStream?: TelegramTabStreamState;
+  textStream?: TelegramWorkspaceStreamState;
   thinkingBuffers: Map<number, string>;
-  thinkingStreams: Map<number, TelegramTabStreamState>;
-  toolCallStreams: Map<number, TelegramTabStreamState>;
-  toolCallStatusStream?: TelegramTabStreamState;
-  toolCallStatuses: Map<string, TelegramTabToolStatusEntry>;
+  thinkingStreams: Map<number, TelegramWorkspaceStreamState>;
+  toolCallStreams: Map<number, TelegramWorkspaceStreamState>;
+  toolCallStatusStream?: TelegramWorkspaceStreamState;
+  toolCallStatuses: Map<string, TelegramWorkspaceToolStatusEntry>;
   sentThinkingTexts: Set<string>;
   sentToolCallMessages: Set<string>;
-  postRunMessages: TelegramTabPostRunMessage[];
+  postRunMessages: TelegramWorkspacePostRunMessage[];
   typingChatId?: number;
   typingMessageThreadId?: number;
   typingInterval?: ReturnType<typeof setInterval>;
@@ -284,38 +284,38 @@ interface WorkspaceRuntime {
   agentStartedAt?: number;
   firstOutputAt?: number;
   firstOutputLogged?: boolean;
-  pendingCompactionTurns?: TelegramTabPromptTurn[];
+  pendingCompactionTurns?: TelegramWorkspacePromptTurn[];
   unsubscribe?: () => void;
 }
 
-type TelegramTabToolStatusKind = "queued" | "running" | "done" | "failed";
+type TelegramWorkspaceToolStatusKind = "queued" | "running" | "done" | "failed";
 
-type TelegramTabPostRunMessageKind = "thinking" | "tool" | "text";
+type TelegramWorkspacePostRunMessageKind = "thinking" | "tool" | "text";
 
-interface TelegramTabPostRunMessage {
-  kind: TelegramTabPostRunMessageKind;
+interface TelegramWorkspacePostRunMessage {
+  kind: TelegramWorkspacePostRunMessageKind;
   markdown: string;
-  stream?: TelegramTabStreamState;
+  stream?: TelegramWorkspaceStreamState;
 }
 
-interface TelegramTabToolStatusEntry {
+interface TelegramWorkspaceToolStatusEntry {
   key: string;
   markdown: string;
-  status: TelegramTabToolStatusKind;
+  status: TelegramWorkspaceToolStatusKind;
   updatedAt: number;
 }
 
-type TelegramTabDashboardMode = "open" | "close";
+type TelegramWorkspaceDashboardMode = "open" | "close";
 
-interface TelegramTabDashboardState {
+interface TelegramWorkspaceDashboardState {
   chatId: number;
   messageId: number;
-  mode: TelegramTabDashboardMode;
-  selectedCloseTabs: string[];
+  mode: TelegramWorkspaceDashboardMode;
+  selectedCloseWorkspaces: string[];
   updatedAt: number;
 }
 
-interface TelegramTabStreamState {
+interface TelegramWorkspaceStreamState {
   markdown: string;
   sentMarkdown: string;
   lastFlushAt: number;
@@ -327,12 +327,12 @@ interface TelegramTabStreamState {
   messageThreadId?: number;
   replyToMessageId?: number;
   flushTimer?: ReturnType<typeof setTimeout>;
-  flushPromise?: Promise<TelegramTabStreamDeliveryResult>;
+  flushPromise?: Promise<TelegramWorkspaceStreamDeliveryResult>;
   flushRequested?: boolean;
   suppressRetryOnFailure?: boolean;
 }
 
-type TelegramTabStreamDeliveryResult =
+type TelegramWorkspaceStreamDeliveryResult =
   | {
       status: "delivered";
       sentMarkdown: string;
@@ -343,7 +343,7 @@ type TelegramTabStreamDeliveryResult =
   | { status: "skipped"; reason: string; stale: boolean }
   | { status: "failed"; error?: string; stale: boolean };
 
-export interface TelegramTabMarkdownMessageEditorDeps {
+export interface TelegramWorkspaceMarkdownMessageEditorDeps {
   renderTelegramMessage: (
     text: string,
     options?: { mode?: TelegramRenderMode },
@@ -356,8 +356,8 @@ export interface TelegramTabMarkdownMessageEditorDeps {
   ) => Promise<number | undefined>;
 }
 
-export function createTelegramTabMarkdownMessageEditor(
-  deps: TelegramTabMarkdownMessageEditorDeps,
+export function createTelegramWorkspaceMarkdownMessageEditor(
+  deps: TelegramWorkspaceMarkdownMessageEditorDeps,
 ): (chatId: number, messageId: number, markdown: string) => Promise<number | undefined> {
   return (chatId, messageId, markdown) =>
     deps.editRenderedMessage(
@@ -368,22 +368,22 @@ export function createTelegramTabMarkdownMessageEditor(
     );
 }
 
-export interface TelegramTabManager<TContext> {
+export interface TelegramWorkspaceManager<TContext> {
   isEnabled: () => boolean;
   getActiveModel: (
     ctx: TContext,
-  ) => Promise<TelegramTabModelSelection | undefined>;
+  ) => Promise<TelegramWorkspaceModelSelection | undefined>;
   getActiveThinkingLevel: (ctx: TContext) => Promise<ThinkingLevel | undefined>;
   getActiveSessionReference: (
     ctx: TContext,
-  ) => TelegramTabSessionReference | undefined;
+  ) => TelegramWorkspaceSessionReference | undefined;
   getActiveResumeSessionScope: (
     ctx: TContext,
-  ) => TelegramTabResumeSessionScope | undefined;
+  ) => TelegramWorkspaceResumeSessionScope | undefined;
   getActiveSessionName: (ctx: TContext) => string | undefined;
   canSwitchActiveModel: (ctx: TContext) => Promise<boolean>;
   selectActiveModel: (
-    model: TelegramTabModelSelection,
+    model: TelegramWorkspaceModelSelection,
     ctx: TContext,
   ) => Promise<boolean>;
   setActiveThinkingLevel: (
@@ -402,16 +402,16 @@ export interface TelegramTabManager<TContext> {
     expectedSessionPath: string,
     ctx: TContext,
   ) => Promise<boolean | undefined>;
-  abortActive: (ctx: TContext) => Promise<TelegramTabAbortResult | undefined>;
+  abortActive: (ctx: TContext) => Promise<TelegramWorkspaceAbortResult | undefined>;
   switchSession: (
     sessionPath: string,
     ctx: TContext,
-    scope?: { kind?: string; tabName?: string },
+    scope?: { kind?: string; workspaceName?: string },
   ) => Promise<boolean>;
   createActiveTreeBranch: (
     entryId: string,
     ctx: TContext,
-  ) => Promise<TelegramTabTreeBranchResult | undefined>;
+  ) => Promise<TelegramWorkspaceTreeBranchResult | undefined>;
   handleCommand: (
     args: string,
     chatId: number,
@@ -425,88 +425,88 @@ export interface TelegramTabManager<TContext> {
     ctx: TContext,
   ) => Promise<boolean>;
   handleCallbackQuery: (
-    query: TelegramTabCallbackQuery,
+    query: TelegramWorkspaceCallbackQuery,
     ctx: TContext,
   ) => Promise<boolean>;
   handleTopicServiceMessage: (
-    message: TelegramTabForumTopicServiceMessage,
+    message: TelegramWorkspaceForumTopicServiceMessage,
     ctx: TContext,
   ) => Promise<boolean>;
-  dispatchPrompt: (turn: TelegramTabPromptTurn, ctx: TContext) => Promise<boolean>;
+  dispatchPrompt: (turn: TelegramWorkspacePromptTurn, ctx: TContext) => Promise<boolean>;
   dispose: () => Promise<void>;
 }
 
-export interface TelegramTabCallbackQuery {
+export interface TelegramWorkspaceCallbackQuery {
   id: string;
   data?: string;
   message?: { chat?: { id?: number }; message_id?: number };
 }
 
-export interface TelegramTabAwareModelMenuPorts<
+export interface TelegramWorkspaceAwareModelMenuPorts<
   TContext,
-  TModel extends TelegramTabModelSelection,
+  TModel extends TelegramWorkspaceModelSelection,
 > {
   getActiveModel: (ctx: TContext) => Promise<TModel | undefined>;
   canSwitchModel: (ctx: TContext) => Promise<boolean> | boolean;
   canOfferInFlightModelSwitch: (ctx: TContext) => boolean;
 }
 
-export interface TelegramTabAwareModelMenuPortDeps<
+export interface TelegramWorkspaceAwareModelMenuPortDeps<
   TContext,
-  TModel extends TelegramTabModelSelection,
+  TModel extends TelegramWorkspaceModelSelection,
 > {
-  tabManager: TelegramTabManager<TContext>;
+  workspaceManager: TelegramWorkspaceManager<TContext>;
   getParentModel: (ctx: TContext) => TModel | undefined;
   findModel: (
-    identity: TelegramTabModelSelection,
+    identity: TelegramWorkspaceModelSelection,
     ctx: TContext,
   ) => TModel | undefined;
   isParentIdle: (ctx: TContext) => boolean;
   canOfferParentInFlightModelSwitch: (ctx: TContext) => boolean;
 }
 
-export interface TelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot> {
+export interface TelegramWorkspaceAwareSessionSnapshotPorts<TContext, TSnapshot> {
   getSnapshot: (ctx: TContext) => TSnapshot;
   canDeleteCurrent: (snapshot: unknown, ctx: TContext) => boolean;
   isReadOnly: (snapshot: unknown, ctx: TContext) => boolean;
 }
 
-export interface TelegramTabAwareSessionSnapshotPortDeps<TContext, TSnapshot> {
-  tabManager: TelegramTabManager<TContext>;
+export interface TelegramWorkspaceAwareSessionSnapshotPortDeps<TContext, TSnapshot> {
+  workspaceManager: TelegramWorkspaceManager<TContext>;
   getParentSnapshot: (ctx: TContext) => TSnapshot;
-  getTabSnapshot: (
-    reference: TelegramTabSessionReference,
+  getWorkspaceSnapshot: (
+    reference: TelegramWorkspaceSessionReference,
     ctx: TContext,
   ) => TSnapshot;
 }
 
-export function createTelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot>(
-  deps: TelegramTabAwareSessionSnapshotPortDeps<TContext, TSnapshot>,
-): TelegramTabAwareSessionSnapshotPorts<TContext, TSnapshot> {
-  const isActiveTabSession = (ctx: TContext): boolean =>
-    deps.tabManager.getActiveSessionReference(ctx) !== undefined;
+export function createTelegramWorkspaceAwareSessionSnapshotPorts<TContext, TSnapshot>(
+  deps: TelegramWorkspaceAwareSessionSnapshotPortDeps<TContext, TSnapshot>,
+): TelegramWorkspaceAwareSessionSnapshotPorts<TContext, TSnapshot> {
+  const isActiveWorkspaceSession = (ctx: TContext): boolean =>
+    deps.workspaceManager.getActiveSessionReference(ctx) !== undefined;
   const hasSessionFile = (snapshot: unknown): boolean =>
     typeof (snapshot as { sessionFile?: unknown }).sessionFile === "string" &&
     ((snapshot as { sessionFile?: string }).sessionFile?.length ?? 0) > 0;
   return {
     getSnapshot: (ctx) => {
-      const reference = deps.tabManager.getActiveSessionReference(ctx);
+      const reference = deps.workspaceManager.getActiveSessionReference(ctx);
       return reference
-        ? deps.getTabSnapshot(reference, ctx)
+        ? deps.getWorkspaceSnapshot(reference, ctx)
         : deps.getParentSnapshot(ctx);
     },
     canDeleteCurrent: (snapshot, _ctx) => hasSessionFile(snapshot),
-    isReadOnly: (_snapshot, ctx) => isActiveTabSession(ctx),
+    isReadOnly: (_snapshot, ctx) => isActiveWorkspaceSession(ctx),
   };
 }
 
-export interface TelegramTabAwareSessionNamePorts<TContext> {
+export interface TelegramWorkspaceAwareSessionNamePorts<TContext> {
   getSessionName: (ctx: TContext) => string | undefined;
   setSessionName: (name: string, ctx: TContext) => void | Promise<void>;
 }
 
-export interface TelegramTabAwareSessionNamePortDeps<TContext> {
-  tabManager: TelegramTabManager<TContext>;
+export interface TelegramWorkspaceAwareSessionNamePortDeps<TContext> {
+  workspaceManager: TelegramWorkspaceManager<TContext>;
   getParentSessionName: (ctx: TContext) => string | undefined;
   setParentSessionName: (
     name: string,
@@ -514,20 +514,20 @@ export interface TelegramTabAwareSessionNamePortDeps<TContext> {
   ) => void | Promise<void>;
 }
 
-export function createTelegramTabAwareSessionNamePorts<TContext>(
-  deps: TelegramTabAwareSessionNamePortDeps<TContext>,
-): TelegramTabAwareSessionNamePorts<TContext> {
+export function createTelegramWorkspaceAwareSessionNamePorts<TContext>(
+  deps: TelegramWorkspaceAwareSessionNamePortDeps<TContext>,
+): TelegramWorkspaceAwareSessionNamePorts<TContext> {
   return {
     getSessionName: (ctx) => {
-      const reference = deps.tabManager.getActiveSessionReference(ctx);
+      const reference = deps.workspaceManager.getActiveSessionReference(ctx);
       return reference
         ? reference.sessionName
         : deps.getParentSessionName(ctx);
     },
     setSessionName: async (name, ctx) => {
-      const reference = deps.tabManager.getActiveSessionReference(ctx);
+      const reference = deps.workspaceManager.getActiveSessionReference(ctx);
       if (reference) {
-        const handled = await deps.tabManager.setActiveSessionName(name, ctx);
+        const handled = await deps.workspaceManager.setActiveSessionName(name, ctx);
         if (handled) return;
       }
       await deps.setParentSessionName(name, ctx);
@@ -535,47 +535,47 @@ export function createTelegramTabAwareSessionNamePorts<TContext>(
   };
 }
 
-export interface TelegramTabAwareCompactPorts<TContext> {
+export interface TelegramWorkspaceAwareCompactPorts<TContext> {
   compact: (
     ctx: TContext,
     callbacks: { onComplete: () => void; onError: (error: unknown) => void },
   ) => void;
 }
 
-export interface TelegramTabAwareCompactPortDeps<TContext> {
-  tabManager: TelegramTabManager<TContext>;
+export interface TelegramWorkspaceAwareCompactPortDeps<TContext> {
+  workspaceManager: TelegramWorkspaceManager<TContext>;
   compactParent: (
     ctx: TContext,
     callbacks: { onComplete: () => void; onError: (error: unknown) => void },
   ) => void;
 }
 
-export function createTelegramTabAwareCompactPorts<TContext>(
-  deps: TelegramTabAwareCompactPortDeps<TContext>,
-): TelegramTabAwareCompactPorts<TContext> {
+export function createTelegramWorkspaceAwareCompactPorts<TContext>(
+  deps: TelegramWorkspaceAwareCompactPortDeps<TContext>,
+): TelegramWorkspaceAwareCompactPorts<TContext> {
   return {
     compact: (ctx, callbacks) => {
-      const handled = deps.tabManager.compactActive(ctx, callbacks);
+      const handled = deps.workspaceManager.compactActive(ctx, callbacks);
       if (!handled) deps.compactParent(ctx, callbacks);
     },
   };
 }
 
-export interface TelegramTabAwareNewSessionPorts<TContext> {
+export interface TelegramWorkspaceAwareNewSessionPorts<TContext> {
   injectNewSession: (ctx: TContext) => Promise<boolean>;
 }
 
-export interface TelegramTabAwareNewSessionPortDeps<TContext> {
-  tabManager: TelegramTabManager<TContext>;
+export interface TelegramWorkspaceAwareNewSessionPortDeps<TContext> {
+  workspaceManager: TelegramWorkspaceManager<TContext>;
   injectParentNewSession: () => Promise<void>;
 }
 
-export function createTelegramTabAwareNewSessionPorts<TContext>(
-  deps: TelegramTabAwareNewSessionPortDeps<TContext>,
-): TelegramTabAwareNewSessionPorts<TContext> {
+export function createTelegramWorkspaceAwareNewSessionPorts<TContext>(
+  deps: TelegramWorkspaceAwareNewSessionPortDeps<TContext>,
+): TelegramWorkspaceAwareNewSessionPorts<TContext> {
   return {
     injectNewSession: async (ctx) => {
-      const result = await deps.tabManager.newActiveSession(ctx);
+      const result = await deps.workspaceManager.newActiveSession(ctx);
       if (result !== undefined) return !result.cancelled;
       await deps.injectParentNewSession();
       return true;
@@ -583,24 +583,24 @@ export function createTelegramTabAwareNewSessionPorts<TContext>(
   };
 }
 
-export interface TelegramTabAwareSessionDeletePorts<TContext> {
+export interface TelegramWorkspaceAwareSessionDeletePorts<TContext> {
   injectDeleteCurrentSession: (
     expectedSessionPath: string,
     ctx: TContext,
   ) => Promise<void>;
 }
 
-export interface TelegramTabAwareSessionDeletePortDeps<TContext> {
-  tabManager: TelegramTabManager<TContext>;
+export interface TelegramWorkspaceAwareSessionDeletePortDeps<TContext> {
+  workspaceManager: TelegramWorkspaceManager<TContext>;
   injectParentDeleteCurrentSession: (expectedSessionPath: string) => Promise<void>;
 }
 
-export function createTelegramTabAwareSessionDeletePorts<TContext>(
-  deps: TelegramTabAwareSessionDeletePortDeps<TContext>,
-): TelegramTabAwareSessionDeletePorts<TContext> {
+export function createTelegramWorkspaceAwareSessionDeletePorts<TContext>(
+  deps: TelegramWorkspaceAwareSessionDeletePortDeps<TContext>,
+): TelegramWorkspaceAwareSessionDeletePorts<TContext> {
   return {
     injectDeleteCurrentSession: async (expectedSessionPath, ctx) => {
-      const handled = await deps.tabManager.deleteActiveSession(
+      const handled = await deps.workspaceManager.deleteActiveSession(
         expectedSessionPath,
         ctx,
       );
@@ -610,55 +610,55 @@ export function createTelegramTabAwareSessionDeletePorts<TContext>(
   };
 }
 
-export interface TelegramTabAwareResumeMenuPorts<TContext> {
+export interface TelegramWorkspaceAwareResumeMenuPorts<TContext> {
   getSessionScope: (
     ctx: TContext,
-  ) => TelegramTabResumeSessionScope | undefined;
+  ) => TelegramWorkspaceResumeSessionScope | undefined;
   injectResumeExec: (
     sessionPath: string,
     ctx: TContext,
-    sessionScope?: { kind?: string; tabName?: string },
+    sessionScope?: { kind?: string; workspaceName?: string },
   ) => Promise<void>;
 }
 
-export interface TelegramTabAwareResumeMenuPortDeps<TContext> {
-  tabManager: TelegramTabManager<TContext>;
+export interface TelegramWorkspaceAwareResumeMenuPortDeps<TContext> {
+  workspaceManager: TelegramWorkspaceManager<TContext>;
   injectParentResumeExec: (sessionPath: string) => Promise<void>;
 }
 
-export function createTelegramTabAwareResumeMenuPorts<TContext>(
-  deps: TelegramTabAwareResumeMenuPortDeps<TContext>,
-): TelegramTabAwareResumeMenuPorts<TContext> {
+export function createTelegramWorkspaceAwareResumeMenuPorts<TContext>(
+  deps: TelegramWorkspaceAwareResumeMenuPortDeps<TContext>,
+): TelegramWorkspaceAwareResumeMenuPorts<TContext> {
   return {
     getSessionScope: (ctx) =>
-      deps.tabManager.isEnabled()
-        ? deps.tabManager.getActiveResumeSessionScope(ctx)
+      deps.workspaceManager.isEnabled()
+        ? deps.workspaceManager.getActiveResumeSessionScope(ctx)
         : undefined,
     injectResumeExec: async (sessionPath, ctx, sessionScope) => {
-      if (!deps.tabManager.isEnabled()) {
+      if (!deps.workspaceManager.isEnabled()) {
         await deps.injectParentResumeExec(sessionPath);
         return;
       }
       const activeScope =
-        sessionScope?.kind === "tab" && sessionScope.tabName
+        sessionScope?.kind === "workspace" && sessionScope.workspaceName
           ? sessionScope
-          : deps.tabManager.getActiveResumeSessionScope(ctx);
+          : deps.workspaceManager.getActiveResumeSessionScope(ctx);
       if (!activeScope) {
-        throw new Error("No active tab session scope for /resume.");
+        throw new Error("No active workspace session scope for /resume.");
       }
-      const handled = await deps.tabManager.switchSession(
+      const handled = await deps.workspaceManager.switchSession(
         sessionPath,
         ctx,
         activeScope,
       );
       if (!handled) {
-        throw new Error("Active tab did not handle /resume.");
+        throw new Error("Active workspace did not handle /resume.");
       }
     },
   };
 }
 
-export interface TelegramTabAwareTreeMenuPorts<TContext> {
+export interface TelegramWorkspaceAwareTreeMenuPorts<TContext> {
   isReadOnly: (snapshot: unknown, ctx: TContext) => boolean;
   canForkTree: (snapshot: unknown, ctx: TContext) => boolean;
   injectTreeExec: (
@@ -669,37 +669,37 @@ export interface TelegramTabAwareTreeMenuPorts<TContext> {
   forkTreeEntry: (
     entryId: string,
     ctx: TContext,
-  ) => Promise<TelegramTabTreeBranchResult>;
+  ) => Promise<TelegramWorkspaceTreeBranchResult>;
 }
 
-export interface TelegramTabAwareTreeMenuPortDeps<TContext> {
-  tabManager: TelegramTabManager<TContext>;
+export interface TelegramWorkspaceAwareTreeMenuPortDeps<TContext> {
+  workspaceManager: TelegramWorkspaceManager<TContext>;
   injectParentTreeExec: (entryId: string, summarize: boolean) => Promise<void>;
 }
 
-export function createTelegramTabAwareTreeMenuPorts<TContext>(
-  deps: TelegramTabAwareTreeMenuPortDeps<TContext>,
-): TelegramTabAwareTreeMenuPorts<TContext> {
-  const isActiveTabSession = (ctx: TContext): boolean =>
-    deps.tabManager.getActiveSessionReference(ctx) !== undefined;
+export function createTelegramWorkspaceAwareTreeMenuPorts<TContext>(
+  deps: TelegramWorkspaceAwareTreeMenuPortDeps<TContext>,
+): TelegramWorkspaceAwareTreeMenuPorts<TContext> {
+  const isActiveWorkspaceSession = (ctx: TContext): boolean =>
+    deps.workspaceManager.getActiveSessionReference(ctx) !== undefined;
   return {
-    isReadOnly: (_snapshot, ctx) => isActiveTabSession(ctx),
-    canForkTree: (_snapshot, ctx) => isActiveTabSession(ctx),
+    isReadOnly: (_snapshot, ctx) => isActiveWorkspaceSession(ctx),
+    canForkTree: (_snapshot, ctx) => isActiveWorkspaceSession(ctx),
     injectTreeExec: async (entryId, summarize, ctx) => {
-      if (isActiveTabSession(ctx)) {
-        throw new Error("Active tab tree navigation uses Create branch.");
+      if (isActiveWorkspaceSession(ctx)) {
+        throw new Error("Active workspace tree navigation uses Create branch.");
       }
       await deps.injectParentTreeExec(entryId, summarize);
     },
     forkTreeEntry: async (entryId, ctx) => {
-      const result = await deps.tabManager.createActiveTreeBranch(entryId, ctx);
-      if (!result) throw new Error("No active tab session for tree branch.");
+      const result = await deps.workspaceManager.createActiveTreeBranch(entryId, ctx);
+      if (!result) throw new Error("No active workspace session for tree branch.");
       return result;
     },
   };
 }
 
-export interface TelegramTabAwareTreeBranchMutators<TContext> {
+export interface TelegramWorkspaceAwareTreeBranchMutators<TContext> {
   setBranchName: (
     entryId: string,
     name: string | undefined,
@@ -708,42 +708,42 @@ export interface TelegramTabAwareTreeBranchMutators<TContext> {
   deleteBranch: (entryId: string, ctx: TContext) => Promise<void> | void;
 }
 
-export interface TelegramTabAwareTreeBranchMutatorDeps<TContext> {
-  tabManager: Pick<TelegramTabManager<TContext>, "getActiveSessionReference">;
+export interface TelegramWorkspaceAwareTreeBranchMutatorDeps<TContext> {
+  workspaceManager: Pick<TelegramWorkspaceManager<TContext>, "getActiveSessionReference">;
   setParentBranchName: (
     entryId: string,
     name: string | undefined,
     ctx: TContext,
   ) => Promise<void> | void;
   deleteParentBranch: (entryId: string, ctx: TContext) => Promise<void> | void;
-  setTabBranchName: (
-    reference: TelegramTabSessionReference,
+  setWorkspaceBranchName: (
+    reference: TelegramWorkspaceSessionReference,
     entryId: string,
     name: string | undefined,
   ) => Promise<void> | void;
-  deleteTabBranch: (
-    reference: TelegramTabSessionReference,
+  deleteWorkspaceBranch: (
+    reference: TelegramWorkspaceSessionReference,
     entryId: string,
     customType: string,
   ) => Promise<void> | void;
   branchMetadataCustomType: string;
 }
 
-export function createTelegramTabAwareTreeBranchMutators<TContext>(
-  deps: TelegramTabAwareTreeBranchMutatorDeps<TContext>,
-): TelegramTabAwareTreeBranchMutators<TContext> {
+export function createTelegramWorkspaceAwareTreeBranchMutators<TContext>(
+  deps: TelegramWorkspaceAwareTreeBranchMutatorDeps<TContext>,
+): TelegramWorkspaceAwareTreeBranchMutators<TContext> {
   return {
     setBranchName: function setBranchName(entryId, name, ctx) {
-      const reference = deps.tabManager.getActiveSessionReference(ctx);
+      const reference = deps.workspaceManager.getActiveSessionReference(ctx);
       if (reference) {
-        return deps.setTabBranchName(reference, entryId, name);
+        return deps.setWorkspaceBranchName(reference, entryId, name);
       }
       return deps.setParentBranchName(entryId, name, ctx);
     },
     deleteBranch: function deleteBranch(entryId, ctx) {
-      const reference = deps.tabManager.getActiveSessionReference(ctx);
+      const reference = deps.workspaceManager.getActiveSessionReference(ctx);
       if (reference) {
-        return deps.deleteTabBranch(
+        return deps.deleteWorkspaceBranch(
           reference,
           entryId,
           deps.branchMetadataCustomType,
@@ -754,57 +754,57 @@ export function createTelegramTabAwareTreeBranchMutators<TContext>(
   };
 }
 
-export function createTelegramTabAwareModelMenuPorts<
+export function createTelegramWorkspaceAwareModelMenuPorts<
   TContext,
-  TModel extends TelegramTabModelSelection,
+  TModel extends TelegramWorkspaceModelSelection,
 >(
-  deps: TelegramTabAwareModelMenuPortDeps<TContext, TModel>,
-): TelegramTabAwareModelMenuPorts<TContext, TModel> {
+  deps: TelegramWorkspaceAwareModelMenuPortDeps<TContext, TModel>,
+): TelegramWorkspaceAwareModelMenuPorts<TContext, TModel> {
   return {
     getActiveModel: async (ctx) => {
-      if (!deps.tabManager.isEnabled()) return deps.getParentModel(ctx);
-      const tabModel = await deps.tabManager.getActiveModel(ctx);
-      if (!tabModel) return undefined;
-      return deps.findModel(tabModel, ctx) ?? ({ ...tabModel } as TModel);
+      if (!deps.workspaceManager.isEnabled()) return deps.getParentModel(ctx);
+      const workspaceModel = await deps.workspaceManager.getActiveModel(ctx);
+      if (!workspaceModel) return undefined;
+      return deps.findModel(workspaceModel, ctx) ?? ({ ...workspaceModel } as TModel);
     },
     canSwitchModel: (ctx) =>
-      deps.tabManager.isEnabled()
-        ? deps.tabManager.canSwitchActiveModel(ctx)
+      deps.workspaceManager.isEnabled()
+        ? deps.workspaceManager.canSwitchActiveModel(ctx)
         : deps.isParentIdle(ctx),
     canOfferInFlightModelSwitch: (ctx) =>
-      deps.tabManager.isEnabled()
+      deps.workspaceManager.isEnabled()
         ? false
         : deps.canOfferParentInFlightModelSwitch(ctx),
   };
 }
 
-export function createTelegramTabAwareThinkingLevelGetter<TContext>(deps: {
-  tabManager: Pick<
-    TelegramTabManager<TContext>,
+export function createTelegramWorkspaceAwareThinkingLevelGetter<TContext>(deps: {
+  workspaceManager: Pick<
+    TelegramWorkspaceManager<TContext>,
     "isEnabled" | "getActiveThinkingLevel"
   >;
   getParentThinkingLevel: () => ThinkingLevel;
 }): (ctx: TContext) => Promise<ThinkingLevel> | ThinkingLevel {
   return async (ctx) => {
-    if (!deps.tabManager.isEnabled()) return deps.getParentThinkingLevel();
+    if (!deps.workspaceManager.isEnabled()) return deps.getParentThinkingLevel();
     return (
-      (await deps.tabManager.getActiveThinkingLevel(ctx)) ??
+      (await deps.workspaceManager.getActiveThinkingLevel(ctx)) ??
       deps.getParentThinkingLevel()
     );
   };
 }
 
-export function createTelegramTabReferenceContextWindowGetter<
+export function createTelegramWorkspaceReferenceContextWindowGetter<
   TContext,
   TModel extends { contextWindow?: number },
 >(deps: {
   getParentModel: (ctx: TContext) => TModel | undefined;
   findModel: (
-    identity: TelegramTabModelSelection,
+    identity: TelegramWorkspaceModelSelection,
     ctx: TContext,
   ) => TModel | undefined;
 }): (
-  reference: TelegramTabSessionReference,
+  reference: TelegramWorkspaceSessionReference,
   ctx: TContext,
 ) => number | undefined {
   return (reference, ctx) =>
@@ -813,8 +813,8 @@ export function createTelegramTabReferenceContextWindowGetter<
       : deps.getParentModel(ctx)?.contextWindow;
 }
 
-export function createTelegramTabManagerShutdownHook<TContext>(
-  manager: TelegramTabManager<TContext>,
+export function createTelegramWorkspaceManagerShutdownHook<TContext>(
+  manager: TelegramWorkspaceManager<TContext>,
 ): () => Promise<void> {
   return manager.dispose;
 }
@@ -823,23 +823,13 @@ function getTelegramWorkspacesStatePath(agentDir: string): string {
   return join(agentDir, "telegram-workspaces.json");
 }
 
-function getLegacyTelegramTabsStatePath(agentDir: string): string {
-  return join(agentDir, "telegram-tabs.json");
-}
-
 async function readTelegramWorkspacesState(
   statePath: string,
   cwd: string,
   now: number,
-  legacyStatePath?: string,
 ): Promise<TelegramWorkspacesState> {
-  const readPath = existsSync(statePath)
-    ? statePath
-    : legacyStatePath && existsSync(legacyStatePath)
-      ? legacyStatePath
-      : undefined;
-  if (!readPath) return createDefaultTelegramWorkspacesState(cwd, now);
-  const raw = JSON.parse(await readFile(readPath, "utf8")) as unknown;
+  if (!existsSync(statePath)) return createDefaultTelegramWorkspacesState(cwd, now);
+  const raw = JSON.parse(await readFile(statePath, "utf8")) as unknown;
   return normalizeTelegramWorkspacesState(raw, cwd, now);
 }
 
@@ -847,15 +837,9 @@ function readTelegramWorkspacesStateSync(
   statePath: string,
   cwd: string,
   now: number,
-  legacyStatePath?: string,
 ): TelegramWorkspacesState {
-  const readPath = existsSync(statePath)
-    ? statePath
-    : legacyStatePath && existsSync(legacyStatePath)
-      ? legacyStatePath
-      : undefined;
-  if (!readPath) return createDefaultTelegramWorkspacesState(cwd, now);
-  const raw = JSON.parse(readFileSync(readPath, "utf8")) as unknown;
+  if (!existsSync(statePath)) return createDefaultTelegramWorkspacesState(cwd, now);
+  const raw = JSON.parse(readFileSync(statePath, "utf8")) as unknown;
   return normalizeTelegramWorkspacesState(raw, cwd, now);
 }
 
@@ -892,7 +876,7 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function buildTelegramTabPromptText(turn: TelegramTabPromptTurn): string {
+function buildTelegramWorkspacePromptText(turn: TelegramWorkspacePromptTurn): string {
   return turn.content
     .map((content) =>
       content.type === "text" && typeof content.text === "string"
@@ -908,7 +892,7 @@ function applyRpcStateToRecord(
   record: TelegramWorkspaceRecord,
   state: RpcChildSessionState,
 ): void {
-  const model = parseTelegramTabModelSelection(state.model);
+  const model = parseTelegramWorkspaceModelSelection(state.model);
   if (model) record.currentModel = model;
   if (typeof state.thinkingLevel === "string") {
     record.currentThinkingLevel = state.thinkingLevel;
@@ -934,13 +918,13 @@ function applyRpcStateToRecord(
   }
 }
 
-interface TelegramTabSessionIdentity {
+interface TelegramWorkspaceSessionIdentity {
   sessionFile?: string;
   canonicalSessionFile?: string;
   sessionId?: string;
 }
 
-function canonicalizeTelegramTabSessionFile(
+function canonicalizeTelegramWorkspaceSessionFile(
   sessionFile: string | undefined,
 ): string | undefined {
   if (!sessionFile) return undefined;
@@ -953,9 +937,9 @@ function canonicalizeTelegramTabSessionFile(
   }
 }
 
-function getTelegramTabSessionIdentity(
-  value: Pick<TelegramTabSessionIdentity, "sessionFile" | "sessionId">,
-): TelegramTabSessionIdentity {
+function getTelegramWorkspaceSessionIdentity(
+  value: Pick<TelegramWorkspaceSessionIdentity, "sessionFile" | "sessionId">,
+): TelegramWorkspaceSessionIdentity {
   const sessionFile =
     typeof value.sessionFile === "string" && value.sessionFile
       ? value.sessionFile
@@ -968,16 +952,16 @@ function getTelegramTabSessionIdentity(
     ...(sessionFile
       ? {
           sessionFile,
-          canonicalSessionFile: canonicalizeTelegramTabSessionFile(sessionFile),
+          canonicalSessionFile: canonicalizeTelegramWorkspaceSessionFile(sessionFile),
         }
       : {}),
     ...(sessionId ? { sessionId } : {}),
   };
 }
 
-function isSameTelegramTabSessionIdentity(
-  left: TelegramTabSessionIdentity,
-  right: TelegramTabSessionIdentity,
+function isSameTelegramWorkspaceSessionIdentity(
+  left: TelegramWorkspaceSessionIdentity,
+  right: TelegramWorkspaceSessionIdentity,
 ): boolean {
   if (left.canonicalSessionFile && right.canonicalSessionFile) {
     return left.canonicalSessionFile === right.canonicalSessionFile;
@@ -988,27 +972,27 @@ function isSameTelegramTabSessionIdentity(
   return false;
 }
 
-function isSameTelegramTabSessionFile(
+function isSameTelegramWorkspaceSessionFile(
   left: string | undefined,
   right: string | undefined,
 ): boolean {
   if (!left || !right) return false;
-  return isSameTelegramTabSessionIdentity(
-    getTelegramTabSessionIdentity({ sessionFile: left }),
-    getTelegramTabSessionIdentity({ sessionFile: right }),
+  return isSameTelegramWorkspaceSessionIdentity(
+    getTelegramWorkspaceSessionIdentity({ sessionFile: left }),
+    getTelegramWorkspaceSessionIdentity({ sessionFile: right }),
   );
 }
 
-function formatTelegramTabSessionOwner(record: TelegramWorkspaceRecord): string {
+function formatTelegramWorkspaceSessionOwner(record: TelegramWorkspaceRecord): string {
   const displayName = formatTelegramWorkspaceRecordDisplayName(record);
   const topicTitle = record.source?.kind === "telegram-topic"
-    ? normalizeTelegramTabSessionName(record.source.topicTitle ?? "")
+    ? normalizeTelegramWorkspaceSessionName(record.source.topicTitle ?? "")
     : undefined;
   if (topicTitle && topicTitle !== displayName) return `${topicTitle} (${displayName})`;
   return displayName;
 }
 
-function normalizeTelegramTabSessionName(name: string): string | undefined {
+function normalizeTelegramWorkspaceSessionName(name: string): string | undefined {
   const trimmed = name.trim();
   return trimmed ? trimmed : undefined;
 }
@@ -1017,19 +1001,19 @@ function getTelegramTopicSessionName(
   record: TelegramWorkspaceRecord,
 ): string | undefined {
   if (record.source?.kind !== "telegram-topic") return undefined;
-  return normalizeTelegramTabSessionName(record.source.topicTitle ?? "");
+  return normalizeTelegramWorkspaceSessionName(record.source.topicTitle ?? "");
 }
 
-function canSwitchTelegramTabModel(record: TelegramWorkspaceRecord): boolean {
+function canSwitchTelegramWorkspaceModel(record: TelegramWorkspaceRecord): boolean {
   return record.status !== "running" && record.status !== "starting";
 }
 
-function getTelegramTabSessionReference(
+function getTelegramWorkspaceSessionReference(
   record: TelegramWorkspaceRecord,
   fallbackCwd?: string,
-): TelegramTabSessionReference {
-  const reference: TelegramTabSessionReference = {
-    tabName: record.name,
+): TelegramWorkspaceSessionReference {
+  const reference: TelegramWorkspaceSessionReference = {
+    workspaceName: record.name,
     cwd: record.cwd || fallbackCwd || "",
     sessionFile: record.sessionFile,
     sessionId: record.sessionId,
@@ -1039,9 +1023,9 @@ function getTelegramTabSessionReference(
   return reference;
 }
 
-function parseTelegramTabModelSelection(
+function parseTelegramWorkspaceModelSelection(
   value: unknown,
-): TelegramTabModelSelection | undefined {
+): TelegramWorkspaceModelSelection | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const raw = value as Record<string, unknown>;
   return typeof raw.provider === "string" && typeof raw.id === "string"
@@ -1049,7 +1033,7 @@ function parseTelegramTabModelSelection(
     : undefined;
 }
 
-function buildTelegramTabWorkerExtensionArgs(
+function buildTelegramWorkspaceWorkerExtensionArgs(
   extensions: readonly string[],
 ): string[] {
   return extensions.flatMap((extensionPath) => ["--extension", extensionPath]);
@@ -1070,7 +1054,7 @@ function createWorkspaceRuntime(record: TelegramWorkspaceRecord): WorkspaceRunti
   };
 }
 
-function clearTelegramTabStreamState(stream: TelegramTabStreamState): void {
+function clearTelegramWorkspaceStreamState(stream: TelegramWorkspaceStreamState): void {
   if (stream.flushTimer) {
     clearTimeout(stream.flushTimer);
     stream.flushTimer = undefined;
@@ -1079,13 +1063,13 @@ function clearTelegramTabStreamState(stream: TelegramTabStreamState): void {
 
 function clearRuntimePostRunPreviewStreams(runtime: WorkspaceRuntime): void {
   for (const stream of runtime.thinkingStreams.values()) {
-    clearTelegramTabStreamState(stream);
+    clearTelegramWorkspaceStreamState(stream);
   }
   for (const stream of runtime.toolCallStreams.values()) {
-    clearTelegramTabStreamState(stream);
+    clearTelegramWorkspaceStreamState(stream);
   }
   if (runtime.toolCallStatusStream) {
-    clearTelegramTabStreamState(runtime.toolCallStatusStream);
+    clearTelegramWorkspaceStreamState(runtime.toolCallStatusStream);
     runtime.toolCallStatusStream = undefined;
   }
   runtime.thinkingStreams.clear();
@@ -1101,7 +1085,7 @@ function resetRuntimeTurnBuffers(runtime: WorkspaceRuntime): void {
   runtime.streamDeliveryBlockedUntil = undefined;
   runtime.lastStreamFlushAt = undefined;
   if (runtime.textStream) {
-    clearTelegramTabStreamState(runtime.textStream);
+    clearTelegramWorkspaceStreamState(runtime.textStream);
     runtime.textStream = undefined;
   }
   runtime.thinkingBuffers.clear();
@@ -1194,11 +1178,11 @@ function getAgentMessageContentBlock(
   return getAgentMessageContent(message)[index];
 }
 
-function pushTelegramTabPostRunMessage(
+function pushTelegramWorkspacePostRunMessage(
   runtime: WorkspaceRuntime,
-  kind: TelegramTabPostRunMessageKind,
+  kind: TelegramWorkspacePostRunMessageKind,
   markdown: string,
-  stream?: TelegramTabStreamState,
+  stream?: TelegramWorkspaceStreamState,
 ): void {
   const trimmed = markdown.trim();
   if (!trimmed) return;
@@ -1212,7 +1196,7 @@ function pushTelegramTabPostRunMessage(
   runtime.postRunMessages.push({ kind, markdown: trimmed, stream });
 }
 
-function removeTelegramTabPostRunMessage(
+function removeTelegramWorkspacePostRunMessage(
   runtime: WorkspaceRuntime,
   markdown: string,
 ): void {
@@ -1223,13 +1207,13 @@ function removeTelegramTabPostRunMessage(
   );
 }
 
-function isTelegramTabPostRunTextMessage(
-  message: TelegramTabPostRunMessage,
+function isTelegramWorkspacePostRunTextMessage(
+  message: TelegramWorkspacePostRunMessage,
 ): boolean {
   return message.kind === "text";
 }
 
-function formatTelegramTabToolCallPreview(block: unknown): string {
+function formatTelegramWorkspaceToolCallPreview(block: unknown): string {
   const raw = getRecord(block);
   if (!raw) return "";
   const partialJson = raw.partialJson;
@@ -1253,7 +1237,7 @@ function getRpcAssistantToolCallPreview(
   const index = getRpcAssistantEventContentIndex(assistantEvent);
   const block = assistantEvent.toolCall;
   const rawBlock = getRecord(block);
-  const markdown = formatTelegramTabToolCallPreview(block);
+  const markdown = formatTelegramWorkspaceToolCallPreview(block);
   return markdown
     ? {
         index,
@@ -1269,7 +1253,7 @@ function getRpcAssistantToolCallPreview(
 
 function getRpcToolExecutionPreview(
   event: RpcChildBackendEvent,
-): { key: string; markdown: string; status: TelegramTabToolStatusKind } | undefined {
+): { key: string; markdown: string; status: TelegramWorkspaceToolStatusKind } | undefined {
   if (event.type !== "tool_execution_start" && event.type !== "tool_execution_end") {
     return undefined;
   }
@@ -1298,8 +1282,8 @@ function getRpcToolExecutionPreview(
   };
 }
 
-function formatTelegramTabToolStatusKind(
-  status: TelegramTabToolStatusKind,
+function formatTelegramWorkspaceToolStatusKind(
+  status: TelegramWorkspaceToolStatusKind,
 ): string {
   if (status === "running") return "running";
   if (status === "done") return "done";
@@ -1307,11 +1291,11 @@ function formatTelegramTabToolStatusKind(
   return "queued";
 }
 
-function formatTelegramTabCompactToolStatusMarkdown(
-  entries: TelegramTabToolStatusEntry[],
+function formatTelegramWorkspaceCompactToolStatusMarkdown(
+  entries: TelegramWorkspaceToolStatusEntry[],
   totalCount: number,
 ): string {
-  const visibleEntries = entries.slice(-TELEGRAM_TAB_TOOL_STATUS_MAX_ENTRIES);
+  const visibleEntries = entries.slice(-TELEGRAM_WORKSPACE_TOOL_STATUS_MAX_ENTRIES);
   const lines = ["\u{1F527} Tools"];
   if (totalCount > visibleEntries.length) {
     lines.push(`Showing latest ${visibleEntries.length} of ${totalCount}.`);
@@ -1319,10 +1303,10 @@ function formatTelegramTabCompactToolStatusMarkdown(
   for (const entry of visibleEntries) {
     const blockLines = entry.markdown.trim().split("\n");
     const title = blockLines.shift()?.replace(/^\u{1F527}\s*/u, "") || "`tool`";
-    lines.push("", `${formatTelegramTabToolStatusKind(entry.status)} ${title}`);
+    lines.push("", `${formatTelegramWorkspaceToolStatusKind(entry.status)} ${title}`);
     lines.push(...blockLines);
   }
-  return truncateTelegramTabStreamMarkdown(lines.join("\n"));
+  return truncateTelegramWorkspaceStreamMarkdown(lines.join("\n"));
 }
 
 function getLatestAssistantMessage(messages: unknown): unknown | undefined {
@@ -1352,36 +1336,36 @@ function extractRpcAssistantError(event: RpcChildBackendEvent): string | undefin
   }
   return (
     assistant.errorMessage ||
-    "Telegram tab failed while processing the request."
+    "Telegram workspace failed while processing the request."
   );
 }
 
-function formatTelegramTabThinkingMarkdown(text: string): string {
+function formatTelegramWorkspaceThinkingMarkdown(text: string): string {
   return formatAgentThinkingBlock({ thinking: text });
 }
 
 function getSortedTelegramWorkspaceRecords(state: TelegramWorkspacesState): TelegramWorkspaceRecord[] {
-  return Object.values(state.tabs).sort((a, b) => a.createdAt - b.createdAt);
+  return Object.values(state.workspaces).sort((a, b) => a.createdAt - b.createdAt);
 }
 
-function formatTelegramTabDashboardAge(ms: number): string {
+function formatTelegramWorkspaceDashboardAge(ms: number): string {
   if (ms < 60_000) return `${Math.max(0, Math.floor(ms / 1000))}s`;
   if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
   if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h`;
   return `${Math.floor(ms / 86_400_000)}d`;
 }
 
-function formatTelegramTabDashboardName(record: TelegramWorkspaceRecord): string {
+function formatTelegramWorkspaceDashboardName(record: TelegramWorkspaceRecord): string {
   const name = record.sessionName?.trim();
-  return name ? truncateTelegramTabText(name.replace(/\s+/g, " "), 36) : "unset";
+  return name ? truncateTelegramWorkspaceText(name.replace(/\s+/g, " "), 36) : "unset";
 }
 
-function formatTelegramTabDashboardLastMessage(record: TelegramWorkspaceRecord): string {
+function formatTelegramWorkspaceDashboardLastMessage(record: TelegramWorkspaceRecord): string {
   const text = (record.lastMessageText ?? record.lastAssistantText)?.replace(/\s+/g, " ").trim();
-  return text ? truncateTelegramTabText(text, 96) : "No messages yet.";
+  return text ? truncateTelegramWorkspaceText(text, 96) : "No messages yet.";
 }
 
-function formatTelegramTabOrphanDetail(
+function formatTelegramWorkspaceOrphanDetail(
   record: TelegramWorkspaceRecord,
   proof?: TelegramTopicOrphanProof,
 ): string {
@@ -1413,10 +1397,10 @@ function formatTelegramTopicRepairUsage(): string {
   ].join("\n");
 }
 
-type TelegramTabDashboardWorkerState = "running" | "idle" | "not-started";
+type TelegramWorkspaceDashboardWorkerState = "running" | "idle" | "not-started";
 
-function formatTelegramTabDashboardWorkerLabel(
-  workerState: TelegramTabDashboardWorkerState | undefined,
+function formatTelegramWorkspaceDashboardWorkerLabel(
+  workerState: TelegramWorkspaceDashboardWorkerState | undefined,
 ): string | undefined {
   if (!workerState) return undefined;
   if (workerState === "running") return "worker running";
@@ -1424,76 +1408,76 @@ function formatTelegramTabDashboardWorkerLabel(
   return "worker not started";
 }
 
-function formatTelegramTabDashboardMeta(
+function formatTelegramWorkspaceDashboardMeta(
   record: TelegramWorkspaceRecord,
   nowMs: number,
-  workerState?: TelegramTabDashboardWorkerState,
+  workerState?: TelegramWorkspaceDashboardWorkerState,
 ): string {
-  const age = formatTelegramTabDashboardAge(nowMs - record.createdAt);
+  const age = formatTelegramWorkspaceDashboardAge(nowMs - record.createdAt);
   const messageCount = Math.max(0, record.messageCount ?? 0);
   return [
     formatTelegramWorkspaceRecordDisplayName(record),
     formatTelegramWorkspaceStatusLabel(record.status),
-    formatTelegramTabDashboardWorkerLabel(workerState),
+    formatTelegramWorkspaceDashboardWorkerLabel(workerState),
     age,
     `${messageCount}msg`,
-    formatTelegramTabDashboardName(record),
+    formatTelegramWorkspaceDashboardName(record),
   ].filter((part): part is string => Boolean(part)).join(" · ");
 }
 
-function getTelegramTabCloseableNames(state: TelegramWorkspacesState): string[] {
+function getTelegramWorkspaceCloseableNames(state: TelegramWorkspacesState): string[] {
   return getSortedTelegramWorkspaceRecords(state)
-    .filter((tab) => tab.name !== TELEGRAM_DEFAULT_WORKSPACE_NAME)
-    .map((tab) => tab.name);
+    .filter((workspace) => workspace.name !== TELEGRAM_DEFAULT_WORKSPACE_NAME)
+    .map((workspace) => workspace.name);
 }
 
-function normalizeTelegramTabCloseSelection(
+function normalizeTelegramWorkspaceCloseSelection(
   state: TelegramWorkspacesState,
-  selectedCloseTabs: readonly string[],
+  selectedCloseWorkspaces: readonly string[],
 ): string[] {
-  const closeable = new Set(getTelegramTabCloseableNames(state));
+  const closeable = new Set(getTelegramWorkspaceCloseableNames(state));
   const selected = new Set<string>();
-  for (const name of selectedCloseTabs) {
+  for (const name of selectedCloseWorkspaces) {
     if (closeable.has(name)) selected.add(name);
   }
   return [...selected];
 }
 
-function formatTelegramTabDashboardSummary(
+function formatTelegramWorkspaceDashboardSummary(
   state: TelegramWorkspacesState,
-  unreadByTab: Record<string, number>,
-  maxTabs: number,
+  unreadByWorkspace: Record<string, number>,
+  maxWorkspaces: number,
   nowMs: number,
-  mode: TelegramTabDashboardMode = "open",
-  selectedCloseTabs: readonly string[] = [],
-  visibleTabs?: readonly TelegramWorkspaceRecord[],
+  mode: TelegramWorkspaceDashboardMode = "open",
+  selectedCloseWorkspaces: readonly string[] = [],
+  visibleWorkspaces?: readonly TelegramWorkspaceRecord[],
   filterTrace: readonly TelegramWorkspaceFilterTraceItem[] = [],
   forumNativeMode = false,
   workerCapacity?: { live: number; max: number },
-  workerStateByTab: Readonly<Record<string, TelegramTabDashboardWorkerState>> = {},
+  workerStateByWorkspace: Readonly<Record<string, TelegramWorkspaceDashboardWorkerState>> = {},
 ): string {
-  const allTabs = getSortedTelegramWorkspaceRecords(state);
-  const tabs = mode === "open" && visibleTabs ? [...visibleTabs] : allTabs;
-  const active = state.tabs[state.activeTab];
-  const safeSelectedCloseTabs = normalizeTelegramTabCloseSelection(
+  const allWorkspaces = getSortedTelegramWorkspaceRecords(state);
+  const workspaces = mode === "open" && visibleWorkspaces ? [...visibleWorkspaces] : allWorkspaces;
+  const active = state.workspaces[state.activeWorkspace];
+  const safeSelectedCloseWorkspaces = normalizeTelegramWorkspaceCloseSelection(
     state,
-    selectedCloseTabs,
+    selectedCloseWorkspaces,
   );
-  const selectedSet = new Set(safeSelectedCloseTabs);
-  const unreadTabs = allTabs
-    .filter((tab) => (unreadByTab[tab.name] ?? 0) > 0)
-    .map((tab) =>
-      `${formatTelegramWorkspaceRecordDisplayName(tab)} ${unreadByTab[tab.name]}`
+  const selectedSet = new Set(safeSelectedCloseWorkspaces);
+  const unreadWorkspaces = allWorkspaces
+    .filter((workspace) => (unreadByWorkspace[workspace.name] ?? 0) > 0)
+    .map((workspace) =>
+      `${formatTelegramWorkspaceRecordDisplayName(workspace)} ${unreadByWorkspace[workspace.name]}`
     );
   const filterSummary = mode === "open"
     ? formatTelegramWorkspaceFilterSummary(filterTrace)
     : undefined;
-  const title = forumNativeMode ? "Forum topics" : "Tabs";
+  const title = forumNativeMode ? "Forum topics" : "Workspaces";
   const currentLabel = forumNativeMode ? "Current" : "Active";
   const lines = [
     filterSummary
-      ? `${title} ${tabs.length}/${allTabs.length} filtered (${allTabs.length}/${maxTabs} total)`
-      : `${title} ${allTabs.length}/${maxTabs}`,
+      ? `${title} ${workspaces.length}/${allWorkspaces.length} filtered (${allWorkspaces.length}/${maxWorkspaces} total)`
+      : `${title} ${allWorkspaces.length}/${maxWorkspaces}`,
   ];
   if (workerCapacity) {
     lines.push(`Workers: ${workerCapacity.live}/${workerCapacity.max}`);
@@ -1504,58 +1488,58 @@ function formatTelegramTabDashboardSummary(
           `${currentLabel}: ${formatTelegramWorkspaceRecordDisplayName(active)}`,
           formatTelegramWorkspaceStatusLabel(active.status),
           `${Math.max(0, active.messageCount ?? 0)}msg`,
-          formatTelegramTabDashboardName(active),
+          formatTelegramWorkspaceDashboardName(active),
         ].join(" · ")
-      : `${currentLabel}: ${formatTelegramWorkspaceDisplayName(state.activeTab)}`,
+      : `${currentLabel}: ${formatTelegramWorkspaceDisplayName(state.activeWorkspace)}`,
   );
   if (active?.currentThinkingLevel) {
     lines.push(`Thinking: ${active.currentThinkingLevel}`);
   }
   if (filterSummary) lines.push(filterSummary);
-  lines.push(`Unread: ${unreadTabs.length > 0 ? unreadTabs.join(", ") : "none"}`);
+  lines.push(`Unread: ${unreadWorkspaces.length > 0 ? unreadWorkspaces.join(", ") : "none"}`);
   if (mode === "close") {
-    const runningSelected = tabs
-      .filter((tab) =>
-        selectedSet.has(tab.name) &&
-        (tab.status === "running" || tab.status === "starting")
+    const runningSelected = workspaces
+      .filter((workspace) =>
+        selectedSet.has(workspace.name) &&
+        (workspace.status === "running" || workspace.status === "starting")
       )
-      .map((tab) => formatTelegramWorkspaceRecordDisplayName(tab));
-    lines.push("Close mode: select tabs to close.");
-    lines.push(`Selected: ${safeSelectedCloseTabs.length}`);
+      .map((workspace) => formatTelegramWorkspaceRecordDisplayName(workspace));
+    lines.push("Close mode: select workspaces to close.");
+    lines.push(`Selected: ${safeSelectedCloseWorkspaces.length}`);
     lines.push("General is protected. Session files are kept.");
     if (runningSelected.length > 0) {
       lines.push(`Running selected: ${runningSelected.join(", ")} will be stopped.`);
     }
   }
   lines.push("");
-  if (tabs.length === 0) {
-    lines.push("No tabs match filters.");
+  if (workspaces.length === 0) {
+    lines.push("No workspaces match filters.");
   }
-  for (const tab of tabs) {
-    const marker = tab.name === state.activeTab ? "●" : "○";
-    const unread = unreadByTab[tab.name] ? ` · unread ${unreadByTab[tab.name]}` : "";
+  for (const workspace of workspaces) {
+    const marker = workspace.name === state.activeWorkspace ? "●" : "○";
+    const unread = unreadByWorkspace[workspace.name] ? ` · unread ${unreadByWorkspace[workspace.name]}` : "";
     const closePrefix =
-      mode === "close" && tab.name !== TELEGRAM_DEFAULT_WORKSPACE_NAME
-        ? `${selectedSet.has(tab.name) ? "☑" : "☐"} `
+      mode === "close" && workspace.name !== TELEGRAM_DEFAULT_WORKSPACE_NAME
+        ? `${selectedSet.has(workspace.name) ? "☑" : "☐"} `
         : "";
     const protectedLabel =
-      mode === "close" && tab.name === TELEGRAM_DEFAULT_WORKSPACE_NAME
+      mode === "close" && workspace.name === TELEGRAM_DEFAULT_WORKSPACE_NAME
         ? " · protected"
         : "";
     lines.push(
-      `${closePrefix}${marker} ${formatTelegramTabDashboardMeta(tab, nowMs, workerStateByTab[tab.name])}${unread}${protectedLabel}`,
-      `  ↳ ${formatTelegramTabDashboardLastMessage(tab)}`,
+      `${closePrefix}${marker} ${formatTelegramWorkspaceDashboardMeta(workspace, nowMs, workerStateByWorkspace[workspace.name])}${unread}${protectedLabel}`,
+      `  ↳ ${formatTelegramWorkspaceDashboardLastMessage(workspace)}`,
     );
   }
   return lines.join("\n");
 }
 
-function formatTelegramTabButtonLabel(
+function formatTelegramWorkspaceButtonLabel(
   record: TelegramWorkspaceRecord,
-  activeTab: string,
+  activeWorkspace: string,
   unreadCount: number,
 ): string {
-  const active = record.name === activeTab ? "● " : "";
+  const active = record.name === activeWorkspace ? "● " : "";
   const unread = unreadCount > 0 ? ` ${unreadCount}` : "";
   const running = record.status === "running" || record.status === "starting"
     ? " ▶"
@@ -1565,11 +1549,11 @@ function formatTelegramTabButtonLabel(
   return `${active}${formatTelegramWorkspaceRecordDisplayName(record)}${unread}${running}`;
 }
 
-function encodeTelegramTabCallbackName(name: string): string {
+function encodeTelegramWorkspaceCallbackName(name: string): string {
   return encodeURIComponent(name).replace(/%20/g, "+");
 }
 
-function decodeTelegramTabCallbackName(name: string | undefined): string | undefined {
+function decodeTelegramWorkspaceCallbackName(name: string | undefined): string | undefined {
   if (!name) return undefined;
   try {
     return decodeURIComponent(name.replace(/\+/g, "%20"));
@@ -1578,194 +1562,193 @@ function decodeTelegramTabCallbackName(name: string | undefined): string | undef
   }
 }
 
-function buildTelegramTabDashboardReplyMarkup(
+function buildTelegramWorkspaceDashboardReplyMarkup(
   state: TelegramWorkspacesState,
-  unreadByTab: Record<string, number>,
-  mode: TelegramTabDashboardMode = "open",
-  selectedCloseTabs: readonly string[] = [],
-  visibleTabs?: readonly TelegramWorkspaceRecord[],
+  unreadByWorkspace: Record<string, number>,
+  mode: TelegramWorkspaceDashboardMode = "open",
+  selectedCloseWorkspaces: readonly string[] = [],
+  visibleWorkspaces?: readonly TelegramWorkspaceRecord[],
   forumNativeMode = false,
 ): TelegramInlineKeyboardMarkup {
   const rows: TelegramInlineKeyboardMarkup["inline_keyboard"] = [];
-  const tabs = mode === "open" && visibleTabs
-    ? [...visibleTabs]
+  const workspaces = mode === "open" && visibleWorkspaces
+    ? [...visibleWorkspaces]
     : getSortedTelegramWorkspaceRecords(state);
   if (mode === "close") {
-    const safeSelectedCloseTabs = normalizeTelegramTabCloseSelection(
+    const safeSelectedCloseWorkspaces = normalizeTelegramWorkspaceCloseSelection(
       state,
-      selectedCloseTabs,
+      selectedCloseWorkspaces,
     );
-    const selectedSet = new Set(safeSelectedCloseTabs);
-    if (safeSelectedCloseTabs.length > 0) {
+    const selectedSet = new Set(safeSelectedCloseWorkspaces);
+    if (safeSelectedCloseWorkspaces.length > 0) {
       rows.push([
         {
-          text: `Close ${safeSelectedCloseTabs.length} selected`,
-          callback_data: "tab:close-selected",
+          text: `Close ${safeSelectedCloseWorkspaces.length} selected`,
+          callback_data: "workspace:close-selected",
         },
       ]);
     }
-    const closeableNames = getTelegramTabCloseableNames(state);
+    const closeableNames = getTelegramWorkspaceCloseableNames(state);
     if (closeableNames.length > 0) {
       const controls = [
-        { text: "Select all", callback_data: "tab:close-select-all" },
+        { text: "Select all", callback_data: "workspace:close-select-all" },
       ];
-      if (safeSelectedCloseTabs.length > 0) {
-        controls.push({ text: "Clear selection", callback_data: "tab:close-clear" });
+      if (safeSelectedCloseWorkspaces.length > 0) {
+        controls.push({ text: "Clear selection", callback_data: "workspace:close-clear" });
       }
       rows.push(controls);
     }
-    for (let index = 0; index < tabs.length; index += 2) {
-      const row = tabs.slice(index, index + 2).map((tab) => {
-        if (tab.name === TELEGRAM_DEFAULT_WORKSPACE_NAME) {
+    for (let index = 0; index < workspaces.length; index += 2) {
+      const row = workspaces.slice(index, index + 2).map((workspace) => {
+        if (workspace.name === TELEGRAM_DEFAULT_WORKSPACE_NAME) {
           return {
-            text: `${formatTelegramWorkspaceRecordDisplayName(tab)} protected`,
-            callback_data: "tab:noop",
+            text: `${formatTelegramWorkspaceRecordDisplayName(workspace)} protected`,
+            callback_data: "workspace:noop",
           };
         }
-        const selected = selectedSet.has(tab.name);
+        const selected = selectedSet.has(workspace.name);
         return {
-          text: `${selected ? "☑" : "☐"} ${formatTelegramWorkspaceRecordDisplayName(tab)}`,
-          callback_data: `tab:close-toggle:${encodeTelegramTabCallbackName(tab.name)}`,
+          text: `${selected ? "☑" : "☐"} ${formatTelegramWorkspaceRecordDisplayName(workspace)}`,
+          callback_data: `workspace:close-toggle:${encodeTelegramWorkspaceCallbackName(workspace.name)}`,
         };
       });
       rows.push(row);
     }
-    rows.push([{ text: "Done", callback_data: "tab:close-done" }]);
+    rows.push([{ text: "Done", callback_data: "workspace:close-done" }]);
     return { inline_keyboard: rows };
   }
-  for (let index = 0; index < tabs.length; index += 2) {
-    const row = tabs.slice(index, index + 2).map((tab) => ({
-      text: formatTelegramTabButtonLabel(
-        tab,
-        state.activeTab,
-        unreadByTab[tab.name] ?? 0,
+  for (let index = 0; index < workspaces.length; index += 2) {
+    const row = workspaces.slice(index, index + 2).map((workspace) => ({
+      text: formatTelegramWorkspaceButtonLabel(
+        workspace,
+        state.activeWorkspace,
+        unreadByWorkspace[workspace.name] ?? 0,
       ),
       callback_data:
-        forumNativeMode || tab.name === state.activeTab
-          ? "tab:noop"
-          : `tab:switch:${encodeTelegramTabCallbackName(tab.name)}`,
+        forumNativeMode || workspace.name === state.activeWorkspace
+          ? "workspace:noop"
+          : `workspace:switch:${encodeTelegramWorkspaceCallbackName(workspace.name)}`,
     }));
     rows.push(row);
   }
-  if (visibleTabs) {
-    rows.push([{ text: "All tabs", callback_data: "tab:refresh" }]);
+  if (visibleWorkspaces) {
+    rows.push([{ text: "All workspaces", callback_data: "workspace:refresh" }]);
   }
-  if (!forumNativeMode && getTelegramTabCloseableNames(state).length > 0) {
-    rows.push([{ text: "Manage 🗑", callback_data: "tab:close-manage" }]);
+  if (!forumNativeMode && getTelegramWorkspaceCloseableNames(state).length > 0) {
+    rows.push([{ text: "Manage 🗑", callback_data: "workspace:close-manage" }]);
   }
   if (!forumNativeMode) {
     rows.push([
       {
         text: "Close",
-        callback_data: `tab:close:${encodeTelegramTabCallbackName(state.activeTab)}`,
+        callback_data: `workspace:close:${encodeTelegramWorkspaceCallbackName(state.activeWorkspace)}`,
       },
     ]);
   }
   return { inline_keyboard: rows };
 }
 
-function buildTelegramTabMultiCloseConfirmationText(
+function buildTelegramWorkspaceMultiCloseConfirmationText(
   state: TelegramWorkspacesState,
-  selectedCloseTabs: readonly string[],
+  selectedCloseWorkspaces: readonly string[],
 ): string {
-  const selected = normalizeTelegramTabCloseSelection(state, selectedCloseTabs);
-  const tabs = selected
-    .map((name) => state.tabs[name])
-    .filter((tab): tab is TelegramWorkspaceRecord => tab !== undefined);
-  const shown = tabs.slice(0, 5).map((tab) =>
-    `- ${formatTelegramWorkspaceRecordDisplayName(tab)} · ${formatTelegramWorkspaceStatusLabel(tab.status)}`
+  const selected = normalizeTelegramWorkspaceCloseSelection(state, selectedCloseWorkspaces);
+  const workspaces = selected
+    .map((name) => state.workspaces[name])
+    .filter((workspace): workspace is TelegramWorkspaceRecord => workspace !== undefined);
+  const shown = workspaces.slice(0, 5).map((workspace) =>
+    `- ${formatTelegramWorkspaceRecordDisplayName(workspace)} · ${formatTelegramWorkspaceStatusLabel(workspace.status)}`
   );
-  const more = tabs.length > shown.length
-    ? [`- ...and ${tabs.length - shown.length} more`]
+  const more = workspaces.length > shown.length
+    ? [`- ...and ${workspaces.length - shown.length} more`]
     : [];
-  const hasRunning = tabs.some((tab) =>
-    tab.status === "running" || tab.status === "starting"
+  const hasRunning = workspaces.some((workspace) =>
+    workspace.status === "running" || workspace.status === "starting"
   );
   return [
-    `Close ${tabs.length} selected tab${tabs.length === 1 ? "" : "s"}?`,
+    `Close ${workspaces.length} selected workspace${workspaces.length === 1 ? "" : "s"}?`,
     "",
     ...shown,
     ...more,
     "",
     "Session files are kept.",
-    ...(hasRunning ? ["Running tabs will be stopped."] : []),
+    ...(hasRunning ? ["Running workspaces will be stopped."] : []),
   ].join("\n");
 }
 
-function buildTelegramTabMultiCloseConfirmationReplyMarkup(): TelegramInlineKeyboardMarkup {
+function buildTelegramWorkspaceMultiCloseConfirmationReplyMarkup(): TelegramInlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [
-        { text: "No", callback_data: "tab:close-cancel" },
-        { text: "Close selected", callback_data: "tab:close-confirm" },
+        { text: "No", callback_data: "workspace:close-cancel" },
+        { text: "Close selected", callback_data: "workspace:close-confirm" },
       ],
     ],
   };
 }
 
-function buildTelegramTabConfirmReplyMarkup(
+function buildTelegramWorkspaceConfirmReplyMarkup(
   action: "abort" | "close",
-  tabName: string,
+  workspaceName: string,
 ): TelegramInlineKeyboardMarkup {
-  const encoded = encodeTelegramTabCallbackName(tabName);
+  const encoded = encodeTelegramWorkspaceCallbackName(workspaceName);
   return {
     inline_keyboard: [
       [
-        { text: action === "abort" ? "Confirm Abort" : "Confirm Close", callback_data: `tab:${action}:do:${encoded}` },
+        { text: action === "abort" ? "Confirm Abort" : "Confirm Close", callback_data: `workspace:${action}:do:${encoded}` },
       ],
-      [{ text: "Cancel", callback_data: "tab:refresh" }],
+      [{ text: "Cancel", callback_data: "workspace:refresh" }],
     ],
   };
 }
 
-function truncateTelegramTabStreamMarkdown(markdown: string): string {
+function truncateTelegramWorkspaceStreamMarkdown(markdown: string): string {
   const trimmed = markdown.trim();
-  if (trimmed.length <= TELEGRAM_TAB_STREAM_MARKDOWN_LIMIT) return trimmed;
-  return trimmed.slice(trimmed.length - TELEGRAM_TAB_STREAM_MARKDOWN_LIMIT);
+  if (trimmed.length <= TELEGRAM_WORKSPACE_STREAM_MARKDOWN_LIMIT) return trimmed;
+  return trimmed.slice(trimmed.length - TELEGRAM_WORKSPACE_STREAM_MARKDOWN_LIMIT);
 }
 
-export function createTelegramTabManager<TContext>(
-  deps: TelegramTabManagerDeps<TContext>,
-): TelegramTabManager<TContext> {
+export function createTelegramWorkspaceManager<TContext>(
+  deps: TelegramWorkspaceManagerDeps<TContext>,
+): TelegramWorkspaceManager<TContext> {
   const agentDir = deps.agentDir ?? getTelegramAgentDir();
   const statePath = deps.statePath ?? getTelegramWorkspacesStatePath(agentDir);
-  const legacyStatePath = deps.statePath ? undefined : getLegacyTelegramTabsStatePath(agentDir);
   const configuredSessionDir = deps.sessionDir;
   const workspaceRuntimes = new Map<string, WorkspaceRuntime>();
-  const dashboardStates = new Map<number, TelegramTabDashboardState>();
+  const dashboardStates = new Map<number, TelegramWorkspaceDashboardState>();
   let state: TelegramWorkspacesState | undefined;
   let persistChain: Promise<void> = Promise.resolve();
 
   const now = (): number => deps.now?.() ?? Date.now();
   const isEnabled = (): boolean => deps.getConfig().enabled;
   const streamEditThrottleMs =
-    deps.streamEditThrottleMs ?? TELEGRAM_TAB_STREAM_EDIT_THROTTLE_MS;
+    deps.streamEditThrottleMs ?? TELEGRAM_WORKSPACE_STREAM_EDIT_THROTTLE_MS;
   const streamFailureBaseRetryMs =
-    deps.streamFailureBaseRetryMs ?? TELEGRAM_TAB_STREAM_FAILURE_BASE_RETRY_MS;
+    deps.streamFailureBaseRetryMs ?? TELEGRAM_WORKSPACE_STREAM_FAILURE_BASE_RETRY_MS;
   const streamFailureMaxRetryMs =
-    deps.streamFailureMaxRetryMs ?? TELEGRAM_TAB_STREAM_FAILURE_MAX_RETRY_MS;
+    deps.streamFailureMaxRetryMs ?? TELEGRAM_WORKSPACE_STREAM_FAILURE_MAX_RETRY_MS;
   const typingIntervalMs =
-    deps.typingIntervalMs ?? TELEGRAM_TAB_TYPING_ACTION_INTERVAL_MS;
-  const thinkingStreamPreviewsEnabled = getTelegramTabBooleanEnv(
+    deps.typingIntervalMs ?? TELEGRAM_WORKSPACE_TYPING_ACTION_INTERVAL_MS;
+  const thinkingStreamPreviewsEnabled = getTelegramWorkspaceBooleanEnv(
     "PI_TELEGRAM_THINKING_PREVIEWS",
     true,
   );
-  const toolCallPreviewMode = getTelegramTabToolPreviewMode();
+  const toolCallPreviewMode = getTelegramWorkspaceToolPreviewMode();
   const toolCallCompactPreviewsEnabled = toolCallPreviewMode === "compact";
   const toolCallStreamPreviewsEnabled = toolCallPreviewMode === "stream";
   const pruneDashboardStates = (): void => {
-    const cutoff = now() - TELEGRAM_TAB_DASHBOARD_STATE_TTL_MS;
+    const cutoff = now() - TELEGRAM_WORKSPACE_DASHBOARD_STATE_TTL_MS;
     for (const [messageId, dashboardState] of dashboardStates.entries()) {
       if (dashboardState.updatedAt < cutoff) dashboardStates.delete(messageId);
     }
   };
   const getDashboardState = (
     messageId: number,
-  ): TelegramTabDashboardState | undefined => {
+  ): TelegramWorkspaceDashboardState | undefined => {
     pruneDashboardStates();
     return dashboardStates.get(messageId);
   };
-  const setDashboardState = (dashboardState: TelegramTabDashboardState): void => {
+  const setDashboardState = (dashboardState: TelegramWorkspaceDashboardState): void => {
     pruneDashboardStates();
     dashboardStates.set(dashboardState.messageId, dashboardState);
   };
@@ -1777,8 +1760,8 @@ export function createTelegramTabManager<TContext>(
     );
     return persistChain;
   };
-  const hydrateWorkspaceRuntimes = (tabState: TelegramWorkspacesState): void => {
-    for (const record of Object.values(tabState.tabs)) {
+  const hydrateWorkspaceRuntimes = (workspaceState: TelegramWorkspacesState): void => {
+    for (const record of Object.values(workspaceState.workspaces)) {
       const topicSessionName = getTelegramTopicSessionName(record);
       if (topicSessionName && !record.sessionName) {
         record.sessionName = topicSessionName;
@@ -1790,7 +1773,7 @@ export function createTelegramTabManager<TContext>(
   };
   const ensureState = async (cwd: string): Promise<TelegramWorkspacesState> => {
     if (!state) {
-      state = await readTelegramWorkspacesState(statePath, cwd, now(), legacyStatePath);
+      state = await readTelegramWorkspacesState(statePath, cwd, now());
       hydrateWorkspaceRuntimes(state);
       await persist();
     }
@@ -1798,17 +1781,17 @@ export function createTelegramTabManager<TContext>(
   };
   const ensureStateSync = (cwd: string): TelegramWorkspacesState => {
     if (!state) {
-      state = readTelegramWorkspacesStateSync(statePath, cwd, now(), legacyStatePath);
+      state = readTelegramWorkspacesStateSync(statePath, cwd, now());
       hydrateWorkspaceRuntimes(state);
       void persist();
     }
     return state;
   };
   const getWorkspaceRuntime = (
-    tabState: TelegramWorkspacesState,
+    workspaceState: TelegramWorkspacesState,
     name: string,
   ): WorkspaceRuntime | undefined => {
-    const record = tabState.tabs[name];
+    const record = workspaceState.workspaces[name];
     if (!record) return undefined;
     let runtime = workspaceRuntimes.get(name);
     if (!runtime) {
@@ -1828,15 +1811,15 @@ export function createTelegramTabManager<TContext>(
   const isTopicDeliveryActive = (runtime: WorkspaceRuntime): boolean =>
     runtime.activeTopicDelivery === true;
   const isRuntimeDeliveryActive = (
-    tabState: TelegramWorkspacesState,
-    tabName: string,
+    workspaceState: TelegramWorkspacesState,
+    workspaceName: string,
     runtime: WorkspaceRuntime,
-  ): boolean => isTopicDeliveryActive(runtime) || tabState.activeTab === tabName;
+  ): boolean => isTopicDeliveryActive(runtime) || workspaceState.activeWorkspace === workspaceName;
   const isTelegramForumChatId = (chatId: number | undefined): boolean =>
     typeof chatId === "number" && chatId < 0;
   const getForumNativeRuntimeScope = (
     runtime: WorkspaceRuntime,
-    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+    turn?: Pick<TelegramWorkspacePromptTurn, "chatId" | "messageThreadId">,
   ): "topic" | "workspace" | undefined => {
     if (!isForumNativeMode()) return undefined;
     const ambientThread = getAmbientTelegramThreadContext();
@@ -1855,22 +1838,22 @@ export function createTelegramTabManager<TContext>(
   };
   const formatRuntimeUserScopeTarget = (
     runtime: WorkspaceRuntime,
-    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+    turn?: Pick<TelegramWorkspacePromptTurn, "chatId" | "messageThreadId">,
   ): string => {
     const forumNativeScope = getForumNativeRuntimeScope(runtime, turn);
     if (forumNativeScope) return `current ${forumNativeScope}`;
-    return `tab ${formatTelegramWorkspaceRecordDisplayName(runtime.record)}`;
+    return `workspace ${formatTelegramWorkspaceRecordDisplayName(runtime.record)}`;
   };
   const formatRuntimeUserScopeTitle = (
     runtime: WorkspaceRuntime,
-    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+    turn?: Pick<TelegramWorkspacePromptTurn, "chatId" | "messageThreadId">,
   ): string => {
     const target = formatRuntimeUserScopeTarget(runtime, turn);
     return `${target.charAt(0).toUpperCase()}${target.slice(1)}`;
   };
   const formatRuntimeStartedMessage = (
     runtime: WorkspaceRuntime,
-    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+    turn?: Pick<TelegramWorkspacePromptTurn, "chatId" | "messageThreadId">,
   ): string => {
     const forumNativeScope = getForumNativeRuntimeScope(runtime, turn);
     if (forumNativeScope) {
@@ -1881,66 +1864,66 @@ export function createTelegramTabManager<TContext>(
   const formatRuntimeFailureMessage = (
     runtime: WorkspaceRuntime,
     errorMessage: string,
-    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+    turn?: Pick<TelegramWorkspacePromptTurn, "chatId" | "messageThreadId">,
   ): string => `${formatRuntimeUserScopeTitle(runtime, turn)} failed: ${errorMessage}`;
-  const formatRuntimeFinishedNotice = (runtime: WorkspaceRuntime, tabName: string): string => {
+  const formatRuntimeFinishedNotice = (runtime: WorkspaceRuntime, workspaceName: string): string => {
     const forumNativeScope = getForumNativeRuntimeScope(runtime);
     if (forumNativeScope) {
       const title = forumNativeScope.charAt(0).toUpperCase() + forumNativeScope.slice(1);
       return `${title} finished. Open this ${forumNativeScope} to view the latest reply.`;
     }
-    const displayName = formatTelegramWorkspaceDisplayName(tabName);
-    return `Tab ${displayName} finished. Use /tab ${displayName} to view latest reply.`;
+    const displayName = formatTelegramWorkspaceDisplayName(workspaceName);
+    return `Workspace ${displayName} finished. Use /workspace ${displayName} to view latest reply.`;
   };
   const formatRuntimeBusyMessage = (
     runtime: WorkspaceRuntime,
-    turn?: Pick<TelegramTabPromptTurn, "chatId" | "messageThreadId">,
+    turn?: Pick<TelegramWorkspacePromptTurn, "chatId" | "messageThreadId">,
   ): string => {
     const forumNativeScope = getForumNativeRuntimeScope(runtime, turn);
     if (forumNativeScope) {
       return `${formatRuntimeUserScopeTitle(runtime, turn)} is busy. Wait for it to go idle or send /stop first.`;
     }
-    return `Tab ${runtime.record.name} is busy. Wait for it to go idle or send /stop first.`;
+    return `Workspace ${runtime.record.name} is busy. Wait for it to go idle or send /stop first.`;
   };
   const formatRuntimeStopFirstMessage = (runtime: WorkspaceRuntime): string => {
     const forumNativeScope = getForumNativeRuntimeScope(runtime);
     if (forumNativeScope) {
       return `${formatRuntimeUserScopeTitle(runtime)} is busy. Send /stop first.`;
     }
-    return `Tab ${runtime.record.name} is busy. Send /stop first.`;
+    return `Workspace ${runtime.record.name} is busy. Send /stop first.`;
   };
   const formatRuntimeAbortFirstMessage = (runtime: WorkspaceRuntime): string => {
     const forumNativeScope = getForumNativeRuntimeScope(runtime);
     if (forumNativeScope) {
       return `${formatRuntimeUserScopeTitle(runtime)} is busy. Send /abort first.`;
     }
-    return `Tab ${runtime.record.name} is busy. Send /tab abort ${runtime.record.name} first.`;
+    return `Workspace ${runtime.record.name} is busy. Send /workspace abort ${runtime.record.name} first.`;
   };
-  const formatScopedTabBusyMessage = (tabName: string): string => {
+  const formatScopedWorkspaceBusyMessage = (workspaceName: string): string => {
     if (isForumNativeMode()) {
       return "Current workspace is busy. Send /abort first.";
     }
-    return `Tab ${tabName} is busy. Send /tab abort ${tabName} first.`;
+    return `Workspace ${workspaceName} is busy. Send /workspace abort ${workspaceName} first.`;
   };
   const formatRuntimeTreeBranchUnavailableMessage = (): string =>
     isForumNativeMode()
       ? "Current workspace tree branching is not configured."
-      : "Active tab tree branching is not configured.";
+      : "Active workspace tree branching is not configured.";
   const formatRuntimeSessionBindFailureMessage = (
-    tabName: string,
+    workspaceName: string,
     sessionPath: string,
   ): string =>
     isForumNativeMode()
       ? `Current workspace did not bind to resumed session ${sessionPath}.`
-      : `Tab ${tabName} did not bind to resumed session ${sessionPath}.`;
+      : `Workspace ${workspaceName} did not bind to resumed session ${sessionPath}.`;
   const hasLiveWorker = (runtime: WorkspaceRuntime | undefined): boolean =>
     Boolean(runtime?.backend);
   const getLiveWorkerCount = (): number =>
     [...workspaceRuntimes.values()].filter((runtime) => hasLiveWorker(runtime)).length;
   const getConfiguredMaxWorkers = (): number =>
     isForumNativeMode()
-      ? deps.getConfig().maxTabs
-      : deps.getConfig().maxWorkers ?? deps.getConfig().maxTabs;
+      ? deps.getConfig().maxWorkspaces
+      : deps.getConfig().maxWorkers ?? deps.getConfig().maxWorkspaces;
   const formatWorkerCapacityReachedMessage = (maxWorkers: number): string =>
     isForumNativeMode()
       ? `Worker capacity reached (${maxWorkers}). Close another workspace before starting this one.`
@@ -1968,12 +1951,12 @@ export function createTelegramTabManager<TContext>(
       if (!candidate) return false;
       await refreshRuntimeState(candidate);
       if (!hasLiveWorker(candidate)) continue;
-      if (!canSwitchTelegramTabModel(candidate.record)) {
+      if (!canSwitchTelegramWorkspaceModel(candidate.record)) {
         skipped.add(candidate);
         continue;
       }
-      deps.debugLogger?.log("telegram.tab.worker.capacity.stop", {
-        tab: candidate.record.name,
+      deps.debugLogger?.log("telegram.workspace.worker.capacity.stop", {
+        workspace: candidate.record.name,
         reason: "worker_capacity",
         maxWorkers,
       });
@@ -1991,7 +1974,7 @@ export function createTelegramTabManager<TContext>(
     }
     throw new Error(formatWorkerCapacityReachedMessage(maxWorkers));
   };
-  const runInTabThreadContext = <T>(runtime: WorkspaceRuntime, fn: () => T): T => {
+  const runInWorkspaceThreadContext = <T>(runtime: WorkspaceRuntime, fn: () => T): T => {
     if (runtime.activeChatId === undefined) return fn();
     return runWithTelegramThreadContext(
       {
@@ -2002,14 +1985,14 @@ export function createTelegramTabManager<TContext>(
     );
   };
   const sendTurnTextReply = (
-    turn: TelegramTabPromptTurn,
+    turn: TelegramWorkspacePromptTurn,
     text: string,
   ): Promise<number | undefined> =>
     runWithTelegramThreadContext(
       { chatId: turn.chatId, messageThreadId: turn.messageThreadId },
       () => deps.sendTextReply(turn.chatId, turn.replyToMessageId, text),
     );
-  const sendTabReply = (
+  const sendWorkspaceReply = (
     chatId: number | undefined,
     replyToMessageId: number | undefined,
     text: string,
@@ -2019,7 +2002,7 @@ export function createTelegramTabManager<TContext>(
     }
     return deps.sendTextReply(chatId, replyToMessageId, text);
   };
-  const sendTabMarkdownReply = (
+  const sendWorkspaceMarkdownReply = (
     chatId: number | undefined,
     replyToMessageId: number | undefined,
     markdown: string,
@@ -2029,7 +2012,7 @@ export function createTelegramTabManager<TContext>(
       ? deps.sendMarkdownReply(chatId, replyToMessageId, markdown)
       : deps.sendTextReply(chatId, replyToMessageId, markdown);
   };
-  const sendTabStreamMarkdownReply = (
+  const sendWorkspaceStreamMarkdownReply = (
     chatId: number | undefined,
     replyToMessageId: number | undefined,
     markdown: string,
@@ -2037,9 +2020,9 @@ export function createTelegramTabManager<TContext>(
     if (chatId === undefined) return Promise.resolve(undefined);
     return deps.sendStreamMarkdownReply
       ? deps.sendStreamMarkdownReply(chatId, replyToMessageId, markdown)
-      : sendTabMarkdownReply(chatId, replyToMessageId, markdown);
+      : sendWorkspaceMarkdownReply(chatId, replyToMessageId, markdown);
   };
-  const editTabStreamMarkdownMessage = (
+  const editWorkspaceStreamMarkdownMessage = (
     chatId: number | undefined,
     messageId: number | undefined,
     markdown: string,
@@ -2053,7 +2036,7 @@ export function createTelegramTabManager<TContext>(
     }
     return deps.editStreamMarkdownMessage(chatId, messageId, markdown);
   };
-  const stopTabTyping = (runtime: WorkspaceRuntime): void => {
+  const stopWorkspaceTyping = (runtime: WorkspaceRuntime): void => {
     if (runtime.typingInterval) {
       clearInterval(runtime.typingInterval);
       runtime.typingInterval = undefined;
@@ -2061,15 +2044,15 @@ export function createTelegramTabManager<TContext>(
     runtime.typingChatId = undefined;
     runtime.typingMessageThreadId = undefined;
   };
-  const stopOtherTabTyping = (tabName: string): void => {
+  const stopOtherWorkspaceTyping = (workspaceName: string): void => {
     for (const [name, runtime] of workspaceRuntimes.entries()) {
-      if (name !== tabName) stopTabTyping(runtime);
+      if (name !== workspaceName) stopWorkspaceTyping(runtime);
     }
   };
-  const startTabTyping = (tabName: string, runtime: WorkspaceRuntime): void => {
+  const startWorkspaceTyping = (workspaceName: string, runtime: WorkspaceRuntime): void => {
     const chatId = runtime.activeChatId;
     if (!deps.sendTypingAction || chatId === undefined || chatId === 0) return;
-    if (!isTopicDeliveryActive(runtime)) stopOtherTabTyping(tabName);
+    if (!isTopicDeliveryActive(runtime)) stopOtherWorkspaceTyping(workspaceName);
     if (
       runtime.typingInterval &&
       runtime.typingChatId === chatId &&
@@ -2077,13 +2060,13 @@ export function createTelegramTabManager<TContext>(
     ) {
       return;
     }
-    stopTabTyping(runtime);
+    stopWorkspaceTyping(runtime);
     const sendTyping = (): void => {
       void Promise.resolve(
-        runInTabThreadContext(runtime, () => deps.sendTypingAction!(chatId)),
+        runInWorkspaceThreadContext(runtime, () => deps.sendTypingAction!(chatId)),
       ).catch((error) => {
         deps.recordRuntimeEvent?.("typing", error, {
-          tab: runtime.record.name,
+          workspace: runtime.record.name,
           chatId,
           messageThreadId: runtime.activeMessageThreadId,
         });
@@ -2094,15 +2077,15 @@ export function createTelegramTabManager<TContext>(
     sendTyping();
     runtime.typingInterval = setInterval(sendTyping, typingIntervalMs);
   };
-  const createStreamState = (): TelegramTabStreamState => ({
+  const createStreamState = (): TelegramWorkspaceStreamState => ({
     markdown: "",
     sentMarkdown: "",
     lastFlushAt: 0,
   });
   const getStreamState = (
-    streams: Map<number, TelegramTabStreamState>,
+    streams: Map<number, TelegramWorkspaceStreamState>,
     index: number,
-  ): TelegramTabStreamState => {
+  ): TelegramWorkspaceStreamState => {
     let stream = streams.get(index);
     if (!stream) {
       stream = createStreamState();
@@ -2110,13 +2093,13 @@ export function createTelegramTabManager<TContext>(
     }
     return stream;
   };
-  const getTextStreamState = (runtime: WorkspaceRuntime): TelegramTabStreamState => {
+  const getTextStreamState = (runtime: WorkspaceRuntime): TelegramWorkspaceStreamState => {
     runtime.textStream ??= createStreamState();
     return runtime.textStream;
   };
   const getToolCallStatusStreamState = (
     runtime: WorkspaceRuntime,
-  ): TelegramTabStreamState => {
+  ): TelegramWorkspaceStreamState => {
     runtime.toolCallStatusStream ??= createStreamState();
     return runtime.toolCallStatusStream;
   };
@@ -2126,14 +2109,14 @@ export function createTelegramTabManager<TContext>(
       streamFailureBaseRetryMs *
         2 ** Math.min(Math.max(0, failureCount - 1), 6),
     );
-  const isTabStreamStale = (
+  const isWorkspaceStreamStale = (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState,
+    stream: TelegramWorkspaceStreamState,
   ): boolean =>
     stream.turnId !== undefined && runtime.activeTurnId !== stream.turnId;
-  const getTabStreamDeliveryTarget = (
+  const getWorkspaceStreamDeliveryTarget = (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState,
+    stream: TelegramWorkspaceStreamState,
   ): {
     chatId?: number;
     messageThreadId?: number;
@@ -2152,9 +2135,9 @@ export function createTelegramTabManager<TContext>(
       replyToMessageId: runtime.activeReplyToMessageId,
     };
   };
-  const bindTabStreamDeliveryTarget = (
+  const bindWorkspaceStreamDeliveryTarget = (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState,
+    stream: TelegramWorkspaceStreamState,
   ): void => {
     if (stream.turnId !== undefined) return;
     stream.turnId = runtime.activeTurnId;
@@ -2162,11 +2145,11 @@ export function createTelegramTabManager<TContext>(
     stream.messageThreadId = runtime.activeMessageThreadId;
     stream.replyToMessageId = runtime.activeReplyToMessageId;
   };
-  const schedulePendingTabStreamRetry = (
+  const schedulePendingWorkspaceStreamRetry = (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState,
+    stream: TelegramWorkspaceStreamState,
   ): void => {
-    if (isTabStreamStale(runtime, stream)) return;
+    if (isWorkspaceStreamStale(runtime, stream)) return;
     const nextFlushAt = Math.max(
       stream.nextFlushAt ?? 0,
       runtime.streamDeliveryBlockedUntil ?? 0,
@@ -2176,14 +2159,14 @@ export function createTelegramTabManager<TContext>(
     const wait = Math.max(0, nextFlushAt - now());
     stream.flushTimer = setTimeout(() => {
       stream.flushTimer = undefined;
-      void flushTabStreamMarkdown(runtime, stream);
+      void flushWorkspaceStreamMarkdown(runtime, stream);
     }, wait);
   };
-  const blockTabStreamDelivery = (
+  const blockWorkspaceStreamDelivery = (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState,
+    stream: TelegramWorkspaceStreamState,
   ): void => {
-    if (isTabStreamStale(runtime, stream)) return;
+    if (isWorkspaceStreamStale(runtime, stream)) return;
     const failedFlushCount =
       Math.max(
         stream.failedFlushCount ?? 0,
@@ -2196,19 +2179,19 @@ export function createTelegramTabManager<TContext>(
     runtime.streamDeliveryFailureCount = failedFlushCount;
     runtime.streamDeliveryBlockedUntil = retryAt;
   };
-  const unblockTabStreamDelivery = (
+  const unblockWorkspaceStreamDelivery = (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState,
+    stream: TelegramWorkspaceStreamState,
   ): void => {
     stream.failedFlushCount = undefined;
     stream.nextFlushAt = undefined;
-    if (isTabStreamStale(runtime, stream)) return;
+    if (isWorkspaceStreamStale(runtime, stream)) return;
     runtime.streamDeliveryFailureCount = undefined;
     runtime.streamDeliveryBlockedUntil = undefined;
   };
-  const getTabStreamDeliveryBlockedUntil = (
+  const getWorkspaceStreamDeliveryBlockedUntil = (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState,
+    stream: TelegramWorkspaceStreamState,
   ): number | undefined => {
     const nextFlushAt = Math.max(
       stream.nextFlushAt ?? 0,
@@ -2216,9 +2199,9 @@ export function createTelegramTabManager<TContext>(
     );
     return nextFlushAt > 0 ? nextFlushAt : undefined;
   };
-  const scheduleAllPendingTabStreamRetries = (
+  const scheduleAllPendingWorkspaceStreamRetries = (
     runtime: WorkspaceRuntime,
-    except?: TelegramTabStreamState,
+    except?: TelegramWorkspaceStreamState,
   ): void => {
     const streams = [
       runtime.textStream,
@@ -2229,41 +2212,41 @@ export function createTelegramTabManager<TContext>(
     for (const stream of streams) {
       if (!stream || stream === except) continue;
       if (stream.markdown === stream.sentMarkdown) continue;
-      schedulePendingTabStreamRetry(runtime, stream);
+      schedulePendingWorkspaceStreamRetry(runtime, stream);
     }
   };
-  const flushTabStreamMarkdown = async (
+  const flushWorkspaceStreamMarkdown = async (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState,
+    stream: TelegramWorkspaceStreamState,
     options: {
       force?: boolean;
       allowStaleDelivery?: boolean;
       retryOnFailure?: boolean;
     } = {},
-  ): Promise<TelegramTabStreamDeliveryResult> => {
+  ): Promise<TelegramWorkspaceStreamDeliveryResult> => {
     if (options.retryOnFailure === false) {
       stream.suppressRetryOnFailure = true;
     }
     const shouldRetryOnFailure = (): boolean =>
       options.retryOnFailure !== false && stream.suppressRetryOnFailure !== true;
-    const makeSkipped = (reason: string): TelegramTabStreamDeliveryResult => ({
+    const makeSkipped = (reason: string): TelegramWorkspaceStreamDeliveryResult => ({
       status: "skipped",
       reason,
-      stale: isTabStreamStale(runtime, stream),
+      stale: isWorkspaceStreamStale(runtime, stream),
     });
     if (!stream.markdown) return makeSkipped("empty");
     if (stream.markdown === stream.sentMarkdown) return makeSkipped("unchanged");
-    if (isTabStreamStale(runtime, stream) && !options.allowStaleDelivery) {
+    if (isWorkspaceStreamStale(runtime, stream) && !options.allowStaleDelivery) {
       return makeSkipped("stale-turn");
     }
-    const blockedUntil = getTabStreamDeliveryBlockedUntil(runtime, stream);
+    const blockedUntil = getWorkspaceStreamDeliveryBlockedUntil(runtime, stream);
     if (!options.force && blockedUntil !== undefined && now() < blockedUntil) {
-      schedulePendingTabStreamRetry(runtime, stream);
+      schedulePendingWorkspaceStreamRetry(runtime, stream);
       return {
         status: "scheduled",
         reason: "blocked",
         retryAt: blockedUntil,
-        stale: isTabStreamStale(runtime, stream),
+        stale: isWorkspaceStreamStale(runtime, stream),
       };
     }
     if (stream.flushPromise) {
@@ -2271,16 +2254,16 @@ export function createTelegramTabManager<TContext>(
       return stream.flushPromise;
     }
     stream.flushPromise = (async () => {
-      let lastResult: TelegramTabStreamDeliveryResult = makeSkipped("empty");
+      let lastResult: TelegramWorkspaceStreamDeliveryResult = makeSkipped("empty");
       do {
         stream.flushRequested = false;
         const markdown = stream.markdown;
         if (!markdown) return makeSkipped("empty");
         if (markdown === stream.sentMarkdown) return makeSkipped("unchanged");
-        if (isTabStreamStale(runtime, stream) && !options.allowStaleDelivery) {
+        if (isWorkspaceStreamStale(runtime, stream) && !options.allowStaleDelivery) {
           return makeSkipped("stale-turn");
         }
-        const target = getTabStreamDeliveryTarget(runtime, stream);
+        const target = getWorkspaceStreamDeliveryTarget(runtime, stream);
         if (target.chatId === undefined) {
           return makeSkipped("missing-chat");
         }
@@ -2295,7 +2278,7 @@ export function createTelegramTabManager<TContext>(
                 messageThreadId: target.messageThreadId,
               },
               () =>
-                sendTabStreamMarkdownReply(
+                sendWorkspaceStreamMarkdownReply(
                   target.chatId,
                   target.replyToMessageId,
                   markdown,
@@ -2312,7 +2295,7 @@ export function createTelegramTabManager<TContext>(
                 messageThreadId: target.messageThreadId,
               },
               () =>
-                editTabStreamMarkdownMessage(
+                editWorkspaceStreamMarkdownMessage(
                   target.chatId,
                   currentMessageId,
                   markdown,
@@ -2322,8 +2305,8 @@ export function createTelegramTabManager<TContext>(
             delivered = true;
           }
         } catch (error) {
-          deps.recordRuntimeEvent?.("tabs", error, {
-            tab: runtime.record.name,
+          deps.recordRuntimeEvent?.("workspaces", error, {
+            workspace: runtime.record.name,
             action: "stream_markdown",
             turnId: stream.turnId,
             chatId: target.chatId,
@@ -2334,28 +2317,28 @@ export function createTelegramTabManager<TContext>(
           lastResult = {
             status: "failed",
             error: getErrorMessage(error),
-            stale: isTabStreamStale(runtime, stream),
+            stale: isWorkspaceStreamStale(runtime, stream),
           };
         }
         if (!delivered) {
           if (lastResult.status !== "failed") {
             lastResult = {
               status: "failed",
-              stale: isTabStreamStale(runtime, stream),
+              stale: isWorkspaceStreamStale(runtime, stream),
             };
           }
           if (shouldRetryOnFailure()) {
-            blockTabStreamDelivery(runtime, stream);
-            scheduleAllPendingTabStreamRetries(runtime, stream);
+            blockWorkspaceStreamDelivery(runtime, stream);
+            scheduleAllPendingWorkspaceStreamRetries(runtime, stream);
           }
           return lastResult;
         }
-        const staleAfterDelivery = isTabStreamStale(runtime, stream);
+        const staleAfterDelivery = isWorkspaceStreamStale(runtime, stream);
         if (!staleAfterDelivery) {
           if (deliveredMessageId !== undefined) stream.messageId = deliveredMessageId;
-          unblockTabStreamDelivery(runtime, stream);
+          unblockWorkspaceStreamDelivery(runtime, stream);
           stream.sentMarkdown = markdown;
-          removeTelegramTabPostRunMessage(runtime, markdown);
+          removeTelegramWorkspacePostRunMessage(runtime, markdown);
           stream.lastFlushAt = now();
           runtime.lastStreamFlushAt = stream.lastFlushAt;
         }
@@ -2374,16 +2357,16 @@ export function createTelegramTabManager<TContext>(
       stream.flushPromise = undefined;
       if (
         shouldRetryOnFailure() &&
-        !isTabStreamStale(runtime, stream) &&
+        !isWorkspaceStreamStale(runtime, stream) &&
         stream.markdown !== stream.sentMarkdown
       ) {
-        schedulePendingTabStreamRetry(runtime, stream);
+        schedulePendingWorkspaceStreamRetry(runtime, stream);
       }
     }
   };
-  const scheduleTabStreamMarkdownFlush = (
+  const scheduleWorkspaceStreamMarkdownFlush = (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState,
+    stream: TelegramWorkspaceStreamState,
     force: boolean,
   ): void => {
     if (stream.flushTimer) {
@@ -2391,7 +2374,7 @@ export function createTelegramTabManager<TContext>(
       clearTimeout(stream.flushTimer);
       stream.flushTimer = undefined;
     }
-    const blockedUntil = getTabStreamDeliveryBlockedUntil(runtime, stream);
+    const blockedUntil = getWorkspaceStreamDeliveryBlockedUntil(runtime, stream);
     const retryWait =
       !force && blockedUntil !== undefined ? Math.max(0, blockedUntil - now()) : 0;
     const globalThrottleWait = Math.max(
@@ -2408,43 +2391,43 @@ export function createTelegramTabManager<TContext>(
               streamEditThrottleMs - (now() - stream.lastFlushAt),
             );
     if (wait === 0) {
-      void flushTabStreamMarkdown(runtime, stream, { force });
+      void flushWorkspaceStreamMarkdown(runtime, stream, { force });
       return;
     }
     stream.flushTimer = setTimeout(() => {
       stream.flushTimer = undefined;
-      void flushTabStreamMarkdown(runtime, stream);
+      void flushWorkspaceStreamMarkdown(runtime, stream);
     }, wait);
   };
-  const streamActiveTabMarkdown = (
-    tabState: TelegramWorkspacesState,
-    tabName: string,
+  const streamActiveWorkspaceMarkdown = (
+    workspaceState: TelegramWorkspacesState,
+    workspaceName: string,
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState,
+    stream: TelegramWorkspaceStreamState,
     markdown: string,
     force = false,
     truncate = true,
   ): void => {
-    if (!isRuntimeDeliveryActive(tabState, tabName, runtime)) return;
-    bindTabStreamDeliveryTarget(runtime, stream);
-    if (isTabStreamStale(runtime, stream) && !force) return;
+    if (!isRuntimeDeliveryActive(workspaceState, workspaceName, runtime)) return;
+    bindWorkspaceStreamDeliveryTarget(runtime, stream);
+    if (isWorkspaceStreamStale(runtime, stream) && !force) return;
     stream.markdown = truncate
-      ? truncateTelegramTabStreamMarkdown(markdown)
+      ? truncateTelegramWorkspaceStreamMarkdown(markdown)
       : markdown.trim();
-    scheduleTabStreamMarkdownFlush(runtime, stream, force);
+    scheduleWorkspaceStreamMarkdownFlush(runtime, stream, force);
   };
-  const streamActiveTabText = (
-    tabState: TelegramWorkspacesState,
-    tabName: string,
+  const streamActiveWorkspaceText = (
+    workspaceState: TelegramWorkspacesState,
+    workspaceName: string,
     runtime: WorkspaceRuntime,
     text: string,
     force = false,
   ): boolean => {
     const trimmed = text.trim();
-    if (!trimmed || !isRuntimeDeliveryActive(tabState, tabName, runtime)) return false;
-    streamActiveTabMarkdown(
-      tabState,
-      tabName,
+    if (!trimmed || !isRuntimeDeliveryActive(workspaceState, workspaceName, runtime)) return false;
+    streamActiveWorkspaceMarkdown(
+      workspaceState,
+      workspaceName,
       runtime,
       getTextStreamState(runtime),
       trimmed,
@@ -2453,9 +2436,9 @@ export function createTelegramTabManager<TContext>(
     );
     return true;
   };
-  const streamActiveTabThinking = (
-    tabState: TelegramWorkspacesState,
-    tabName: string,
+  const streamActiveWorkspaceThinking = (
+    workspaceState: TelegramWorkspacesState,
+    workspaceName: string,
     runtime: WorkspaceRuntime,
     index: number,
     text: string,
@@ -2463,14 +2446,14 @@ export function createTelegramTabManager<TContext>(
   ): void => {
     const trimmed = text.trim();
     if (!trimmed || runtime.sentThinkingTexts.has(trimmed)) return;
-    const markdown = formatTelegramTabThinkingMarkdown(trimmed);
+    const markdown = formatTelegramWorkspaceThinkingMarkdown(trimmed);
     if (!markdown) return;
-    let stream: TelegramTabStreamState | undefined;
+    let stream: TelegramWorkspaceStreamState | undefined;
     if (thinkingStreamPreviewsEnabled) {
       stream = getStreamState(runtime.thinkingStreams, index);
-      streamActiveTabMarkdown(
-        tabState,
-        tabName,
+      streamActiveWorkspaceMarkdown(
+        workspaceState,
+        workspaceName,
         runtime,
         stream,
         markdown,
@@ -2479,23 +2462,23 @@ export function createTelegramTabManager<TContext>(
     }
     if (force) {
       runtime.sentThinkingTexts.add(trimmed);
-      pushTelegramTabPostRunMessage(runtime, "thinking", markdown, stream);
+      pushTelegramWorkspacePostRunMessage(runtime, "thinking", markdown, stream);
       runtime.thinkingStreams.delete(index);
     }
   };
-  const flushActiveTabThinkingBuffer = (
-    tabState: TelegramWorkspacesState,
-    tabName: string,
+  const flushActiveWorkspaceThinkingBuffer = (
+    workspaceState: TelegramWorkspacesState,
+    workspaceName: string,
     runtime: WorkspaceRuntime,
     index: number,
   ): void => {
     const text = runtime.thinkingBuffers.get(index) ?? "";
     runtime.thinkingBuffers.delete(index);
-    streamActiveTabThinking(tabState, tabName, runtime, index, text, true);
+    streamActiveWorkspaceThinking(workspaceState, workspaceName, runtime, index, text, true);
   };
-  const streamActiveTabToolCall = (
-    tabState: TelegramWorkspacesState,
-    tabName: string,
+  const streamActiveWorkspaceToolCall = (
+    workspaceState: TelegramWorkspacesState,
+    workspaceName: string,
     runtime: WorkspaceRuntime,
     index: number,
     markdown: string,
@@ -2503,21 +2486,21 @@ export function createTelegramTabManager<TContext>(
   ): void => {
     if (!markdown || !toolCallStreamPreviewsEnabled) return;
     const stream = getStreamState(runtime.toolCallStreams, index);
-    streamActiveTabMarkdown(tabState, tabName, runtime, stream, markdown, final);
+    streamActiveWorkspaceMarkdown(workspaceState, workspaceName, runtime, stream, markdown, final);
     if (final) {
       runtime.sentToolCallMessages.add(markdown);
-      pushTelegramTabPostRunMessage(runtime, "tool", markdown, stream);
+      pushTelegramWorkspacePostRunMessage(runtime, "tool", markdown, stream);
       runtime.toolCallStreams.delete(index);
     }
   };
-  const streamActiveTabCompactToolStatus = (
-    tabState: TelegramWorkspacesState,
-    tabName: string,
+  const streamActiveWorkspaceCompactToolStatus = (
+    workspaceState: TelegramWorkspacesState,
+    workspaceName: string,
     runtime: WorkspaceRuntime,
     preview: {
       key: string;
       markdown: string;
-      status: TelegramTabToolStatusKind;
+      status: TelegramWorkspaceToolStatusKind;
     },
   ): void => {
     if (!toolCallCompactPreviewsEnabled) return;
@@ -2532,27 +2515,27 @@ export function createTelegramTabManager<TContext>(
     const entries = [...runtime.toolCallStatuses.values()].sort(
       (left, right) => left.updatedAt - right.updatedAt,
     );
-    const markdown = formatTelegramTabCompactToolStatusMarkdown(
+    const markdown = formatTelegramWorkspaceCompactToolStatusMarkdown(
       entries,
       runtime.toolCallStatuses.size,
     );
-    streamActiveTabMarkdown(
-      tabState,
-      tabName,
+    streamActiveWorkspaceMarkdown(
+      workspaceState,
+      workspaceName,
       runtime,
       getToolCallStatusStreamState(runtime),
       markdown,
     );
   };
-  const getTabTurnDetails = (tabName: string, runtime: WorkspaceRuntime): Record<string, unknown> => ({
-    tab: tabName,
+  const getWorkspaceTurnDetails = (workspaceName: string, runtime: WorkspaceRuntime): Record<string, unknown> => ({
+    workspace: workspaceName,
     turnId: runtime.activeTurnId,
     chatId: runtime.activeChatId,
     messageThreadId: runtime.activeMessageThreadId,
     replyToMessageId: runtime.activeReplyToMessageId,
   });
-  const isFinalTabStreamDeliveryConfirmed = (
-    result: TelegramTabStreamDeliveryResult,
+  const isFinalWorkspaceStreamDeliveryConfirmed = (
+    result: TelegramWorkspaceStreamDeliveryResult,
     expectedMarkdown: string,
     latestSentMarkdown?: string,
   ): boolean => {
@@ -2563,11 +2546,11 @@ export function createTelegramTabManager<TContext>(
       latestSentMarkdown === expectedMarkdown
     );
   };
-  const finalizeActiveTabTextStream = async (
+  const finalizeActiveWorkspaceTextStream = async (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState | undefined,
+    stream: TelegramWorkspaceStreamState | undefined,
     finalMarkdown: string,
-  ): Promise<TelegramTabStreamDeliveryResult> => {
+  ): Promise<TelegramWorkspaceStreamDeliveryResult> => {
     const trimmed = finalMarkdown.trim();
     if (!stream) {
       return {
@@ -2580,36 +2563,36 @@ export function createTelegramTabManager<TContext>(
       return {
         status: "skipped",
         reason: "empty-final",
-        stale: isTabStreamStale(runtime, stream),
+        stale: isWorkspaceStreamStale(runtime, stream),
       };
     }
-    bindTabStreamDeliveryTarget(runtime, stream);
+    bindWorkspaceStreamDeliveryTarget(runtime, stream);
     stream.markdown = trimmed;
     if (stream.flushTimer) {
       clearTimeout(stream.flushTimer);
       stream.flushTimer = undefined;
     }
-    return flushTabStreamMarkdown(runtime, stream, {
+    return flushWorkspaceStreamMarkdown(runtime, stream, {
       force: true,
       allowStaleDelivery: true,
       retryOnFailure: false,
     });
   };
-  const deleteTabStreamPreviewMessage = async (
+  const deleteWorkspaceStreamPreviewMessage = async (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState | undefined,
+    stream: TelegramWorkspaceStreamState | undefined,
     deletedMessageIds?: Set<number>,
   ): Promise<void> => {
     if (!stream || stream.messageId === undefined || !deps.deleteMessage) return;
     if (deletedMessageIds?.has(stream.messageId)) return;
-    const target = getTabStreamDeliveryTarget(runtime, stream);
+    const target = getWorkspaceStreamDeliveryTarget(runtime, stream);
     if (target.chatId === undefined) return;
     try {
       await deps.deleteMessage(target.chatId, stream.messageId);
       deletedMessageIds?.add(stream.messageId);
     } catch (error) {
-      deps.recordRuntimeEvent?.("tabs", error, {
-        tab: runtime.record.name,
+      deps.recordRuntimeEvent?.("workspaces", error, {
+        workspace: runtime.record.name,
         action: "stream_preview_delete",
         turnId: stream.turnId,
         chatId: target.chatId,
@@ -2620,45 +2603,45 @@ export function createTelegramTabManager<TContext>(
   };
   const deleteRuntimePostRunPreviewMessages = async (
     runtime: WorkspaceRuntime,
-    textStream: TelegramTabStreamState | undefined,
+    textStream: TelegramWorkspaceStreamState | undefined,
   ): Promise<void> => {
     const deletedMessageIds = new Set<number>();
-    await deleteTabStreamPreviewMessage(runtime, textStream, deletedMessageIds);
+    await deleteWorkspaceStreamPreviewMessage(runtime, textStream, deletedMessageIds);
     for (const message of runtime.postRunMessages) {
-      await deleteTabStreamPreviewMessage(runtime, message.stream, deletedMessageIds);
+      await deleteWorkspaceStreamPreviewMessage(runtime, message.stream, deletedMessageIds);
     }
     if (runtime.postRunMessages.some((message) => message.kind === "tool")) {
-      await deleteTabStreamPreviewMessage(
+      await deleteWorkspaceStreamPreviewMessage(
         runtime,
         runtime.toolCallStatusStream,
         deletedMessageIds,
       );
     }
   };
-  const markActiveTabTextStreamAborted = async (
+  const markActiveWorkspaceTextStreamAborted = async (
     runtime: WorkspaceRuntime,
-    stream: TelegramTabStreamState | undefined = runtime.textStream,
-  ): Promise<TelegramTabStreamDeliveryResult | undefined> => {
+    stream: TelegramWorkspaceStreamState | undefined = runtime.textStream,
+  ): Promise<TelegramWorkspaceStreamDeliveryResult | undefined> => {
     if (!stream) return undefined;
     const current = (stream.sentMarkdown || stream.markdown).trim();
     if (!current) return undefined;
     const abortedMarkdown = current.includes("[aborted]")
       ? current
       : `${current}\n\n[aborted]`;
-    bindTabStreamDeliveryTarget(runtime, stream);
+    bindWorkspaceStreamDeliveryTarget(runtime, stream);
     stream.markdown = abortedMarkdown;
     if (stream.flushTimer) {
       clearTimeout(stream.flushTimer);
       stream.flushTimer = undefined;
     }
-    return flushTabStreamMarkdown(runtime, stream, {
+    return flushWorkspaceStreamMarkdown(runtime, stream, {
       force: true,
       allowStaleDelivery: true,
       retryOnFailure: false,
     });
   };
-  const logTabFirstOutput = (
-    tabName: string,
+  const logWorkspaceFirstOutput = (
+    workspaceName: string,
     runtime: WorkspaceRuntime,
     outputKind: string,
   ): void => {
@@ -2666,8 +2649,8 @@ export function createTelegramTabManager<TContext>(
     const firstOutputAt = now();
     runtime.firstOutputAt = firstOutputAt;
     runtime.firstOutputLogged = true;
-    deps.debugLogger?.log("telegram.tab.first_output", {
-      ...getTabTurnDetails(tabName, runtime),
+    deps.debugLogger?.log("telegram.workspace.first_output", {
+      ...getWorkspaceTurnDetails(workspaceName, runtime),
       outputKind,
       promptSentToFirstOutputMs:
         runtime.promptSentAt === undefined ? undefined : firstOutputAt - runtime.promptSentAt,
@@ -2675,15 +2658,15 @@ export function createTelegramTabManager<TContext>(
         runtime.agentStartedAt === undefined ? undefined : firstOutputAt - runtime.agentStartedAt,
     });
   };
-  const logTabTurnSummary = (
-    tabName: string,
+  const logWorkspaceTurnSummary = (
+    workspaceName: string,
     runtime: WorkspaceRuntime,
     stopReason?: string,
     error?: string,
   ): void => {
     const endedAt = now();
-    deps.debugLogger?.log("telegram.tab.turn.summary", {
-      ...getTabTurnDetails(tabName, runtime),
+    deps.debugLogger?.log("telegram.workspace.turn.summary", {
+      ...getWorkspaceTurnDetails(workspaceName, runtime),
       stopReason,
       error,
       totalMs:
@@ -2706,9 +2689,9 @@ export function createTelegramTabManager<TContext>(
         runtime.agentStartedAt === undefined ? undefined : endedAt - runtime.agentStartedAt,
     });
   };
-  const sendActiveTabToolCallMessage = (
-    tabState: TelegramWorkspacesState,
-    tabName: string,
+  const sendActiveWorkspaceToolCallMessage = (
+    workspaceState: TelegramWorkspacesState,
+    workspaceName: string,
     runtime: WorkspaceRuntime,
     message: unknown,
   ): boolean => {
@@ -2723,12 +2706,12 @@ export function createTelegramTabManager<TContext>(
           name: raw.name,
           arguments: raw.arguments,
         });
-        streamActiveTabCompactToolStatus(tabState, tabName, runtime, {
+        streamActiveWorkspaceCompactToolStatus(workspaceState, workspaceName, runtime, {
           key,
           markdown,
           status: "queued",
         });
-        pushTelegramTabPostRunMessage(runtime, "tool", markdown);
+        pushTelegramWorkspacePostRunMessage(runtime, "tool", markdown);
       });
       return getAgentMessageBodyText(message).length === 0;
     }
@@ -2741,34 +2724,34 @@ export function createTelegramTabManager<TContext>(
     }
     const markdown = getAgentMessagePreviewText(message);
     if (!markdown || runtime.sentToolCallMessages.has(markdown)) return true;
-    pushTelegramTabPostRunMessage(runtime, "tool", markdown);
-    if (!isRuntimeDeliveryActive(tabState, tabName, runtime)) return false;
+    pushTelegramWorkspacePostRunMessage(runtime, "tool", markdown);
+    if (!isRuntimeDeliveryActive(workspaceState, workspaceName, runtime)) return false;
     runtime.sentToolCallMessages.add(markdown);
-    void runInTabThreadContext(runtime, async () => {
-      const messageId = await sendTabMarkdownReply(
+    void runInWorkspaceThreadContext(runtime, async () => {
+      const messageId = await sendWorkspaceMarkdownReply(
         runtime.activeChatId,
         runtime.activeReplyToMessageId,
         markdown,
       );
       if (messageId !== undefined) {
-        removeTelegramTabPostRunMessage(runtime, markdown);
+        removeTelegramWorkspacePostRunMessage(runtime, markdown);
       }
     });
     return true;
   };
   const handleChildEvent = (
-    tabName: string,
+    workspaceName: string,
     runtime: WorkspaceRuntime,
     event: RpcChildBackendEvent,
   ): void => {
-    const tabState = state;
-    if (!tabState || runtime.closing || !tabState.tabs[tabName]) return;
+    const workspaceState = state;
+    if (!workspaceState || runtime.closing || !workspaceState.workspaces[workspaceName]) return;
     const record = runtime.record;
     const eventNow = now();
     deps.debugLogger?.log(
-      "telegram.tab.worker.event",
+      "telegram.workspace.worker.event",
       {
-        ...getTabTurnDetails(tabName, runtime),
+        ...getWorkspaceTurnDetails(workspaceName, runtime),
         type: event.type,
         status: record.status,
         bodyOmitted: event.type === "message_update" || event.type === "message_end" || event.type === "agent_end" ? true : undefined,
@@ -2778,31 +2761,31 @@ export function createTelegramTabManager<TContext>(
     if (event.type === "agent_start") {
       resetRuntimeTurnBuffers(runtime);
       runtime.agentStartedAt = eventNow;
-      deps.debugLogger?.log("telegram.tab.agent.start", getTabTurnDetails(tabName, runtime));
+      deps.debugLogger?.log("telegram.workspace.agent.start", getWorkspaceTurnDetails(workspaceName, runtime));
       record.status = "running";
       record.lastError = undefined;
       record.lastAgentStartAt = eventNow;
-      if (isRuntimeDeliveryActive(tabState, tabName, runtime)) {
-        startTabTyping(tabName, runtime);
+      if (isRuntimeDeliveryActive(workspaceState, workspaceName, runtime)) {
+        startWorkspaceTyping(workspaceName, runtime);
       }
       void persist();
       return;
     }
     if (event.type === "message_start") {
-      deps.debugLogger?.log("telegram.tab.message.start", getTabTurnDetails(tabName, runtime));
+      deps.debugLogger?.log("telegram.workspace.message.start", getWorkspaceTurnDetails(workspaceName, runtime));
       runtime.activeBuffer = "";
       runtime.textStream = undefined;
       return;
     }
     const delta = extractRpcTextDelta(event);
     if (delta) {
-      logTabFirstOutput(tabName, runtime, "text_delta");
+      logWorkspaceFirstOutput(workspaceName, runtime, "text_delta");
       runtime.activeBuffer += delta;
-      streamActiveTabText(tabState, tabName, runtime, runtime.activeBuffer);
+      streamActiveWorkspaceText(workspaceState, workspaceName, runtime, runtime.activeBuffer);
     }
     const thinkingDelta = getRpcAssistantThinkingDelta(event);
     if (thinkingDelta) {
-      logTabFirstOutput(tabName, runtime, "thinking_delta");
+      logWorkspaceFirstOutput(workspaceName, runtime, "thinking_delta");
       const nextThinkingText = `${runtime.thinkingBuffers.get(thinkingDelta.index) ?? ""}${
         thinkingDelta.delta
       }`;
@@ -2810,9 +2793,9 @@ export function createTelegramTabManager<TContext>(
         thinkingDelta.index,
         nextThinkingText,
       );
-      streamActiveTabThinking(
-        tabState,
-        tabName,
+      streamActiveWorkspaceThinking(
+        workspaceState,
+        workspaceName,
         runtime,
         thinkingDelta.index,
         nextThinkingText,
@@ -2823,24 +2806,24 @@ export function createTelegramTabManager<TContext>(
       if (thinkingEnd.content !== undefined) {
         runtime.thinkingBuffers.set(thinkingEnd.index, thinkingEnd.content);
       }
-      flushActiveTabThinkingBuffer(tabState, tabName, runtime, thinkingEnd.index);
+      flushActiveWorkspaceThinkingBuffer(workspaceState, workspaceName, runtime, thinkingEnd.index);
     }
     const toolCallPreview = getRpcAssistantToolCallPreview(event);
     if (toolCallPreview) {
-      logTabFirstOutput(tabName, runtime, "tool_call");
-      deps.debugLogger?.log("telegram.tab.tool.preview", {
-        ...getTabTurnDetails(tabName, runtime),
+      logWorkspaceFirstOutput(workspaceName, runtime, "tool_call");
+      deps.debugLogger?.log("telegram.workspace.tool.preview", {
+        ...getWorkspaceTurnDetails(workspaceName, runtime),
         index: toolCallPreview.index,
         final: toolCallPreview.final,
       }, toolCallPreview.markdown);
-      streamActiveTabCompactToolStatus(tabState, tabName, runtime, {
+      streamActiveWorkspaceCompactToolStatus(workspaceState, workspaceName, runtime, {
         key: toolCallPreview.key,
         markdown: toolCallPreview.markdown,
         status: "queued",
       });
-      streamActiveTabToolCall(
-        tabState,
-        tabName,
+      streamActiveWorkspaceToolCall(
+        workspaceState,
+        workspaceName,
         runtime,
         toolCallPreview.index,
         toolCallPreview.markdown,
@@ -2849,58 +2832,58 @@ export function createTelegramTabManager<TContext>(
     }
     const toolExecutionPreview = getRpcToolExecutionPreview(event);
     if (toolExecutionPreview) {
-      streamActiveTabCompactToolStatus(
-        tabState,
-        tabName,
+      streamActiveWorkspaceCompactToolStatus(
+        workspaceState,
+        workspaceName,
         runtime,
         toolExecutionPreview,
       );
     }
     const assistantText = extractRpcAssistantText(event);
     if (assistantText) {
-      logTabFirstOutput(tabName, runtime, "assistant_text");
+      logWorkspaceFirstOutput(workspaceName, runtime, "assistant_text");
       runtime.activeAssistantText = assistantText;
       record.lastAssistantText = assistantText;
       record.lastMessageText = assistantText;
       record.lastMessageAt = eventNow;
     }
     if (event.type === "message_end" && isAssistantAgentMessage(event.message)) {
-      deps.debugLogger?.log("telegram.tab.message.end", {
-        ...getTabTurnDetails(tabName, runtime),
+      deps.debugLogger?.log("telegram.workspace.message.end", {
+        ...getWorkspaceTurnDetails(workspaceName, runtime),
         hasAssistantMessage: true,
       });
       const finalBodyText = getAgentMessageBodyText(event.message);
       if (runtime.textStream && finalBodyText) {
         runtime.activeBuffer = finalBodyText;
-        streamActiveTabText(tabState, tabName, runtime, finalBodyText, true);
+        streamActiveWorkspaceText(workspaceState, workspaceName, runtime, finalBodyText, true);
       }
       for (const thinking of extractAgentThinkingBlocks(event.message)) {
-        streamActiveTabThinking(
-          tabState,
-          tabName,
+        streamActiveWorkspaceThinking(
+          workspaceState,
+          workspaceName,
           runtime,
           thinking.index,
           thinking.text,
           true,
         );
       }
-      sendActiveTabToolCallMessage(tabState, tabName, runtime, event.message);
+      sendActiveWorkspaceToolCallMessage(workspaceState, workspaceName, runtime, event.message);
     }
     if (event.type === "agent_end") {
-      deps.debugLogger?.log("telegram.tab.agent.end", {
-        ...getTabTurnDetails(tabName, runtime),
+      deps.debugLogger?.log("telegram.workspace.agent.end", {
+        ...getWorkspaceTurnDetails(workspaceName, runtime),
         messageCount: Array.isArray(event.messages) ? event.messages.length : undefined,
       });
-      stopTabTyping(runtime);
+      stopWorkspaceTyping(runtime);
       for (const index of [...runtime.thinkingBuffers.keys()]) {
-        flushActiveTabThinkingBuffer(tabState, tabName, runtime, index);
+        flushActiveWorkspaceThinkingBuffer(workspaceState, workspaceName, runtime, index);
       }
       const latestAssistant = getLatestAssistantMessage(event.messages);
       if (latestAssistant) {
         for (const thinking of extractAgentThinkingBlocks(latestAssistant)) {
-          streamActiveTabThinking(
-            tabState,
-            tabName,
+          streamActiveWorkspaceThinking(
+            workspaceState,
+            workspaceName,
             runtime,
             thinking.index,
             thinking.text,
@@ -2909,9 +2892,9 @@ export function createTelegramTabManager<TContext>(
         }
       }
       if (latestAssistant) {
-        sendActiveTabToolCallMessage(
-          tabState,
-          tabName,
+        sendActiveWorkspaceToolCallMessage(
+          workspaceState,
+          workspaceName,
           runtime,
           latestAssistant,
         );
@@ -2919,15 +2902,15 @@ export function createTelegramTabManager<TContext>(
       record.lastAgentEndAt = eventNow;
       const assistantError = extractRpcAssistantError(event);
       if (assistantError) {
-        logTabTurnSummary(tabName, runtime, "error", assistantError);
+        logWorkspaceTurnSummary(workspaceName, runtime, "error", assistantError);
         record.status = "error";
         record.lastError = assistantError;
-        const isActive = isRuntimeDeliveryActive(tabState, tabName, runtime);
+        const isActive = isRuntimeDeliveryActive(workspaceState, workspaceName, runtime);
         if (!runtime.activeErrorDelivered) {
           runtime.activeErrorDelivered = true;
           if (isActive) {
-            void runInTabThreadContext(runtime, () =>
-              sendTabReply(
+            void runInWorkspaceThreadContext(runtime, () =>
+              sendWorkspaceReply(
                 runtime.activeChatId,
                 runtime.activeReplyToMessageId,
                 formatRuntimeFailureMessage(runtime, assistantError),
@@ -2936,8 +2919,8 @@ export function createTelegramTabManager<TContext>(
           } else {
             runtime.unreadEvents += 1;
             if (deps.getConfig().inactiveNotify) {
-              void runInTabThreadContext(runtime, () =>
-                sendTabReply(
+              void runInWorkspaceThreadContext(runtime, () =>
+                sendWorkspaceReply(
                   runtime.activeChatId,
                   runtime.activeReplyToMessageId,
                   formatRuntimeFailureMessage(runtime, assistantError),
@@ -2958,16 +2941,16 @@ export function createTelegramTabManager<TContext>(
         runtime.activeAssistantText = runtime.activeBuffer;
         record.lastAssistantText = runtime.activeBuffer;
       }
-      const isActive = isRuntimeDeliveryActive(tabState, tabName, runtime);
+      const isActive = isRuntimeDeliveryActive(workspaceState, workspaceName, runtime);
       const finalBodyText = latestAssistant
         ? getAgentMessageBodyText(latestAssistant)
         : runtime.activeBuffer;
       if (latestAssistantSummary.stopReason === "aborted") {
         void (async () => {
-          const result = await markActiveTabTextStreamAborted(runtime).catch(
+          const result = await markActiveWorkspaceTextStreamAborted(runtime).catch(
             (error) => {
-              deps.recordRuntimeEvent?.("tabs", error, {
-                tab: tabName,
+              deps.recordRuntimeEvent?.("workspaces", error, {
+                workspace: workspaceName,
                 action: "stream_abort_mark",
                 turnId: runtime.activeTurnId,
               });
@@ -2975,8 +2958,8 @@ export function createTelegramTabManager<TContext>(
             },
           );
           if (result) {
-            deps.debugLogger?.log("telegram.tab.stream.abort.result", {
-              ...getTabTurnDetails(tabName, runtime),
+            deps.debugLogger?.log("telegram.workspace.stream.abort.result", {
+              ...getWorkspaceTurnDetails(workspaceName, runtime),
               streamMessageId: runtime.textStream?.messageId,
               status: result.status,
               delivered: result.status === "delivered",
@@ -2985,7 +2968,7 @@ export function createTelegramTabManager<TContext>(
             });
           }
         })();
-        logTabTurnSummary(tabName, runtime, "aborted");
+        logWorkspaceTurnSummary(workspaceName, runtime, "aborted");
         void persist();
         return;
       }
@@ -2993,7 +2976,7 @@ export function createTelegramTabManager<TContext>(
       const finalPostRunMarkdown = finalReplyMarkdown.trim()
         ? [
             ...runtime.postRunMessages.filter(
-              (message) => !isTelegramTabPostRunTextMessage(message),
+              (message) => !isTelegramWorkspacePostRunTextMessage(message),
             ),
             { kind: "text" as const, markdown: finalReplyMarkdown },
           ]
@@ -3014,13 +2997,13 @@ export function createTelegramTabManager<TContext>(
         const stream = runtime.textStream;
         const finalStreamMarkdown = finalBodyText.trim();
         void (async () => {
-          let streamResult: TelegramTabStreamDeliveryResult | undefined;
+          let streamResult: TelegramWorkspaceStreamDeliveryResult | undefined;
           let streamDelivered = false;
           let fallbackSent = false;
           let fallbackError: string | undefined;
           if (stream && finalStreamMarkdown) {
-            deps.debugLogger?.log("telegram.tab.stream.finalize.start", {
-              tab: tabName,
+            deps.debugLogger?.log("telegram.workspace.stream.finalize.start", {
+              workspace: workspaceName,
               turnId: deliveryTarget.turnId,
               chatId: deliveryTarget.chatId,
               messageThreadId: deliveryTarget.messageThreadId,
@@ -3030,12 +3013,12 @@ export function createTelegramTabManager<TContext>(
               sentMarkdownLength: stream.sentMarkdown.length,
             });
             try {
-              streamResult = await finalizeActiveTabTextStream(
+              streamResult = await finalizeActiveWorkspaceTextStream(
                 runtime,
                 stream,
                 finalStreamMarkdown,
               );
-              streamDelivered = isFinalTabStreamDeliveryConfirmed(
+              streamDelivered = isFinalWorkspaceStreamDeliveryConfirmed(
                 streamResult,
                 finalStreamMarkdown,
                 stream.sentMarkdown,
@@ -3045,10 +3028,10 @@ export function createTelegramTabManager<TContext>(
               streamResult = {
                 status: "failed",
                 error: fallbackError,
-                stale: stream ? isTabStreamStale(runtime, stream) : false,
+                stale: stream ? isWorkspaceStreamStale(runtime, stream) : false,
               };
-              deps.recordRuntimeEvent?.("tabs", error, {
-                tab: tabName,
+              deps.recordRuntimeEvent?.("workspaces", error, {
+                workspace: workspaceName,
                 action: "stream_finalize",
                 turnId: deliveryTarget.turnId,
                 chatId: deliveryTarget.chatId,
@@ -3068,7 +3051,7 @@ export function createTelegramTabManager<TContext>(
                       messageThreadId: deliveryTarget.messageThreadId,
                     },
                 () =>
-                  sendTabMarkdownReply(
+                  sendWorkspaceMarkdownReply(
                     deliveryTarget.chatId,
                     deliveryTarget.replyToMessageId,
                     finalPostRunMarkdown,
@@ -3077,8 +3060,8 @@ export function createTelegramTabManager<TContext>(
               fallbackSent = messageId !== undefined;
             } catch (error) {
               fallbackError = getErrorMessage(error);
-              deps.recordRuntimeEvent?.("tabs", error, {
-                tab: tabName,
+              deps.recordRuntimeEvent?.("workspaces", error, {
+                workspace: workspaceName,
                 action: "stream_final_fallback",
                 turnId: deliveryTarget.turnId,
                 chatId: deliveryTarget.chatId,
@@ -3089,7 +3072,7 @@ export function createTelegramTabManager<TContext>(
           }
           if (streamDelivered) {
             runtime.postRunMessages = runtime.postRunMessages.filter(
-              (message) => !isTelegramTabPostRunTextMessage(message),
+              (message) => !isTelegramWorkspacePostRunTextMessage(message),
             );
           }
           if (fallbackSent) {
@@ -3098,8 +3081,8 @@ export function createTelegramTabManager<TContext>(
             clearRuntimePostRunPreviewStreams(runtime);
           }
           if (stream || streamResult) {
-            deps.debugLogger?.log("telegram.tab.stream.finalize.result", {
-              tab: tabName,
+            deps.debugLogger?.log("telegram.workspace.stream.finalize.result", {
+              workspace: workspaceName,
               turnId: deliveryTarget.turnId,
               chatId: deliveryTarget.chatId,
               messageThreadId: deliveryTarget.messageThreadId,
@@ -3131,22 +3114,22 @@ export function createTelegramTabManager<TContext>(
         if (deps.getConfig().inactiveNotify) {
           const chatId = runtime.activeChatId;
           const replyToMessageId = runtime.activeReplyToMessageId;
-          void runInTabThreadContext(runtime, () =>
-            sendTabReply(
+          void runInWorkspaceThreadContext(runtime, () =>
+            sendWorkspaceReply(
               chatId,
               replyToMessageId,
-              formatRuntimeFinishedNotice(runtime, tabName),
+              formatRuntimeFinishedNotice(runtime, workspaceName),
             ),
           );
         }
       }
-      logTabTurnSummary(tabName, runtime, latestAssistantSummary.stopReason ?? "stop");
+      logWorkspaceTurnSummary(workspaceName, runtime, latestAssistantSummary.stopReason ?? "stop");
       void persist();
       return;
     }
     if (event.type === "exit") {
-      deps.debugLogger?.log("telegram.tab.worker.exit", getTabTurnDetails(tabName, runtime), event);
-      stopTabTyping(runtime);
+      deps.debugLogger?.log("telegram.workspace.worker.exit", getWorkspaceTurnDetails(workspaceName, runtime), event);
+      stopWorkspaceTyping(runtime);
       if (record.status === "running" || record.status === "starting") {
         record.status = "exited";
       }
@@ -3158,12 +3141,12 @@ export function createTelegramTabManager<TContext>(
     }
     if (event.type === "error") {
       const errorMessage = typeof event.error === "string" ? event.error : "RPC child error";
-      deps.debugLogger?.log("telegram.tab.worker.error", {
-        ...getTabTurnDetails(tabName, runtime),
+      deps.debugLogger?.log("telegram.workspace.worker.error", {
+        ...getWorkspaceTurnDetails(workspaceName, runtime),
         error: errorMessage,
       }, event);
-      logTabTurnSummary(tabName, runtime, "error", errorMessage);
-      stopTabTyping(runtime);
+      logWorkspaceTurnSummary(workspaceName, runtime, "error", errorMessage);
+      stopWorkspaceTyping(runtime);
       record.status = "error";
       record.lastError = errorMessage;
       void persist();
@@ -3172,7 +3155,7 @@ export function createTelegramTabManager<TContext>(
   const ensureBackend = async (
     runtime: WorkspaceRuntime,
     ctx: TContext,
-  ): Promise<TelegramTabBackend> => {
+  ): Promise<TelegramWorkspaceBackend> => {
     if (runtime.backend) return runtime.backend;
     await ensureWorkerCapacity(runtime);
     runtime.record.status = "starting";
@@ -3180,7 +3163,7 @@ export function createTelegramTabManager<TContext>(
     const cwd = runtime.record.cwd || deps.getCwd(ctx);
     const sessionDir = deps.getSessionDir?.(ctx) ?? configuredSessionDir;
     const config = deps.getConfig();
-    const workerArgs = buildTelegramTabWorkerExtensionArgs(
+    const workerArgs = buildTelegramWorkspaceWorkerExtensionArgs(
       config.workerExtensions,
     );
     const defaultModel = config.topicBinding?.defaultModel;
@@ -3188,9 +3171,9 @@ export function createTelegramTabManager<TContext>(
       workerArgs.push("--model", defaultModel);
     }
     deps.debugLogger?.log(
-      "telegram.tab.worker.start",
+      "telegram.workspace.worker.start",
       {
-        tab: runtime.record.name,
+        workspace: runtime.record.name,
         cwd,
         sessionDir,
         sessionFile: runtime.record.sessionFile,
@@ -3201,13 +3184,13 @@ export function createTelegramTabManager<TContext>(
     runtime.closing = false;
     const workerStartedAt = Date.now();
     const backend = deps.createBackend?.({
-      tabName: runtime.record.name,
+      workspaceName: runtime.record.name,
       cwd,
       sessionDir,
       sessionFile: runtime.record.sessionFile,
       args: workerArgs,
     }) ?? new RpcChildBackend({
-      tabName: runtime.record.name,
+      workspaceName: runtime.record.name,
       cwd,
       sessionDir,
       sessionFile: runtime.record.sessionFile,
@@ -3220,8 +3203,8 @@ export function createTelegramTabManager<TContext>(
     try {
       const childState = await backend.start();
       deps.debugLogger?.log(
-        "telegram.tab.worker.ready",
-        { tab: runtime.record.name, elapsedMs: Date.now() - workerStartedAt },
+        "telegram.workspace.worker.ready",
+        { workspace: runtime.record.name, elapsedMs: Date.now() - workerStartedAt },
         childState,
       );
       applyRpcStateToRecord(runtime.record, childState);
@@ -3231,8 +3214,8 @@ export function createTelegramTabManager<TContext>(
       await persist();
       return backend;
     } catch (error) {
-      deps.debugLogger?.log("telegram.tab.worker.start_error", {
-        tab: runtime.record.name,
+      deps.debugLogger?.log("telegram.workspace.worker.start_error", {
+        workspace: runtime.record.name,
         elapsedMs: Date.now() - workerStartedAt,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -3246,7 +3229,7 @@ export function createTelegramTabManager<TContext>(
     }
   };
   const disposeRuntimeBackend = async (runtime: WorkspaceRuntime): Promise<void> => {
-    stopTabTyping(runtime);
+    stopWorkspaceTyping(runtime);
     const backend = runtime.backend;
     runtime.backend = undefined;
     runtime.unsubscribe?.();
@@ -3257,7 +3240,7 @@ export function createTelegramTabManager<TContext>(
     runtime: WorkspaceRuntime,
   ): Promise<void> => {
     runtime.closing = true;
-    stopTabTyping(runtime);
+    stopWorkspaceTyping(runtime);
     resetRuntimeTurnBuffers(runtime);
     const backend = runtime.backend;
     runtime.backend = undefined;
@@ -3276,7 +3259,7 @@ export function createTelegramTabManager<TContext>(
       runtime.record.sessionName = topicSessionName;
       changed = true;
     }
-    const workerSessionName = normalizeTelegramTabSessionName(
+    const workerSessionName = normalizeTelegramWorkspaceSessionName(
       options.workerSessionName ?? "",
     );
     const hasWorkerSessionName = Object.hasOwn(options, "workerSessionName");
@@ -3290,8 +3273,8 @@ export function createTelegramTabManager<TContext>(
         await runtime.backend.setSessionName(topicSessionName);
         changed = true;
       } catch (error) {
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: runtime.record.name,
+        deps.recordRuntimeEvent?.("workspaces", error, {
+          workspace: runtime.record.name,
           action: "sync_topic_session_name",
         });
       }
@@ -3313,53 +3296,53 @@ export function createTelegramTabManager<TContext>(
     await persist();
     return childState;
   };
-  const refreshDashboardTabRecords = async (
-    tabState: TelegramWorkspacesState,
+  const refreshDashboardWorkspaceRecords = async (
+    workspaceState: TelegramWorkspacesState,
   ): Promise<void> => {
     await Promise.all(
-      Object.keys(tabState.tabs).map(async (name) => {
-        const runtime = getWorkspaceRuntime(tabState, name);
+      Object.keys(workspaceState.workspaces).map(async (name) => {
+        const runtime = getWorkspaceRuntime(workspaceState, name);
         if (runtime?.backend) await refreshRuntimeState(runtime);
       }),
     );
   };
   const getOpenSessionConflict = async (
-    tabState: TelegramWorkspacesState,
+    workspaceState: TelegramWorkspacesState,
     targetWorkspaceRuntime: WorkspaceRuntime,
-    target: Pick<TelegramTabSessionIdentity, "sessionFile" | "sessionId">,
+    target: Pick<TelegramWorkspaceSessionIdentity, "sessionFile" | "sessionId">,
   ): Promise<TelegramWorkspaceRecord | undefined> => {
-    const targetIdentity = getTelegramTabSessionIdentity(target);
+    const targetIdentity = getTelegramWorkspaceSessionIdentity(target);
     if (!targetIdentity.canonicalSessionFile && !targetIdentity.sessionId) {
       return undefined;
     }
     await Promise.all(
-      Object.values(tabState.tabs).map(async (record) => {
+      Object.values(workspaceState.workspaces).map(async (record) => {
         if (record.name === targetWorkspaceRuntime.record.name) return;
-        const runtime = getWorkspaceRuntime(tabState, record.name);
+        const runtime = getWorkspaceRuntime(workspaceState, record.name);
         if (runtime?.backend) await refreshRuntimeState(runtime);
       }),
     );
-    return Object.values(tabState.tabs).find((record) => {
+    return Object.values(workspaceState.workspaces).find((record) => {
       if (record.name === targetWorkspaceRuntime.record.name) return false;
-      return isSameTelegramTabSessionIdentity(
-        getTelegramTabSessionIdentity(record),
+      return isSameTelegramWorkspaceSessionIdentity(
+        getTelegramWorkspaceSessionIdentity(record),
         targetIdentity,
       );
     });
   };
   const assertNoOpenSessionConflict = async (
-    tabState: TelegramWorkspacesState,
+    workspaceState: TelegramWorkspacesState,
     targetWorkspaceRuntime: WorkspaceRuntime,
-    target: Pick<TelegramTabSessionIdentity, "sessionFile" | "sessionId">,
+    target: Pick<TelegramWorkspaceSessionIdentity, "sessionFile" | "sessionId">,
   ): Promise<void> => {
-    const conflict = await getOpenSessionConflict(tabState, targetWorkspaceRuntime, target);
+    const conflict = await getOpenSessionConflict(workspaceState, targetWorkspaceRuntime, target);
     if (!conflict) return;
     throw new Error(
-      `Session is already open in workspace ${formatTelegramTabSessionOwner(conflict)}. Close that workspace first or branch/clone the session.`,
+      `Session is already open in workspace ${formatTelegramWorkspaceSessionOwner(conflict)}. Close that workspace first or branch/clone the session.`,
     );
   };
   const getTelegramTopicServiceKind = (
-    message: TelegramTabForumTopicServiceMessage,
+    message: TelegramWorkspaceForumTopicServiceMessage,
   ):
     | "created"
     | "edited"
@@ -3380,7 +3363,7 @@ export function createTelegramTabManager<TContext>(
     record: TelegramWorkspaceRecord,
     topicTitle: string | undefined,
   ): boolean => {
-    const sessionName = normalizeTelegramTabSessionName(topicTitle ?? "");
+    const sessionName = normalizeTelegramWorkspaceSessionName(topicTitle ?? "");
     if (!sessionName || record.source?.kind !== "telegram-topic") return false;
     let changed = false;
     if (record.source.topicTitle !== sessionName) {
@@ -3393,22 +3376,22 @@ export function createTelegramTabManager<TContext>(
     }
     return changed;
   };
-  const createTelegramTopicTabRecord = (
-    tabState: TelegramWorkspacesState,
+  const createTelegramTopicWorkspaceRecord = (
+    workspaceState: TelegramWorkspacesState,
     scope: { chatId: number; messageThreadId: number; topicTitle?: string },
     ctx: TContext,
   ): TelegramWorkspaceRecord => {
     const createdAt = now();
     let name = normalizeTelegramTopicWorkspaceName(scope.chatId, scope.messageThreadId);
-    if (tabState.tabs[name]) {
+    if (workspaceState.workspaces[name]) {
       let suffix = 2;
       const base = name.slice(0, Math.max(1, 29));
-      while (tabState.tabs[name]) {
+      while (workspaceState.workspaces[name]) {
         name = `${base}-${suffix}`.slice(0, 32);
         suffix += 1;
       }
     }
-    const topicSessionName = normalizeTelegramTabSessionName(
+    const topicSessionName = normalizeTelegramWorkspaceSessionName(
       scope.topicTitle ?? "",
     );
     const source: TelegramWorkspaceSourceTelegramTopic = {
@@ -3428,8 +3411,8 @@ export function createTelegramTabManager<TContext>(
     };
   };
   const getOrCreateTopicRuntimeForTurn = async (
-    tabState: TelegramWorkspacesState,
-    turn: TelegramTabPromptTurn,
+    workspaceState: TelegramWorkspacesState,
+    turn: TelegramWorkspacePromptTurn,
     ctx: TContext,
   ): Promise<WorkspaceRuntime | undefined> => {
     const topicBinding = getTopicBindingConfig();
@@ -3442,40 +3425,40 @@ export function createTelegramTabManager<TContext>(
       return undefined;
     }
     if (turn.messageThreadId === undefined && topicBinding.generalIsDefault) {
-      return getWorkspaceRuntime(tabState, TELEGRAM_DEFAULT_WORKSPACE_NAME);
+      return getWorkspaceRuntime(workspaceState, TELEGRAM_DEFAULT_WORKSPACE_NAME);
     }
     if (turn.messageThreadId === undefined) return undefined;
     const existing = findTelegramWorkspaceByTopic(
-      tabState.tabs,
+      workspaceState.workspaces,
       turn.chatId,
       turn.messageThreadId,
     );
-    if (existing) return getWorkspaceRuntime(tabState, existing.name);
+    if (existing) return getWorkspaceRuntime(workspaceState, existing.name);
     if (!topicBinding.autoCreate) return undefined;
-    if (Object.keys(tabState.tabs).length >= deps.getConfig().maxTabs) {
+    if (Object.keys(workspaceState.workspaces).length >= deps.getConfig().maxWorkspaces) {
       await sendTurnTextReply(
         turn,
         "Maximum workspace count reached. Close another topic/workspace first.",
       );
       return undefined;
     }
-    const record = createTelegramTopicTabRecord(
-      tabState,
+    const record = createTelegramTopicWorkspaceRecord(
+      workspaceState,
       { chatId: turn.chatId, messageThreadId: turn.messageThreadId },
       ctx,
     );
-    tabState.tabs[record.name] = record;
+    workspaceState.workspaces[record.name] = record;
     const runtime = createWorkspaceRuntime(record);
     workspaceRuntimes.set(record.name, runtime);
     await persist();
     return runtime;
   };
   const getWorkspaceRuntimeForPromptTurn = async (
-    tabState: TelegramWorkspacesState,
-    turn: TelegramTabPromptTurn,
+    workspaceState: TelegramWorkspacesState,
+    turn: TelegramWorkspacePromptTurn,
     ctx: TContext,
   ): Promise<WorkspaceRuntime | undefined> => {
-    if (!isTopicBindingEnabled()) return getWorkspaceRuntime(tabState, tabState.activeTab);
+    if (!isTopicBindingEnabled()) return getWorkspaceRuntime(workspaceState, workspaceState.activeWorkspace);
     if (turn.messageThreadId !== undefined && !isTrustedTopicBindingChat(turn.chatId)) {
       await sendTurnTextReply(
         turn,
@@ -3485,29 +3468,29 @@ export function createTelegramTabManager<TContext>(
     }
     if (turn.messageThreadId === undefined) {
       return getTopicBindingConfig()?.generalIsDefault
-        ? getWorkspaceRuntime(tabState, TELEGRAM_DEFAULT_WORKSPACE_NAME)
-        : getWorkspaceRuntime(tabState, tabState.activeTab);
+        ? getWorkspaceRuntime(workspaceState, TELEGRAM_DEFAULT_WORKSPACE_NAME)
+        : getWorkspaceRuntime(workspaceState, workspaceState.activeWorkspace);
     }
-    const runtime = await getOrCreateTopicRuntimeForTurn(tabState, turn, ctx);
+    const runtime = await getOrCreateTopicRuntimeForTurn(workspaceState, turn, ctx);
     if (runtime) return runtime;
     if (!getTopicBindingConfig()?.autoCreate) {
       await sendTurnTextReply(
         turn,
         isForumNativeMode()
           ? "No workspace is bound to this Telegram topic."
-          : "No tab is bound to this Telegram topic.",
+          : "No workspace is bound to this Telegram topic.",
       );
     }
     return undefined;
   };
-  const upsertTelegramTopicTabRecord = async (
-    tabState: TelegramWorkspacesState,
+  const upsertTelegramTopicWorkspaceRecord = async (
+    workspaceState: TelegramWorkspacesState,
     scope: { chatId: number; messageThreadId: number; topicTitle?: string },
     ctx: TContext,
     options: { enforceCapacity: boolean },
   ): Promise<TelegramWorkspaceRecord | undefined> => {
     const existing = findTelegramWorkspaceByTopic(
-      tabState.tabs,
+      workspaceState.workspaces,
       scope.chatId,
       scope.messageThreadId,
     );
@@ -3519,18 +3502,18 @@ export function createTelegramTabManager<TContext>(
     }
     if (
       options.enforceCapacity &&
-      Object.keys(tabState.tabs).length >= deps.getConfig().maxTabs
+      Object.keys(workspaceState.workspaces).length >= deps.getConfig().maxWorkspaces
     ) {
       return undefined;
     }
-    const record = createTelegramTopicTabRecord(tabState, scope, ctx);
-    tabState.tabs[record.name] = record;
+    const record = createTelegramTopicWorkspaceRecord(workspaceState, scope, ctx);
+    workspaceState.workspaces[record.name] = record;
     workspaceRuntimes.set(record.name, createWorkspaceRuntime(record));
     await persist();
     return record;
   };
   const resolveScopedTopicRuntime = async (
-    tabState: TelegramWorkspacesState,
+    workspaceState: TelegramWorkspacesState,
     ctx: TContext,
   ): Promise<{ scoped: boolean; runtime?: WorkspaceRuntime }> => {
     if (!isTopicBindingEnabled()) return { scoped: false };
@@ -3544,30 +3527,30 @@ export function createTelegramTabManager<TContext>(
       return {
         scoped: true,
         runtime: topicBinding?.generalIsDefault
-          ? getWorkspaceRuntime(tabState, TELEGRAM_DEFAULT_WORKSPACE_NAME)
+          ? getWorkspaceRuntime(workspaceState, TELEGRAM_DEFAULT_WORKSPACE_NAME)
           : undefined,
       };
     }
     const existing = findTelegramWorkspaceByTopic(
-      tabState.tabs,
+      workspaceState.workspaces,
       scope.chatId,
       scope.messageThreadId,
     );
-    if (existing) return { scoped: true, runtime: getWorkspaceRuntime(tabState, existing.name) };
+    if (existing) return { scoped: true, runtime: getWorkspaceRuntime(workspaceState, existing.name) };
     if (!topicBinding?.autoCreate) return { scoped: true };
-    const record = await upsertTelegramTopicTabRecord(
-      tabState,
+    const record = await upsertTelegramTopicWorkspaceRecord(
+      workspaceState,
       { chatId: scope.chatId, messageThreadId: scope.messageThreadId },
       ctx,
       { enforceCapacity: true },
     );
     return {
       scoped: true,
-      runtime: record ? getWorkspaceRuntime(tabState, record.name) : undefined,
+      runtime: record ? getWorkspaceRuntime(workspaceState, record.name) : undefined,
     };
   };
   const resolveScopedTopicRuntimeSync = (
-    tabState: TelegramWorkspacesState,
+    workspaceState: TelegramWorkspacesState,
     ctx: TContext,
   ): { scoped: boolean; runtime?: WorkspaceRuntime } => {
     if (!isTopicBindingEnabled()) return { scoped: false };
@@ -3581,40 +3564,40 @@ export function createTelegramTabManager<TContext>(
       return {
         scoped: true,
         runtime: topicBinding?.generalIsDefault
-          ? getWorkspaceRuntime(tabState, TELEGRAM_DEFAULT_WORKSPACE_NAME)
+          ? getWorkspaceRuntime(workspaceState, TELEGRAM_DEFAULT_WORKSPACE_NAME)
           : undefined,
       };
     }
     const existing = findTelegramWorkspaceByTopic(
-      tabState.tabs,
+      workspaceState.workspaces,
       scope.chatId,
       scope.messageThreadId,
     );
-    if (existing) return { scoped: true, runtime: getWorkspaceRuntime(tabState, existing.name) };
+    if (existing) return { scoped: true, runtime: getWorkspaceRuntime(workspaceState, existing.name) };
     if (!topicBinding?.autoCreate) return { scoped: true };
-    if (Object.keys(tabState.tabs).length >= deps.getConfig().maxTabs) {
+    if (Object.keys(workspaceState.workspaces).length >= deps.getConfig().maxWorkspaces) {
       return { scoped: true };
     }
-    const record = createTelegramTopicTabRecord(
-      tabState,
+    const record = createTelegramTopicWorkspaceRecord(
+      workspaceState,
       { chatId: scope.chatId, messageThreadId: scope.messageThreadId },
       ctx,
     );
-    tabState.tabs[record.name] = record;
+    workspaceState.workspaces[record.name] = record;
     const runtime = createWorkspaceRuntime(record);
     workspaceRuntimes.set(record.name, runtime);
     void persist();
     return { scoped: true, runtime };
   };
   const getActiveRuntime = async (ctx: TContext): Promise<WorkspaceRuntime | undefined> => {
-    const tabState = await ensureState(deps.getCwd(ctx));
-    const scoped = await resolveScopedTopicRuntime(tabState, ctx);
-    return scoped.scoped ? scoped.runtime : getWorkspaceRuntime(tabState, tabState.activeTab);
+    const workspaceState = await ensureState(deps.getCwd(ctx));
+    const scoped = await resolveScopedTopicRuntime(workspaceState, ctx);
+    return scoped.scoped ? scoped.runtime : getWorkspaceRuntime(workspaceState, workspaceState.activeWorkspace);
   };
   const getActiveRuntimeSync = (ctx: TContext): WorkspaceRuntime | undefined => {
-    const tabState = ensureStateSync(deps.getCwd(ctx));
-    const scoped = resolveScopedTopicRuntimeSync(tabState, ctx);
-    return scoped.scoped ? scoped.runtime : getWorkspaceRuntime(tabState, tabState.activeTab);
+    const workspaceState = ensureStateSync(deps.getCwd(ctx));
+    const scoped = resolveScopedTopicRuntimeSync(workspaceState, ctx);
+    return scoped.scoped ? scoped.runtime : getWorkspaceRuntime(workspaceState, workspaceState.activeWorkspace);
   };
   const replyDisabled = (
     chatId: number,
@@ -3623,9 +3606,9 @@ export function createTelegramTabManager<TContext>(
     deps.sendTextReply(
       chatId,
       replyToMessageId,
-      "Concurrent tabs are disabled. Set concurrentTabs.enabled to true in telegram.json to use /tab.",
+      "Concurrent workspaces are disabled. Set concurrentWorkspaces.enabled to true in telegram.json to use /workspace.",
     );
-  const getUnreadByTab = (): Record<string, number> =>
+  const getUnreadByWorkspace = (): Record<string, number> =>
     Object.fromEntries(
       [...workspaceRuntimes.entries()].map(([name, runtime]) => [
         name,
@@ -3634,17 +3617,17 @@ export function createTelegramTabManager<TContext>(
     );
   const getDashboardWorkerState = (
     runtime: WorkspaceRuntime | undefined,
-  ): TelegramTabDashboardWorkerState => {
+  ): TelegramWorkspaceDashboardWorkerState => {
     if (!hasLiveWorker(runtime)) return "not-started";
     return runtime?.record.status === "running" || runtime?.record.status === "starting"
       ? "running"
       : "idle";
   };
-  const getDashboardWorkerStateByTab = (
-    tabState: TelegramWorkspacesState,
-  ): Record<string, TelegramTabDashboardWorkerState> =>
+  const getDashboardWorkerStateByWorkspace = (
+    workspaceState: TelegramWorkspacesState,
+  ): Record<string, TelegramWorkspaceDashboardWorkerState> =>
     Object.fromEntries(
-      Object.keys(tabState.tabs).map((name) => [
+      Object.keys(workspaceState.workspaces).map((name) => [
         name,
         getDashboardWorkerState(workspaceRuntimes.get(name)),
       ]),
@@ -3656,33 +3639,33 @@ export function createTelegramTabManager<TContext>(
     deps.sendTextReply(
       chatId,
       replyToMessageId,
-      TELEGRAM_FORUM_NATIVE_TAB_LIFECYCLE_DISABLED_MESSAGE,
+      TELEGRAM_FORUM_NATIVE_WORKSPACE_LIFECYCLE_DISABLED_MESSAGE,
     );
-  const sendTabDashboard = async (
-    tabState: TelegramWorkspacesState,
+  const sendWorkspaceDashboard = async (
+    workspaceState: TelegramWorkspacesState,
     chatId: number,
     replyToMessageId: number,
     filters: readonly string[] = [],
   ): Promise<void> => {
-    await refreshDashboardTabRecords(tabState);
-    const unreadByTab = getUnreadByTab();
-    const workerStateByTab = getDashboardWorkerStateByTab(tabState);
+    await refreshDashboardWorkspaceRecords(workspaceState);
+    const unreadByWorkspace = getUnreadByWorkspace();
+    const workerStateByWorkspace = getDashboardWorkerStateByWorkspace(workspaceState);
     const forumNativeMode = isForumNativeMode();
     const filterResult = filterTelegramWorkspaceRecords(
-      getSortedTelegramWorkspaceRecords(tabState),
+      getSortedTelegramWorkspaceRecords(workspaceState),
       filters,
     );
-    const visibleTabs = filterResult.trace.length > 0
+    const visibleWorkspaces = filterResult.trace.length > 0
       ? filterResult.workspaces
       : undefined;
     if (!deps.sendInteractiveMessage) {
       await deps.sendTextReply(
         chatId,
         replyToMessageId,
-        formatTelegramWorkspaceList(tabState, unreadByTab, now(), {
-          workspaces: visibleTabs,
-          title: "Tabs",
-          emptyText: "No tabs match filters.",
+        formatTelegramWorkspaceList(workspaceState, unreadByWorkspace, now(), {
+          workspaces: visibleWorkspaces,
+          title: "Workspaces",
+          emptyText: "No workspaces match filters.",
           filterTrace: filterResult.trace,
         }),
       );
@@ -3690,26 +3673,26 @@ export function createTelegramTabManager<TContext>(
     }
     const messageId = await deps.sendInteractiveMessage(
       chatId,
-      formatTelegramTabDashboardSummary(
-        tabState,
-        unreadByTab,
-        deps.getConfig().maxTabs,
+      formatTelegramWorkspaceDashboardSummary(
+        workspaceState,
+        unreadByWorkspace,
+        deps.getConfig().maxWorkspaces,
         now(),
         "open",
         [],
-        visibleTabs,
+        visibleWorkspaces,
         filterResult.trace,
         forumNativeMode,
         { live: getLiveWorkerCount(), max: getConfiguredMaxWorkers() },
-        workerStateByTab,
+        workerStateByWorkspace,
       ),
       "plain",
-      buildTelegramTabDashboardReplyMarkup(
-        tabState,
-        unreadByTab,
+      buildTelegramWorkspaceDashboardReplyMarkup(
+        workspaceState,
+        unreadByWorkspace,
         "open",
         [],
-        visibleTabs,
+        visibleWorkspaces,
         forumNativeMode,
       ),
     );
@@ -3718,53 +3701,53 @@ export function createTelegramTabManager<TContext>(
         chatId,
         messageId,
         mode: "open",
-        selectedCloseTabs: [],
+        selectedCloseWorkspaces: [],
         updatedAt: now(),
       });
     }
   };
-  const editTabDashboard = async (
-    tabState: TelegramWorkspacesState,
+  const editWorkspaceDashboard = async (
+    workspaceState: TelegramWorkspacesState,
     chatId: number,
     messageId: number,
     options: {
-      mode?: TelegramTabDashboardMode;
-      selectedCloseTabs?: readonly string[];
+      mode?: TelegramWorkspaceDashboardMode;
+      selectedCloseWorkspaces?: readonly string[];
     } = {},
   ): Promise<void> => {
-    await refreshDashboardTabRecords(tabState);
-    const unreadByTab = getUnreadByTab();
-    const workerStateByTab = getDashboardWorkerStateByTab(tabState);
+    await refreshDashboardWorkspaceRecords(workspaceState);
+    const unreadByWorkspace = getUnreadByWorkspace();
+    const workerStateByWorkspace = getDashboardWorkerStateByWorkspace(workspaceState);
     const existingState = getDashboardState(messageId);
     const forumNativeMode = isForumNativeMode();
     const mode = forumNativeMode ? "open" : options.mode ?? existingState?.mode ?? "open";
-    const selectedCloseTabs = normalizeTelegramTabCloseSelection(
-      tabState,
-      options.selectedCloseTabs ?? existingState?.selectedCloseTabs ?? [],
+    const selectedCloseWorkspaces = normalizeTelegramWorkspaceCloseSelection(
+      workspaceState,
+      options.selectedCloseWorkspaces ?? existingState?.selectedCloseWorkspaces ?? [],
     );
     if (!deps.editInteractiveMessage) return;
     await deps.editInteractiveMessage(
       chatId,
       messageId,
-      formatTelegramTabDashboardSummary(
-        tabState,
-        unreadByTab,
-        deps.getConfig().maxTabs,
+      formatTelegramWorkspaceDashboardSummary(
+        workspaceState,
+        unreadByWorkspace,
+        deps.getConfig().maxWorkspaces,
         now(),
         mode,
-        selectedCloseTabs,
+        selectedCloseWorkspaces,
         undefined,
         [],
         forumNativeMode,
         { live: getLiveWorkerCount(), max: getConfiguredMaxWorkers() },
-        workerStateByTab,
+        workerStateByWorkspace,
       ),
       "plain",
-      buildTelegramTabDashboardReplyMarkup(
-        tabState,
-        unreadByTab,
+      buildTelegramWorkspaceDashboardReplyMarkup(
+        workspaceState,
+        unreadByWorkspace,
         mode,
-        selectedCloseTabs,
+        selectedCloseWorkspaces,
         undefined,
         forumNativeMode,
       ),
@@ -3773,11 +3756,11 @@ export function createTelegramTabManager<TContext>(
       chatId,
       messageId,
       mode,
-      selectedCloseTabs,
+      selectedCloseWorkspaces,
       updatedAt: now(),
     });
   };
-  const answerTabCallback = (
+  const answerWorkspaceCallback = (
     callbackQueryId: string,
     text?: string,
   ): Promise<void> =>
@@ -3785,53 +3768,53 @@ export function createTelegramTabManager<TContext>(
       ? deps.answerCallbackQuery(callbackQueryId, text)
       : Promise.resolve();
   const closeWorkspaceRuntime = async (
-    tabState: TelegramWorkspacesState,
+    workspaceState: TelegramWorkspacesState,
     name: string,
     force: boolean,
   ): Promise<{ closed: boolean; message: string }> => {
     if (name === TELEGRAM_DEFAULT_WORKSPACE_NAME) {
       return { closed: false, message: "Cannot close General." };
     }
-    const runtime = getWorkspaceRuntime(tabState, name);
+    const runtime = getWorkspaceRuntime(workspaceState, name);
     if (!runtime) {
-      return { closed: false, message: `Unknown tab: ${formatTelegramWorkspaceDisplayName(name)}` };
+      return { closed: false, message: `Unknown workspace: ${formatTelegramWorkspaceDisplayName(name)}` };
     }
     if (runtime.record.status === "running" && !force) {
       return {
         closed: false,
-        message: `Tab ${formatTelegramWorkspaceDisplayName(name)} is running. Use /tab close ${formatTelegramWorkspaceDisplayName(name)} --force to close it.`,
+        message: `Workspace ${formatTelegramWorkspaceDisplayName(name)} is running. Use /workspace close ${formatTelegramWorkspaceDisplayName(name)} --force to close it.`,
       };
     }
     await disposeClosingRuntimeBackend(runtime);
     workspaceRuntimes.delete(name);
-    delete tabState.tabs[name];
-    if (tabState.activeTab === name) tabState.activeTab = TELEGRAM_DEFAULT_WORKSPACE_NAME;
-    return { closed: true, message: `Closed tab ${formatTelegramWorkspaceDisplayName(name)}.` };
+    delete workspaceState.workspaces[name];
+    if (workspaceState.activeWorkspace === name) workspaceState.activeWorkspace = TELEGRAM_DEFAULT_WORKSPACE_NAME;
+    return { closed: true, message: `Closed workspace ${formatTelegramWorkspaceDisplayName(name)}.` };
   };
   const commandHandlers = {
     list: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       chatId: number,
       replyToMessageId: number,
     ) => {
-      await sendTabDashboard(tabState, chatId, replyToMessageId);
+      await sendWorkspaceDashboard(workspaceState, chatId, replyToMessageId);
     },
     query: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       query: string,
       filters: readonly string[],
       chatId: number,
       replyToMessageId: number,
     ) => {
       const name = normalizeTelegramWorkspaceName(query);
-      if (!isForumNativeMode() && getWorkspaceRuntime(tabState, name)) {
-        await commandHandlers.switch(tabState, name, chatId, replyToMessageId);
+      if (!isForumNativeMode() && getWorkspaceRuntime(workspaceState, name)) {
+        await commandHandlers.switch(workspaceState, name, chatId, replyToMessageId);
         return;
       }
-      await sendTabDashboard(tabState, chatId, replyToMessageId, filters);
+      await sendWorkspaceDashboard(workspaceState, chatId, replyToMessageId, filters);
     },
     new: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       name: string,
       chatId: number,
       replyToMessageId: number,
@@ -3843,21 +3826,21 @@ export function createTelegramTabManager<TContext>(
         await deps.sendTextReply(chatId, replyToMessageId, validationError);
         return;
       }
-      if (tabState.tabs[name]) {
-        await deps.sendTextReply(chatId, replyToMessageId, `Tab ${formatTelegramWorkspaceDisplayName(name)} already exists.`);
+      if (workspaceState.workspaces[name]) {
+        await deps.sendTextReply(chatId, replyToMessageId, `Workspace ${formatTelegramWorkspaceDisplayName(name)} already exists.`);
         return;
       }
-      const conflict = findTelegramWorkspaceNameCaseConflict(tabState.tabs, name);
+      const conflict = findTelegramWorkspaceNameCaseConflict(workspaceState.workspaces, name);
       if (conflict) {
         await deps.sendTextReply(
           chatId,
           replyToMessageId,
-          `Tab ${conflict} already exists with different case.`,
+          `Workspace ${conflict} already exists with different case.`,
         );
         return;
       }
-      if (Object.keys(tabState.tabs).length >= deps.getConfig().maxTabs) {
-        await deps.sendTextReply(chatId, replyToMessageId, "Maximum tab count reached.");
+      if (Object.keys(workspaceState.workspaces).length >= deps.getConfig().maxWorkspaces) {
+        await deps.sendTextReply(chatId, replyToMessageId, "Maximum workspace count reached.");
         return;
       }
       const createdAt = now();
@@ -3868,10 +3851,10 @@ export function createTelegramTabManager<TContext>(
         lastUsedAt: createdAt,
         status: "idle",
       };
-      const previousRuntime = getWorkspaceRuntime(tabState, tabState.activeTab);
-      if (previousRuntime) stopTabTyping(previousRuntime);
-      tabState.tabs[name] = record;
-      tabState.activeTab = name;
+      const previousRuntime = getWorkspaceRuntime(workspaceState, workspaceState.activeWorkspace);
+      if (previousRuntime) stopWorkspaceTyping(previousRuntime);
+      workspaceState.workspaces[name] = record;
+      workspaceState.activeWorkspace = name;
       const runtime: WorkspaceRuntime = createWorkspaceRuntime(record);
       workspaceRuntimes.set(name, runtime);
       await persist();
@@ -3880,35 +3863,35 @@ export function createTelegramTabManager<TContext>(
         await deps.sendTextReply(
           chatId,
           replyToMessageId,
-          `Created and switched to tab ${formatTelegramWorkspaceDisplayName(name)}.`,
+          `Created and switched to workspace ${formatTelegramWorkspaceDisplayName(name)}.`,
         );
       } catch (error) {
-        deps.recordRuntimeEvent?.("tabs", error, { tab: name, action: "new" });
+        deps.recordRuntimeEvent?.("workspaces", error, { workspace: name, action: "new" });
         await deps.sendTextReply(
           chatId,
           replyToMessageId,
-          `Created tab ${formatTelegramWorkspaceDisplayName(name)}, but worker failed: ${getErrorMessage(error)}`,
+          `Created workspace ${formatTelegramWorkspaceDisplayName(name)}, but worker failed: ${getErrorMessage(error)}`,
         );
       }
     },
     switch: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       name: string,
       chatId: number,
       replyToMessageId: number,
     ) => {
-      const runtime = getWorkspaceRuntime(tabState, name);
+      const runtime = getWorkspaceRuntime(workspaceState, name);
       if (!runtime) {
-        await deps.sendTextReply(chatId, replyToMessageId, `Unknown tab: ${formatTelegramWorkspaceDisplayName(name)}`);
+        await deps.sendTextReply(chatId, replyToMessageId, `Unknown workspace: ${formatTelegramWorkspaceDisplayName(name)}`);
         return;
       }
-      const previousRuntime = getWorkspaceRuntime(tabState, tabState.activeTab);
-      if (previousRuntime && previousRuntime !== runtime) stopTabTyping(previousRuntime);
-      tabState.activeTab = name;
+      const previousRuntime = getWorkspaceRuntime(workspaceState, workspaceState.activeWorkspace);
+      if (previousRuntime && previousRuntime !== runtime) stopWorkspaceTyping(previousRuntime);
+      workspaceState.activeWorkspace = name;
       runtime.record.lastUsedAt = now();
       const shouldReplayUnread = runtime.unreadEvents > 0 && Boolean(deps.sendLastTurnsOnSwitch);
       runtime.unreadEvents = 0;
-      if (runtime.record.status === "running") startTabTyping(name, runtime);
+      if (runtime.record.status === "running") startWorkspaceTyping(name, runtime);
       await persist();
       const lastAssistantText = !shouldReplayUnread
         ? runtime.record.lastAssistantText
@@ -3918,47 +3901,47 @@ export function createTelegramTabManager<TContext>(
         await deps.sendMarkdownReply(
           chatId,
           replyToMessageId,
-          `Switched to tab ${formatTelegramWorkspaceDisplayName(name)}.\n\nLast reply:\n${lastAssistantText}`,
+          `Switched to workspace ${formatTelegramWorkspaceDisplayName(name)}.\n\nLast reply:\n${lastAssistantText}`,
         );
       } else {
         const latest = lastAssistantText
-          ? `\n\nLast reply:\n${truncateTelegramTabText(lastAssistantText)}`
+          ? `\n\nLast reply:\n${truncateTelegramWorkspaceText(lastAssistantText)}`
           : "";
         await deps.sendTextReply(
           chatId,
           replyToMessageId,
-          `Switched to tab ${formatTelegramWorkspaceDisplayName(name)}.${replayNote}${latest}`,
+          `Switched to workspace ${formatTelegramWorkspaceDisplayName(name)}.${replayNote}${latest}`,
         );
       }
       if (shouldReplayUnread && deps.sendLastTurnsOnSwitch) {
         await deps.sendLastTurnsOnSwitch(
-          getTelegramTabSessionReference(runtime.record),
+          getTelegramWorkspaceSessionReference(runtime.record),
           chatId,
           replyToMessageId,
         ).catch((error) => {
-          deps.recordRuntimeEvent?.("tabs", error, {
-            tab: runtime.record.name,
+          deps.recordRuntimeEvent?.("workspaces", error, {
+            workspace: runtime.record.name,
             action: "switch_replay",
           });
         });
       }
     },
     rename: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       oldName: string | undefined,
       newName: string,
       chatId: number,
       replyToMessageId: number,
     ) => {
       newName = normalizeTelegramWorkspaceName(newName);
-      const sourceName = oldName ? normalizeTelegramWorkspaceName(oldName) : tabState.activeTab;
+      const sourceName = oldName ? normalizeTelegramWorkspaceName(oldName) : workspaceState.activeWorkspace;
       if (sourceName === TELEGRAM_DEFAULT_WORKSPACE_NAME) {
         await deps.sendTextReply(chatId, replyToMessageId, "Cannot rename General.");
         return;
       }
-      const runtime = getWorkspaceRuntime(tabState, sourceName);
+      const runtime = getWorkspaceRuntime(workspaceState, sourceName);
       if (!runtime) {
-        await deps.sendTextReply(chatId, replyToMessageId, `Unknown tab: ${formatTelegramWorkspaceDisplayName(sourceName)}`);
+        await deps.sendTextReply(chatId, replyToMessageId, `Unknown workspace: ${formatTelegramWorkspaceDisplayName(sourceName)}`);
         return;
       }
       const validationError = validateTelegramWorkspaceName(newName);
@@ -3967,14 +3950,14 @@ export function createTelegramTabManager<TContext>(
         return;
       }
       if (newName === sourceName) {
-        await deps.sendTextReply(chatId, replyToMessageId, `Tab ${formatTelegramWorkspaceDisplayName(sourceName)} is already named ${formatTelegramWorkspaceDisplayName(newName)}.`);
+        await deps.sendTextReply(chatId, replyToMessageId, `Workspace ${formatTelegramWorkspaceDisplayName(sourceName)} is already named ${formatTelegramWorkspaceDisplayName(newName)}.`);
         return;
       }
-      if (tabState.tabs[newName]) {
-        await deps.sendTextReply(chatId, replyToMessageId, `Tab ${formatTelegramWorkspaceDisplayName(newName)} already exists.`);
+      if (workspaceState.workspaces[newName]) {
+        await deps.sendTextReply(chatId, replyToMessageId, `Workspace ${formatTelegramWorkspaceDisplayName(newName)} already exists.`);
         return;
       }
-      const conflict = Object.keys(tabState.tabs).find(
+      const conflict = Object.keys(workspaceState.workspaces).find(
         (existing) =>
           existing !== sourceName && existing.toLowerCase() === newName.toLowerCase(),
       );
@@ -3982,49 +3965,49 @@ export function createTelegramTabManager<TContext>(
         await deps.sendTextReply(
           chatId,
           replyToMessageId,
-          `Tab ${conflict} already exists with different case.`,
+          `Workspace ${conflict} already exists with different case.`,
         );
         return;
       }
-      delete tabState.tabs[sourceName];
+      delete workspaceState.workspaces[sourceName];
       runtime.record.name = newName;
       runtime.record.lastUsedAt = now();
-      tabState.tabs[newName] = runtime.record;
-      if (tabState.activeTab === sourceName) tabState.activeTab = newName;
+      workspaceState.workspaces[newName] = runtime.record;
+      if (workspaceState.activeWorkspace === sourceName) workspaceState.activeWorkspace = newName;
       workspaceRuntimes.delete(sourceName);
       workspaceRuntimes.set(newName, runtime);
       await persist();
       await deps.sendTextReply(
         chatId,
         replyToMessageId,
-        `Renamed tab ${formatTelegramWorkspaceDisplayName(sourceName)} to ${formatTelegramWorkspaceDisplayName(newName)}.`,
+        `Renamed workspace ${formatTelegramWorkspaceDisplayName(sourceName)} to ${formatTelegramWorkspaceDisplayName(newName)}.`,
       );
     },
     close: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       name: string | undefined,
       force: boolean,
       chatId: number,
       replyToMessageId: number,
     ) => {
-      const targetName = name ?? tabState.activeTab;
-      const result = await closeWorkspaceRuntime(tabState, targetName, force);
+      const targetName = name ?? workspaceState.activeWorkspace;
+      const result = await closeWorkspaceRuntime(workspaceState, targetName, force);
       if (result.closed) await persist();
       await deps.sendTextReply(chatId, replyToMessageId, result.message);
     },
     status: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       name: string | undefined,
       chatId: number,
       replyToMessageId: number,
     ) => {
       if (!name) {
-        await commandHandlers.list(tabState, chatId, replyToMessageId);
+        await commandHandlers.list(workspaceState, chatId, replyToMessageId);
         return;
       }
-      const runtime = getWorkspaceRuntime(tabState, name);
+      const runtime = getWorkspaceRuntime(workspaceState, name);
       if (!runtime) {
-        await deps.sendTextReply(chatId, replyToMessageId, `Unknown tab: ${formatTelegramWorkspaceDisplayName(name)}`);
+        await deps.sendTextReply(chatId, replyToMessageId, `Unknown workspace: ${formatTelegramWorkspaceDisplayName(name)}`);
         return;
       }
       if (runtime.backend) {
@@ -4040,15 +4023,15 @@ export function createTelegramTabManager<TContext>(
       await deps.sendTextReply(
         chatId,
         replyToMessageId,
-        formatTelegramTabStatus(runtime.record, runtime.unreadEvents, now()),
+        formatTelegramWorkspaceStatus(runtime.record, runtime.unreadEvents, now()),
       );
     },
     abortRuntime: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       name: string | undefined,
-    ): Promise<TelegramTabAbortResult> => {
-      const targetName = name ?? tabState.activeTab;
-      const runtime = getWorkspaceRuntime(tabState, targetName);
+    ): Promise<TelegramWorkspaceAbortResult> => {
+      const targetName = name ?? workspaceState.activeWorkspace;
+      const runtime = getWorkspaceRuntime(workspaceState, targetName);
       if (runtime) {
         const droppedTurns = runtime.pendingCompactionTurns ?? [];
         runtime.pendingCompactionTurns = undefined;
@@ -4061,11 +4044,11 @@ export function createTelegramTabManager<TContext>(
       }
       if (!runtime?.backend) {
         return {
-          tabName: targetName,
+          workspaceName: targetName,
           aborted: false,
           message: runtime
             ? `No active worker for ${formatRuntimeUserScopeTarget(runtime)}.`
-            : `No active worker for tab ${formatTelegramWorkspaceDisplayName(targetName)}.`,
+            : `No active worker for workspace ${formatTelegramWorkspaceDisplayName(targetName)}.`,
         };
       }
       let abortError: unknown;
@@ -4073,21 +4056,21 @@ export function createTelegramTabManager<TContext>(
         await runtime.backend.abort();
       } catch (error) {
         abortError = error;
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: targetName,
+        deps.recordRuntimeEvent?.("workspaces", error, {
+          workspace: targetName,
           action: "abort",
         });
         await disposeRuntimeBackend(runtime).catch((disposeError) => {
-          deps.recordRuntimeEvent?.("tabs", disposeError, {
-            tab: targetName,
+          deps.recordRuntimeEvent?.("workspaces", disposeError, {
+            workspace: targetName,
             action: "abort_dispose",
           });
         });
       }
-      stopTabTyping(runtime);
-      await markActiveTabTextStreamAborted(runtime).catch((error) => {
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: targetName,
+      stopWorkspaceTyping(runtime);
+      await markActiveWorkspaceTextStreamAborted(runtime).catch((error) => {
+        deps.recordRuntimeEvent?.("workspaces", error, {
+          workspace: targetName,
           action: "stream_abort_mark",
           turnId: runtime.activeTurnId,
         });
@@ -4096,7 +4079,7 @@ export function createTelegramTabManager<TContext>(
       runtime.record.lastError = undefined;
       await persist();
       return {
-        tabName: targetName,
+        workspaceName: targetName,
         aborted: true,
         message: abortError
           ? `Aborted ${formatRuntimeUserScopeTarget(runtime)} after worker stopped responding.`
@@ -4104,23 +4087,23 @@ export function createTelegramTabManager<TContext>(
       };
     },
     abort: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       name: string | undefined,
       chatId: number,
       replyToMessageId: number,
     ) => {
-      const result = await commandHandlers.abortRuntime(tabState, name);
+      const result = await commandHandlers.abortRuntime(workspaceState, name);
       await deps.sendTextReply(chatId, replyToMessageId, result.message);
     },
     syncNames: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       chatId: number,
       replyToMessageId: number,
     ) => {
       let changed = 0;
-      for (const record of Object.values(tabState.tabs)) {
+      for (const record of Object.values(workspaceState.workspaces)) {
         if (record.source?.kind !== "telegram-topic") continue;
-        const runtime = getWorkspaceRuntime(tabState, record.name);
+        const runtime = getWorkspaceRuntime(workspaceState, record.name);
         if (!runtime) continue;
         const didSync = await syncTopicSessionNameToWorker(runtime, {
           forceWorker: true,
@@ -4135,32 +4118,32 @@ export function createTelegramTabManager<TContext>(
       );
     },
     restart: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       name: string,
       chatId: number,
       replyToMessageId: number,
       ctx: TContext,
     ) => {
-      const runtime = getWorkspaceRuntime(tabState, name);
+      const runtime = getWorkspaceRuntime(workspaceState, name);
       if (!runtime) {
-        await deps.sendTextReply(chatId, replyToMessageId, `Unknown tab: ${formatTelegramWorkspaceDisplayName(name)}`);
+        await deps.sendTextReply(chatId, replyToMessageId, `Unknown workspace: ${formatTelegramWorkspaceDisplayName(name)}`);
         return;
       }
       await disposeRuntimeBackend(runtime);
       try {
         await ensureBackend(runtime, ctx);
-        await deps.sendTextReply(chatId, replyToMessageId, `Restarted tab ${formatTelegramWorkspaceDisplayName(name)}.`);
+        await deps.sendTextReply(chatId, replyToMessageId, `Restarted workspace ${formatTelegramWorkspaceDisplayName(name)}.`);
       } catch (error) {
-        deps.recordRuntimeEvent?.("tabs", error, { tab: name, action: "restart" });
+        deps.recordRuntimeEvent?.("workspaces", error, { workspace: name, action: "restart" });
         await deps.sendTextReply(
           chatId,
           replyToMessageId,
-          `Tab ${formatTelegramWorkspaceDisplayName(name)} restart failed: ${getErrorMessage(error)}`,
+          `Workspace ${formatTelegramWorkspaceDisplayName(name)} restart failed: ${getErrorMessage(error)}`,
         );
       }
     },
     topicOrphans: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       chatId: number,
       replyToMessageId: number,
     ) => {
@@ -4171,9 +4154,9 @@ export function createTelegramTabManager<TContext>(
       }> = [];
       const errored: TelegramWorkspaceRecord[] = [];
       const suspected: TelegramWorkspaceRecord[] = [];
-      for (const record of getSortedTelegramWorkspaceRecords(tabState)) {
+      for (const record of getSortedTelegramWorkspaceRecords(workspaceState)) {
         if (record.source?.kind !== "telegram-topic") continue;
-        const runtime = getWorkspaceRuntime(tabState, record.name);
+        const runtime = getWorkspaceRuntime(workspaceState, record.name);
         const proof = proofs.find((item) =>
           isSameTelegramTopicOrphanTarget(item, record.source!)
         );
@@ -4193,14 +4176,14 @@ export function createTelegramTabManager<TContext>(
           `Proven orphans: ${provenOrphans.length}`,
           ...(provenOrphans.length > 0
             ? provenOrphans.map(({ record, proof }) =>
-                formatTelegramTabOrphanDetail(record, proof)
+                formatTelegramWorkspaceOrphanDetail(record, proof)
               )
             : ["- none"]),
           "",
           `Errored topic records: ${errored.length}`,
           ...(errored.length > 0
             ? errored.slice(0, 10).map((record) =>
-                formatTelegramTabOrphanDetail(record)
+                formatTelegramWorkspaceOrphanDetail(record)
               )
             : ["- none"]),
           ...(errored.length > 10
@@ -4210,7 +4193,7 @@ export function createTelegramTabManager<TContext>(
           `Suspected topic records without workers: ${suspected.length}`,
           ...(suspected.length > 0
             ? suspected.slice(0, 10).map((record) =>
-                formatTelegramTabOrphanDetail(record)
+                formatTelegramWorkspaceOrphanDetail(record)
               )
             : ["- none"]),
           ...(suspected.length > 10
@@ -4220,12 +4203,12 @@ export function createTelegramTabManager<TContext>(
       );
     },
     topicCleanup: async (
-      tabState: TelegramWorkspacesState,
+      workspaceState: TelegramWorkspacesState,
       chatId: number,
       replyToMessageId: number,
     ) => {
       const proofs = deps.topicOrphanProofStore?.getProofs() ?? [];
-      const provenOrphans = getSortedTelegramWorkspaceRecords(tabState).filter(
+      const provenOrphans = getSortedTelegramWorkspaceRecords(workspaceState).filter(
         (record) =>
           record.source?.kind === "telegram-topic" &&
           proofs.some((proof) =>
@@ -4241,10 +4224,10 @@ export function createTelegramTabManager<TContext>(
         return;
       }
       for (const record of provenOrphans) {
-        const runtime = getWorkspaceRuntime(tabState, record.name);
+        const runtime = getWorkspaceRuntime(workspaceState, record.name);
         if (runtime) await disposeClosingRuntimeBackend(runtime);
         workspaceRuntimes.delete(record.name);
-        delete tabState.tabs[record.name];
+        delete workspaceState.workspaces[record.name];
         if (record.source?.kind === "telegram-topic") {
           deps.topicOrphanProofStore?.clearProofsFor(
             record.source.chatId,
@@ -4252,18 +4235,18 @@ export function createTelegramTabManager<TContext>(
           );
         }
       }
-      if (!tabState.tabs[tabState.activeTab]) {
-        tabState.activeTab = TELEGRAM_DEFAULT_WORKSPACE_NAME;
+      if (!workspaceState.workspaces[workspaceState.activeWorkspace]) {
+        workspaceState.activeWorkspace = TELEGRAM_DEFAULT_WORKSPACE_NAME;
       }
       deps.debugLogger?.log("telegram.topic.orphan.cleanup", {
         count: provenOrphans.length,
         records: provenOrphans.map((record) => ({
-          tab: record.name,
+          workspace: record.name,
           chatId: record.source?.chatId,
           messageThreadId: record.source?.messageThreadId,
         })),
       });
-      deps.recordRuntimeEvent?.("tabs", "topic orphan cleanup", {
+      deps.recordRuntimeEvent?.("workspaces", "topic orphan cleanup", {
         action: "topic_cleanup",
         count: provenOrphans.length,
       });
@@ -4277,13 +4260,13 @@ export function createTelegramTabManager<TContext>(
   };
   const deliverPromptTurn = async (
     runtime: WorkspaceRuntime,
-    turn: TelegramTabPromptTurn,
+    turn: TelegramWorkspacePromptTurn,
     ctx: TContext,
     options: { wasRunning: boolean; replyOnSuccess?: boolean },
   ): Promise<void> => {
     const { wasRunning } = options;
     const replyOnSuccess = options.replyOnSuccess ?? true;
-    const promptText = buildTelegramTabPromptText(turn);
+    const promptText = buildTelegramWorkspacePromptText(turn);
     if (!promptText) return;
     const promptNow = now();
     runtime.activeChatId = turn.chatId;
@@ -4293,7 +4276,7 @@ export function createTelegramTabManager<TContext>(
       (turn.messageThreadId !== undefined ||
         runtime.record.name === TELEGRAM_DEFAULT_WORKSPACE_NAME ||
         runtime.record.source?.kind === "telegram-topic");
-    runtime.activeTurnId = `tab:${runtime.record.name}:${turn.chatId}:${turn.messageThreadId ?? "general"}:${turn.replyToMessageId}:${promptNow}`;
+    runtime.activeTurnId = `workspace:${runtime.record.name}:${turn.chatId}:${turn.messageThreadId ?? "general"}:${turn.replyToMessageId}:${promptNow}`;
     runtime.promptStartedAt = promptNow;
     runtime.promptSentAt = undefined;
     runtime.agentStartedAt = undefined;
@@ -4303,12 +4286,12 @@ export function createTelegramTabManager<TContext>(
     runtime.record.lastMessageText = promptText;
     runtime.record.lastMessageAt = promptNow;
     await persist();
-    startTabTyping(runtime.record.name, runtime);
+    startWorkspaceTyping(runtime.record.name, runtime);
     try {
       deps.debugLogger?.log(
-        "telegram.tab.prompt.start",
+        "telegram.workspace.prompt.start",
         {
-          ...getTabTurnDetails(runtime.record.name, runtime),
+          ...getWorkspaceTurnDetails(runtime.record.name, runtime),
           wasRunning,
         },
         promptText,
@@ -4321,8 +4304,8 @@ export function createTelegramTabManager<TContext>(
         await backend.prompt(promptText);
       }
       runtime.promptSentAt = now();
-      deps.debugLogger?.log("telegram.tab.prompt.sent", {
-        ...getTabTurnDetails(runtime.record.name, runtime),
+      deps.debugLogger?.log("telegram.workspace.prompt.sent", {
+        ...getWorkspaceTurnDetails(runtime.record.name, runtime),
         elapsedMs: Date.now() - promptStartedAt,
         wasRunning,
       });
@@ -4337,21 +4320,21 @@ export function createTelegramTabManager<TContext>(
         );
       }
     } catch (error) {
-      deps.debugLogger?.log("telegram.tab.prompt.error", {
-        ...getTabTurnDetails(runtime.record.name, runtime),
+      deps.debugLogger?.log("telegram.workspace.prompt.error", {
+        ...getWorkspaceTurnDetails(runtime.record.name, runtime),
         error: error instanceof Error ? error.message : String(error),
       });
-      logTabTurnSummary(
+      logWorkspaceTurnSummary(
         runtime.record.name,
         runtime,
         "error",
         error instanceof Error ? error.message : String(error),
       );
-      stopTabTyping(runtime);
+      stopWorkspaceTyping(runtime);
       runtime.record.status = "error";
       runtime.record.lastError = getErrorMessage(error);
-      deps.recordRuntimeEvent?.("tabs", error, {
-        tab: runtime.record.name,
+      deps.recordRuntimeEvent?.("workspaces", error, {
+        workspace: runtime.record.name,
         action: "prompt",
       });
       await persist();
@@ -4400,7 +4383,7 @@ export function createTelegramTabManager<TContext>(
       if (!isEnabled()) return undefined;
       const runtime = getActiveRuntimeSync(ctx);
       if (!runtime) return undefined;
-      return getTelegramTabSessionReference(runtime.record, deps.getCwd(ctx));
+      return getTelegramWorkspaceSessionReference(runtime.record, deps.getCwd(ctx));
     },
     getActiveResumeSessionScope: (ctx) => {
       if (!isEnabled()) return undefined;
@@ -4408,8 +4391,8 @@ export function createTelegramTabManager<TContext>(
       if (!runtime) return undefined;
       const cwd = runtime.record.cwd || deps.getCwd(ctx);
       return {
-        kind: "tab",
-        tabName: runtime.record.name,
+        kind: "workspace",
+        workspaceName: runtime.record.name,
         cwd,
         sessionDir: deps.getSessionDir?.(ctx) ?? configuredSessionDir,
         currentSessionFile: runtime.record.sessionFile,
@@ -4425,14 +4408,14 @@ export function createTelegramTabManager<TContext>(
       const runtime = await getActiveRuntime(ctx);
       if (!runtime) return false;
       await refreshRuntimeState(runtime);
-      return canSwitchTelegramTabModel(runtime.record);
+      return canSwitchTelegramWorkspaceModel(runtime.record);
     },
     selectActiveModel: async (model, ctx) => {
       if (!isEnabled()) return false;
       const runtime = await getActiveRuntime(ctx);
       if (!runtime) return false;
       await refreshRuntimeState(runtime);
-      if (!canSwitchTelegramTabModel(runtime.record)) return false;
+      if (!canSwitchTelegramWorkspaceModel(runtime.record)) return false;
       try {
         const backend = await ensureBackend(runtime, ctx);
         await backend.setModel(model.provider, model.id);
@@ -4445,8 +4428,8 @@ export function createTelegramTabManager<TContext>(
       } catch (error) {
         runtime.record.status = "error";
         runtime.record.lastError = getErrorMessage(error);
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: runtime.record.name,
+        deps.recordRuntimeEvent?.("workspaces", error, {
+          workspace: runtime.record.name,
           action: "set_model",
         });
         await persist();
@@ -4458,7 +4441,7 @@ export function createTelegramTabManager<TContext>(
       const runtime = await getActiveRuntime(ctx);
       if (!runtime) return undefined;
       await refreshRuntimeState(runtime);
-      if (!canSwitchTelegramTabModel(runtime.record)) return undefined;
+      if (!canSwitchTelegramWorkspaceModel(runtime.record)) return undefined;
       try {
         const backend = await ensureBackend(runtime, ctx);
         await backend.setThinkingLevel(level);
@@ -4474,8 +4457,8 @@ export function createTelegramTabManager<TContext>(
       } catch (error) {
         runtime.record.status = "error";
         runtime.record.lastError = getErrorMessage(error);
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: runtime.record.name,
+        deps.recordRuntimeEvent?.("workspaces", error, {
+          workspace: runtime.record.name,
           action: "set_thinking_level",
         });
         await persist();
@@ -4486,7 +4469,7 @@ export function createTelegramTabManager<TContext>(
       if (!isEnabled()) return false;
       const runtime = await getActiveRuntime(ctx);
       if (!runtime) return false;
-      const normalizedName = normalizeTelegramTabSessionName(name);
+      const normalizedName = normalizeTelegramWorkspaceSessionName(name);
       if (normalizedName === undefined) {
         delete runtime.record.sessionName;
       } else {
@@ -4506,8 +4489,8 @@ export function createTelegramTabManager<TContext>(
         }
         await persist();
       } catch (error) {
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: runtime.record.name,
+        deps.recordRuntimeEvent?.("workspaces", error, {
+          workspace: runtime.record.name,
           action: "set_session_name",
         });
       }
@@ -4544,8 +4527,8 @@ export function createTelegramTabManager<TContext>(
         } catch (error) {
           runtime.record.status = "error";
           runtime.record.lastError = getErrorMessage(error);
-          deps.recordRuntimeEvent?.("tabs", error, {
-            tab: runtime.record.name,
+          deps.recordRuntimeEvent?.("workspaces", error, {
+            workspace: runtime.record.name,
             action: "compact",
           });
           await persist();
@@ -4610,8 +4593,8 @@ export function createTelegramTabManager<TContext>(
       } catch (error) {
         runtime.record.status = "error";
         runtime.record.lastError = getErrorMessage(error);
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: runtime.record.name,
+        deps.recordRuntimeEvent?.("workspaces", error, {
+          workspace: runtime.record.name,
           action: "new_session",
         });
         await persist();
@@ -4620,14 +4603,14 @@ export function createTelegramTabManager<TContext>(
     },
     deleteActiveSession: async (expectedSessionPath, ctx) => {
       if (!isEnabled()) return undefined;
-      const tabState = await ensureState(deps.getCwd(ctx));
-      const scoped = await resolveScopedTopicRuntime(tabState, ctx);
+      const workspaceState = await ensureState(deps.getCwd(ctx));
+      const scoped = await resolveScopedTopicRuntime(workspaceState, ctx);
       const runtime = scoped.scoped
         ? scoped.runtime
-        : getWorkspaceRuntime(tabState, tabState.activeTab);
+        : getWorkspaceRuntime(workspaceState, workspaceState.activeWorkspace);
       if (!runtime) return undefined;
       await refreshRuntimeState(runtime);
-      if (!canSwitchTelegramTabModel(runtime.record)) {
+      if (!canSwitchTelegramWorkspaceModel(runtime.record)) {
         throw new Error(formatRuntimeStopFirstMessage(runtime));
       }
       const sessionPath = runtime.record.sessionFile;
@@ -4636,11 +4619,11 @@ export function createTelegramTabManager<TContext>(
       }
       if (
         expectedSessionPath &&
-        !isSameTelegramTabSessionFile(expectedSessionPath, sessionPath)
+        !isSameTelegramWorkspaceSessionFile(expectedSessionPath, sessionPath)
       ) {
         throw new Error("current session changed before deletion");
       }
-      await assertNoOpenSessionConflict(tabState, runtime, runtime.record);
+      await assertNoOpenSessionConflict(workspaceState, runtime, runtime.record);
       try {
         const backend = await ensureBackend(runtime, ctx);
         const result = await backend.newSession(sessionPath);
@@ -4651,7 +4634,7 @@ export function createTelegramTabManager<TContext>(
         applyRpcStateToRecord(runtime.record, childState);
         if (
           !runtime.record.sessionFile ||
-          isSameTelegramTabSessionFile(runtime.record.sessionFile, sessionPath)
+          isSameTelegramWorkspaceSessionFile(runtime.record.sessionFile, sessionPath)
         ) {
           throw new Error("new session did not replace current session");
         }
@@ -4668,8 +4651,8 @@ export function createTelegramTabManager<TContext>(
       } catch (error) {
         runtime.record.status = "error";
         runtime.record.lastError = getErrorMessage(error);
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: runtime.record.name,
+        deps.recordRuntimeEvent?.("workspaces", error, {
+          workspace: runtime.record.name,
           action: "delete_session",
         });
         await persist();
@@ -4678,8 +4661,8 @@ export function createTelegramTabManager<TContext>(
       try {
         await (deps.deleteSessionFile ?? unlink)(sessionPath);
       } catch (error) {
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: runtime.record.name,
+        deps.recordRuntimeEvent?.("workspaces", error, {
+          workspace: runtime.record.name,
           action: "delete_session_file",
         });
         throw error;
@@ -4688,24 +4671,24 @@ export function createTelegramTabManager<TContext>(
     },
     abortActive: async (ctx) => {
       if (!isEnabled()) return undefined;
-      const tabState = await ensureState(deps.getCwd(ctx));
-      const scoped = await resolveScopedTopicRuntime(tabState, ctx);
-      return commandHandlers.abortRuntime(tabState, scoped.runtime?.record.name);
+      const workspaceState = await ensureState(deps.getCwd(ctx));
+      const scoped = await resolveScopedTopicRuntime(workspaceState, ctx);
+      return commandHandlers.abortRuntime(workspaceState, scoped.runtime?.record.name);
     },
     switchSession: async (sessionPath, ctx, scope) => {
-      if (!isEnabled() || scope?.kind !== "tab" || !scope.tabName) {
+      if (!isEnabled() || scope?.kind !== "workspace" || !scope.workspaceName) {
         return false;
       }
-      const tabState = await ensureState(deps.getCwd(ctx));
-      const runtime = getWorkspaceRuntime(tabState, scope.tabName);
+      const workspaceState = await ensureState(deps.getCwd(ctx));
+      const runtime = getWorkspaceRuntime(workspaceState, scope.workspaceName);
       if (!runtime) {
-        throw new Error(`Unknown tab: ${formatTelegramWorkspaceDisplayName(scope.tabName)}`);
+        throw new Error(`Unknown workspace: ${formatTelegramWorkspaceDisplayName(scope.workspaceName)}`);
       }
       await refreshRuntimeState(runtime);
-      if (!canSwitchTelegramTabModel(runtime.record)) {
-        throw new Error(formatScopedTabBusyMessage(scope.tabName));
+      if (!canSwitchTelegramWorkspaceModel(runtime.record)) {
+        throw new Error(formatScopedWorkspaceBusyMessage(scope.workspaceName));
       }
-      await assertNoOpenSessionConflict(tabState, runtime, {
+      await assertNoOpenSessionConflict(workspaceState, runtime, {
         sessionFile: sessionPath,
       });
       try {
@@ -4718,7 +4701,7 @@ export function createTelegramTabManager<TContext>(
         if (topicSessionName) {
           await syncTopicSessionNameToWorker(runtime, { forceWorker: true });
         }
-        stopTabTyping(runtime);
+        stopWorkspaceTyping(runtime);
         resetRuntimeTurnBuffers(runtime);
         delete runtime.record.lastAssistantText;
         delete runtime.record.lastMessageText;
@@ -4726,15 +4709,15 @@ export function createTelegramTabManager<TContext>(
         runtime.record.sessionFile = sessionPath;
         runtime.record.lastError = undefined;
         const childState = await refreshRuntimeState(runtime);
-        if (!isSameTelegramTabSessionFile(childState?.sessionFile, sessionPath)) {
+        if (!isSameTelegramWorkspaceSessionFile(childState?.sessionFile, sessionPath)) {
           const reported = childState?.sessionFile ?? "(none)";
           deps.recordRuntimeEvent?.(
-            "tabs",
+            "workspaces",
             new Error(
               `RPC worker reported ${reported} after switch_session ${sessionPath}; restarting worker on target session.`,
             ),
             {
-              tab: runtime.record.name,
+              workspace: runtime.record.name,
               action: "switch_session_rebind",
             },
           );
@@ -4746,9 +4729,9 @@ export function createTelegramTabManager<TContext>(
           delete runtime.record.sessionName;
           await persist();
           await ensureBackend(runtime, ctx);
-          if (!isSameTelegramTabSessionFile(runtime.record.sessionFile, sessionPath)) {
+          if (!isSameTelegramWorkspaceSessionFile(runtime.record.sessionFile, sessionPath)) {
             throw new Error(
-              formatRuntimeSessionBindFailureMessage(scope.tabName, sessionPath),
+              formatRuntimeSessionBindFailureMessage(scope.workspaceName, sessionPath),
             );
           }
           const topicSessionNameAfterRestart = getTelegramTopicSessionName(
@@ -4770,8 +4753,8 @@ export function createTelegramTabManager<TContext>(
       } catch (error) {
         runtime.record.status = "error";
         runtime.record.lastError = getErrorMessage(error);
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: runtime.record.name,
+        deps.recordRuntimeEvent?.("workspaces", error, {
+          workspace: runtime.record.name,
           action: "switch_session",
         });
         await persist();
@@ -4783,7 +4766,7 @@ export function createTelegramTabManager<TContext>(
       const runtime = await getActiveRuntime(ctx);
       if (!runtime) return undefined;
       await refreshRuntimeState(runtime);
-      if (!canSwitchTelegramTabModel(runtime.record)) {
+      if (!canSwitchTelegramWorkspaceModel(runtime.record)) {
         throw new Error(formatRuntimeAbortFirstMessage(runtime));
       }
       try {
@@ -4791,7 +4774,7 @@ export function createTelegramTabManager<TContext>(
           throw new Error(formatRuntimeTreeBranchUnavailableMessage());
         }
         const result = await deps.createTreeBranch(
-          getTelegramTabSessionReference(runtime.record, deps.getCwd(ctx)),
+          getTelegramWorkspaceSessionReference(runtime.record, deps.getCwd(ctx)),
           entryId,
         );
         if (result.cancelled) return result;
@@ -4810,8 +4793,8 @@ export function createTelegramTabManager<TContext>(
       } catch (error) {
         runtime.record.status = "error";
         runtime.record.lastError = getErrorMessage(error);
-        deps.recordRuntimeEvent?.("tabs", error, {
-          tab: runtime.record.name,
+        deps.recordRuntimeEvent?.("workspaces", error, {
+          workspace: runtime.record.name,
           action: "create_tree_branch",
         });
         await persist();
@@ -4823,60 +4806,60 @@ export function createTelegramTabManager<TContext>(
         await replyDisabled(chatId, replyToMessageId);
         return true;
       }
-      const tabState = await ensureState(deps.getCwd(ctx));
-      const command = parseTelegramTabCommand(args);
+      const workspaceState = await ensureState(deps.getCwd(ctx));
+      const command = parseTelegramWorkspaceCommand(args);
       switch (command.kind) {
         case "list":
-          await commandHandlers.list(tabState, chatId, replyToMessageId);
+          await commandHandlers.list(workspaceState, chatId, replyToMessageId);
           return true;
         case "new":
           if (isForumNativeMode()) {
             await sendForumNativeLifecycleDisabledReply(chatId, replyToMessageId);
             return true;
           }
-          await commandHandlers.new(tabState, command.name, chatId, replyToMessageId, ctx);
+          await commandHandlers.new(workspaceState, command.name, chatId, replyToMessageId, ctx);
           return true;
         case "query":
-          await commandHandlers.query(tabState, command.query, command.filters, chatId, replyToMessageId);
+          await commandHandlers.query(workspaceState, command.query, command.filters, chatId, replyToMessageId);
           return true;
         case "switch":
           if (isForumNativeMode()) {
             await sendForumNativeLifecycleDisabledReply(chatId, replyToMessageId);
             return true;
           }
-          await commandHandlers.switch(tabState, command.name, chatId, replyToMessageId);
+          await commandHandlers.switch(workspaceState, command.name, chatId, replyToMessageId);
           return true;
         case "rename":
           if (isForumNativeMode()) {
             await sendForumNativeLifecycleDisabledReply(chatId, replyToMessageId);
             return true;
           }
-          await commandHandlers.rename(tabState, command.oldName, command.newName, chatId, replyToMessageId);
+          await commandHandlers.rename(workspaceState, command.oldName, command.newName, chatId, replyToMessageId);
           return true;
         case "syncNames":
-          await commandHandlers.syncNames(tabState, chatId, replyToMessageId);
+          await commandHandlers.syncNames(workspaceState, chatId, replyToMessageId);
           return true;
         case "close":
           if (isForumNativeMode()) {
             await sendForumNativeLifecycleDisabledReply(chatId, replyToMessageId);
             return true;
           }
-          await commandHandlers.close(tabState, command.name, command.force, chatId, replyToMessageId);
+          await commandHandlers.close(workspaceState, command.name, command.force, chatId, replyToMessageId);
           return true;
         case "status":
-          await commandHandlers.status(tabState, command.name, chatId, replyToMessageId);
+          await commandHandlers.status(workspaceState, command.name, chatId, replyToMessageId);
           return true;
         case "abort":
-          await commandHandlers.abort(tabState, command.name, chatId, replyToMessageId);
+          await commandHandlers.abort(workspaceState, command.name, chatId, replyToMessageId);
           return true;
         case "restart":
-          await commandHandlers.restart(tabState, command.name, chatId, replyToMessageId, ctx);
+          await commandHandlers.restart(workspaceState, command.name, chatId, replyToMessageId, ctx);
           return true;
         case "invalid":
           await deps.sendTextReply(chatId, replyToMessageId, command.message);
           return true;
         case "usage":
-          await deps.sendTextReply(chatId, replyToMessageId, formatTelegramTabUsage());
+          await deps.sendTextReply(chatId, replyToMessageId, formatTelegramWorkspaceUsage());
           return true;
       }
     },
@@ -4885,14 +4868,14 @@ export function createTelegramTabManager<TContext>(
         await replyDisabled(chatId, replyToMessageId);
         return true;
       }
-      const tabState = await ensureState(deps.getCwd(ctx));
+      const workspaceState = await ensureState(deps.getCwd(ctx));
       const cleanedArgs = args.trim().toLowerCase();
       if (!cleanedArgs || cleanedArgs === "orphans") {
-        await commandHandlers.topicOrphans(tabState, chatId, replyToMessageId);
+        await commandHandlers.topicOrphans(workspaceState, chatId, replyToMessageId);
         return true;
       }
       if (cleanedArgs === "cleanup") {
-        await commandHandlers.topicCleanup(tabState, chatId, replyToMessageId);
+        await commandHandlers.topicCleanup(workspaceState, chatId, replyToMessageId);
         return true;
       }
       await deps.sendTextReply(chatId, replyToMessageId, formatTelegramTopicRepairUsage());
@@ -4900,270 +4883,270 @@ export function createTelegramTabManager<TContext>(
     },
     handleCallbackQuery: async (query, ctx) => {
       const data = query.data;
-      if (!data?.startsWith("tab:")) return false;
+      if (!data?.startsWith("workspace:")) return false;
       if (!isEnabled()) {
-        await answerTabCallback(query.id, "Concurrent tabs are disabled.");
+        await answerWorkspaceCallback(query.id, "Concurrent workspaces are disabled.");
         return true;
       }
       const chatId = query.message?.chat?.id;
       const messageId = query.message?.message_id;
       if (typeof chatId !== "number" || typeof messageId !== "number") {
-        await answerTabCallback(query.id);
+        await answerWorkspaceCallback(query.id);
         return true;
       }
-      const tabState = await ensureState(deps.getCwd(ctx));
+      const workspaceState = await ensureState(deps.getCwd(ctx));
       const [, action, rawMode, rawName] = data.split(":");
       if (
         isForumNativeMode() &&
         (action === "switch" || action === "close" || action?.startsWith("close-"))
       ) {
-        await answerTabCallback(
+        await answerWorkspaceCallback(
           query.id,
-          TELEGRAM_FORUM_NATIVE_TAB_LIFECYCLE_DISABLED_MESSAGE,
+          TELEGRAM_FORUM_NATIVE_WORKSPACE_LIFECYCLE_DISABLED_MESSAGE,
         );
-        await editTabDashboard(tabState, chatId, messageId, {
+        await editWorkspaceDashboard(workspaceState, chatId, messageId, {
           mode: "open",
-          selectedCloseTabs: [],
+          selectedCloseWorkspaces: [],
         });
         return true;
       }
       if (action === "noop") {
-        const activeRuntime = getWorkspaceRuntime(tabState, tabState.activeTab);
-        await answerTabCallback(
+        const activeRuntime = getWorkspaceRuntime(workspaceState, workspaceState.activeWorkspace);
+        await answerWorkspaceCallback(
           query.id,
-          `Active tab: ${formatTelegramWorkspaceDisplayName(
-            activeRuntime?.record.name ?? tabState.activeTab,
+          `Active workspace: ${formatTelegramWorkspaceDisplayName(
+            activeRuntime?.record.name ?? workspaceState.activeWorkspace,
           )}`,
         );
         return true;
       }
       if (action === "refresh") {
-        await editTabDashboard(tabState, chatId, messageId, {
+        await editWorkspaceDashboard(workspaceState, chatId, messageId, {
           mode: "open",
-          selectedCloseTabs: [],
+          selectedCloseWorkspaces: [],
         });
-        await answerTabCallback(query.id, "Refreshed.");
+        await answerWorkspaceCallback(query.id, "Refreshed.");
         return true;
       }
       if (action === "close-manage") {
-        await editTabDashboard(tabState, chatId, messageId, {
+        await editWorkspaceDashboard(workspaceState, chatId, messageId, {
           mode: "close",
-          selectedCloseTabs: [],
+          selectedCloseWorkspaces: [],
         });
-        await answerTabCallback(query.id);
+        await answerWorkspaceCallback(query.id);
         return true;
       }
       if (action === "close-done") {
-        await editTabDashboard(tabState, chatId, messageId, {
+        await editWorkspaceDashboard(workspaceState, chatId, messageId, {
           mode: "open",
-          selectedCloseTabs: [],
+          selectedCloseWorkspaces: [],
         });
-        await answerTabCallback(query.id, "Done.");
+        await answerWorkspaceCallback(query.id, "Done.");
         return true;
       }
       if (action === "close-toggle") {
-        const name = decodeTelegramTabCallbackName(rawMode);
-        if (!name || !tabState.tabs[name] || name === TELEGRAM_DEFAULT_WORKSPACE_NAME) {
-          await answerTabCallback(query.id, "Tab cannot be closed.");
-          await editTabDashboard(tabState, chatId, messageId, { mode: "close" });
+        const name = decodeTelegramWorkspaceCallbackName(rawMode);
+        if (!name || !workspaceState.workspaces[name] || name === TELEGRAM_DEFAULT_WORKSPACE_NAME) {
+          await answerWorkspaceCallback(query.id, "Workspace cannot be closed.");
+          await editWorkspaceDashboard(workspaceState, chatId, messageId, { mode: "close" });
           return true;
         }
         const dashboardState = getDashboardState(messageId);
         const selected = new Set(
-          normalizeTelegramTabCloseSelection(
-            tabState,
-            dashboardState?.selectedCloseTabs ?? [],
+          normalizeTelegramWorkspaceCloseSelection(
+            workspaceState,
+            dashboardState?.selectedCloseWorkspaces ?? [],
           ),
         );
         if (selected.has(name)) selected.delete(name);
         else selected.add(name);
-        await editTabDashboard(tabState, chatId, messageId, {
+        await editWorkspaceDashboard(workspaceState, chatId, messageId, {
           mode: "close",
-          selectedCloseTabs: [...selected],
+          selectedCloseWorkspaces: [...selected],
         });
-        await answerTabCallback(
+        await answerWorkspaceCallback(
           query.id,
           selected.has(name) ? "Selected." : "Unselected.",
         );
         return true;
       }
       if (action === "close-select-all") {
-        const selectedCloseTabs = getTelegramTabCloseableNames(tabState);
-        await editTabDashboard(tabState, chatId, messageId, {
+        const selectedCloseWorkspaces = getTelegramWorkspaceCloseableNames(workspaceState);
+        await editWorkspaceDashboard(workspaceState, chatId, messageId, {
           mode: "close",
-          selectedCloseTabs,
+          selectedCloseWorkspaces,
         });
-        await answerTabCallback(
+        await answerWorkspaceCallback(
           query.id,
-          selectedCloseTabs.length > 0 ? "All closeable tabs selected." : "No closeable tabs.",
+          selectedCloseWorkspaces.length > 0 ? "All closeable workspaces selected." : "No closeable workspaces.",
         );
         return true;
       }
       if (action === "close-clear") {
-        await editTabDashboard(tabState, chatId, messageId, {
+        await editWorkspaceDashboard(workspaceState, chatId, messageId, {
           mode: "close",
-          selectedCloseTabs: [],
+          selectedCloseWorkspaces: [],
         });
-        await answerTabCallback(query.id, "Selection cleared.");
+        await answerWorkspaceCallback(query.id, "Selection cleared.");
         return true;
       }
       if (action === "close-selected") {
         const dashboardState = getDashboardState(messageId);
-        const selectedCloseTabs = normalizeTelegramTabCloseSelection(
-          tabState,
-          dashboardState?.selectedCloseTabs ?? [],
+        const selectedCloseWorkspaces = normalizeTelegramWorkspaceCloseSelection(
+          workspaceState,
+          dashboardState?.selectedCloseWorkspaces ?? [],
         );
-        if (selectedCloseTabs.length === 0) {
-          await answerTabCallback(query.id, "No tabs selected.");
+        if (selectedCloseWorkspaces.length === 0) {
+          await answerWorkspaceCallback(query.id, "No workspaces selected.");
           return true;
         }
         await deps.editInteractiveMessage?.(
           chatId,
           messageId,
-          buildTelegramTabMultiCloseConfirmationText(tabState, selectedCloseTabs),
+          buildTelegramWorkspaceMultiCloseConfirmationText(workspaceState, selectedCloseWorkspaces),
           "plain",
-          buildTelegramTabMultiCloseConfirmationReplyMarkup(),
+          buildTelegramWorkspaceMultiCloseConfirmationReplyMarkup(),
         );
         setDashboardState({
           chatId,
           messageId,
           mode: "close",
-          selectedCloseTabs,
+          selectedCloseWorkspaces,
           updatedAt: now(),
         });
-        await answerTabCallback(query.id);
+        await answerWorkspaceCallback(query.id);
         return true;
       }
       if (action === "close-cancel") {
-        const selectedCloseTabs = normalizeTelegramTabCloseSelection(
-          tabState,
-          getDashboardState(messageId)?.selectedCloseTabs ?? [],
+        const selectedCloseWorkspaces = normalizeTelegramWorkspaceCloseSelection(
+          workspaceState,
+          getDashboardState(messageId)?.selectedCloseWorkspaces ?? [],
         );
-        await editTabDashboard(tabState, chatId, messageId, {
+        await editWorkspaceDashboard(workspaceState, chatId, messageId, {
           mode: "close",
-          selectedCloseTabs,
+          selectedCloseWorkspaces,
         });
-        await answerTabCallback(query.id, "Cancelled.");
+        await answerWorkspaceCallback(query.id, "Cancelled.");
         return true;
       }
       if (action === "close-confirm") {
-        const selectedCloseTabs = normalizeTelegramTabCloseSelection(
-          tabState,
-          getDashboardState(messageId)?.selectedCloseTabs ?? [],
+        const selectedCloseWorkspaces = normalizeTelegramWorkspaceCloseSelection(
+          workspaceState,
+          getDashboardState(messageId)?.selectedCloseWorkspaces ?? [],
         );
-        if (selectedCloseTabs.length === 0) {
-          await answerTabCallback(query.id, "No tabs selected.");
+        if (selectedCloseWorkspaces.length === 0) {
+          await answerWorkspaceCallback(query.id, "No workspaces selected.");
           return true;
         }
         const closedNames: string[] = [];
         const skippedMessages: string[] = [];
         try {
-          for (const name of selectedCloseTabs) {
-            const result = await closeWorkspaceRuntime(tabState, name, true);
+          for (const name of selectedCloseWorkspaces) {
+            const result = await closeWorkspaceRuntime(workspaceState, name, true);
             if (result.closed) closedNames.push(name);
             else skippedMessages.push(result.message);
           }
           if (closedNames.length > 0) await persist();
         } catch (error) {
-          await answerTabCallback(
+          await answerWorkspaceCallback(
             query.id,
             `Close failed: ${getErrorMessage(error)}`,
           );
           return true;
         }
-        await editTabDashboard(tabState, chatId, messageId, {
+        await editWorkspaceDashboard(workspaceState, chatId, messageId, {
           mode: "open",
-          selectedCloseTabs: [],
+          selectedCloseWorkspaces: [],
         });
         const skippedSuffix = skippedMessages.length > 0
           ? ` ${skippedMessages.length} skipped.`
           : "";
-        await answerTabCallback(
+        await answerWorkspaceCallback(
           query.id,
-          `${closedNames.length} tab${closedNames.length === 1 ? "" : "s"} closed.${skippedSuffix}`,
+          `${closedNames.length} workspace${closedNames.length === 1 ? "" : "s"} closed.${skippedSuffix}`,
         );
         return true;
       }
       if (action === "switch") {
-        const name = decodeTelegramTabCallbackName(rawMode);
-        if (!name || !tabState.tabs[name]) {
-          await answerTabCallback(query.id, "Tab no longer exists.");
-          await editTabDashboard(tabState, chatId, messageId, {
+        const name = decodeTelegramWorkspaceCallbackName(rawMode);
+        if (!name || !workspaceState.workspaces[name]) {
+          await answerWorkspaceCallback(query.id, "Workspace no longer exists.");
+          await editWorkspaceDashboard(workspaceState, chatId, messageId, {
             mode: "open",
-            selectedCloseTabs: [],
+            selectedCloseWorkspaces: [],
           });
           return true;
         }
-        await answerTabCallback(query.id, `Switching to ${name}.`);
-        await commandHandlers.switch(tabState, name, chatId, messageId);
-        await editTabDashboard(tabState, chatId, messageId, {
+        await answerWorkspaceCallback(query.id, `Switching to ${name}.`);
+        await commandHandlers.switch(workspaceState, name, chatId, messageId);
+        await editWorkspaceDashboard(workspaceState, chatId, messageId, {
           mode: "open",
-          selectedCloseTabs: [],
+          selectedCloseWorkspaces: [],
         });
         return true;
       }
       if (action === "last5") {
-        const runtime = getWorkspaceRuntime(tabState, tabState.activeTab);
+        const runtime = getWorkspaceRuntime(workspaceState, workspaceState.activeWorkspace);
         if (!runtime || !deps.sendLastTurnsOnSwitch) {
-          await answerTabCallback(query.id, "No replay available.");
+          await answerWorkspaceCallback(query.id, "No replay available.");
           return true;
         }
-        await answerTabCallback(query.id, "Replaying latest turn.");
+        await answerWorkspaceCallback(query.id, "Replaying latest turn.");
         await deps.sendLastTurnsOnSwitch(
-          getTelegramTabSessionReference(runtime.record),
+          getTelegramWorkspaceSessionReference(runtime.record),
           chatId,
           messageId,
         );
         return true;
       }
       if (action === "status") {
-        await answerTabCallback(query.id, "Sending status.");
-        await commandHandlers.status(tabState, tabState.activeTab, chatId, messageId);
+        await answerWorkspaceCallback(query.id, "Sending status.");
+        await commandHandlers.status(workspaceState, workspaceState.activeWorkspace, chatId, messageId);
         return true;
       }
       if (action === "help") {
         const text = isForumNativeMode()
-          ? TELEGRAM_FORUM_NATIVE_TAB_LIFECYCLE_DISABLED_MESSAGE
+          ? TELEGRAM_FORUM_NATIVE_WORKSPACE_LIFECYCLE_DISABLED_MESSAGE
           : rawMode === "rename"
-            ? "Use /tab rename [old-name] <new-name>."
-            : "Use /tab new <name>.";
-        await answerTabCallback(query.id, text);
+            ? "Use /workspace rename [old-name] <new-name>."
+            : "Use /workspace new <name>.";
+        await answerWorkspaceCallback(query.id, text);
         return true;
       }
       if (action === "abort" || action === "close") {
         const mode = rawMode;
-        const name = decodeTelegramTabCallbackName(
+        const name = decodeTelegramWorkspaceCallbackName(
           mode === "do" ? rawName : rawMode,
         );
-        if (!name || !tabState.tabs[name]) {
-          await answerTabCallback(query.id, "Tab no longer exists.");
-          await editTabDashboard(tabState, chatId, messageId, {
+        if (!name || !workspaceState.workspaces[name]) {
+          await answerWorkspaceCallback(query.id, "Workspace no longer exists.");
+          await editWorkspaceDashboard(workspaceState, chatId, messageId, {
             mode: "open",
-            selectedCloseTabs: [],
+            selectedCloseWorkspaces: [],
           });
           return true;
         }
         if (mode === "do") {
-          await answerTabCallback(
+          await answerWorkspaceCallback(
             query.id,
             action === "abort" ? `Aborting ${name}.` : `Closing ${name}.`,
           );
           if (action === "abort") {
-            await commandHandlers.abort(tabState, name, chatId, messageId);
+            await commandHandlers.abort(workspaceState, name, chatId, messageId);
           } else {
-            await commandHandlers.close(tabState, name, true, chatId, messageId);
+            await commandHandlers.close(workspaceState, name, true, chatId, messageId);
           }
-          await editTabDashboard(tabState, chatId, messageId, {
+          await editWorkspaceDashboard(workspaceState, chatId, messageId, {
             mode: "open",
-            selectedCloseTabs: [],
+            selectedCloseWorkspaces: [],
           });
           return true;
         }
-        const runtime = getWorkspaceRuntime(tabState, name);
+        const runtime = getWorkspaceRuntime(workspaceState, name);
         const detail =
           action === "abort"
-            ? `Abort tab ${name}?`
-            : `Close tab ${name}? Session file will be kept.`;
+            ? `Abort workspace ${name}?`
+            : `Close workspace ${name}? Session file will be kept.`;
         const status = runtime?.record.status
           ? `\nStatus: ${formatTelegramWorkspaceStatusLabel(runtime.record.status)}`
           : "";
@@ -5172,12 +5155,12 @@ export function createTelegramTabManager<TContext>(
           messageId,
           `${detail}${status}`,
           "plain",
-          buildTelegramTabConfirmReplyMarkup(action, name),
+          buildTelegramWorkspaceConfirmReplyMarkup(action, name),
         );
-        await answerTabCallback(query.id);
+        await answerWorkspaceCallback(query.id);
         return true;
       }
-      await answerTabCallback(query.id);
+      await answerWorkspaceCallback(query.id);
       return true;
     },
     handleTopicServiceMessage: async (message, ctx) => {
@@ -5188,7 +5171,7 @@ export function createTelegramTabManager<TContext>(
       const messageThreadId = getTelegramForumTopicMessageThreadId(
         normalizedThread,
       );
-      deps.debugLogger?.log("telegram.tab.topic.service", {
+      deps.debugLogger?.log("telegram.workspace.topic.service", {
         kind: serviceKind,
         chatId,
         messageThreadId,
@@ -5200,7 +5183,7 @@ export function createTelegramTabManager<TContext>(
         return true;
       }
       if (!isTrustedTopicBindingChat(chatId)) {
-        deps.debugLogger?.log("telegram.tab.topic.service.untrusted_chat", {
+        deps.debugLogger?.log("telegram.workspace.topic.service.untrusted_chat", {
           kind: serviceKind,
           chatId,
           messageThreadId,
@@ -5208,10 +5191,10 @@ export function createTelegramTabManager<TContext>(
         });
         return true;
       }
-      const tabState = await ensureState(deps.getCwd(ctx));
+      const workspaceState = await ensureState(deps.getCwd(ctx));
       if (serviceKind === "created") {
-        await upsertTelegramTopicTabRecord(
-          tabState,
+        await upsertTelegramTopicWorkspaceRecord(
+          workspaceState,
           {
             chatId,
             messageThreadId,
@@ -5224,12 +5207,12 @@ export function createTelegramTabManager<TContext>(
       }
       if (serviceKind === "edited") {
         const record = findTelegramWorkspaceByTopic(
-          tabState.tabs,
+          workspaceState.workspaces,
           chatId,
           messageThreadId,
         );
         if (record && updateTelegramTopicRecordTitle(record, message.forum_topic_edited?.name)) {
-          const runtime = getWorkspaceRuntime(tabState, record.name);
+          const runtime = getWorkspaceRuntime(workspaceState, record.name);
           if (runtime) {
             await syncTopicSessionNameToWorker(runtime, { forceWorker: true });
           }
@@ -5241,32 +5224,32 @@ export function createTelegramTabManager<TContext>(
         const topicBinding = getTopicBindingConfig();
         if (!topicBinding?.closeOnTopicClose) return true;
         const record = findTelegramWorkspaceByTopic(
-          tabState.tabs,
+          workspaceState.workspaces,
           chatId,
           messageThreadId,
         );
         if (!record || record.name === TELEGRAM_DEFAULT_WORKSPACE_NAME) return true;
-        const result = await closeWorkspaceRuntime(tabState, record.name, true);
+        const result = await closeWorkspaceRuntime(workspaceState, record.name, true);
         if (result.closed) await persist();
         if (topicBinding.deleteTopicOnClose && deps.deleteForumTopic) {
           try {
             await deps.deleteForumTopic(chatId, messageThreadId);
-            deps.debugLogger?.log("telegram.tab.topic.delete", {
+            deps.debugLogger?.log("telegram.workspace.topic.delete", {
               chatId,
               messageThreadId,
-              tab: record.name,
+              workspace: record.name,
               result: "deleted",
             });
           } catch (error) {
-            deps.debugLogger?.log("telegram.tab.topic.delete_error", {
+            deps.debugLogger?.log("telegram.workspace.topic.delete_error", {
               chatId,
               messageThreadId,
-              tab: record.name,
+              workspace: record.name,
               error: getErrorMessage(error),
             });
-            deps.recordRuntimeEvent?.("tabs", error, {
+            deps.recordRuntimeEvent?.("workspaces", error, {
               action: "deleteForumTopic",
-              tab: record.name,
+              workspace: record.name,
               chatId,
               messageThreadId,
             });
@@ -5277,7 +5260,7 @@ export function createTelegramTabManager<TContext>(
                   deps.sendTextReply(
                     chatId,
                     undefined,
-                    "已關閉 pi tab，但無法刪除 Telegram topic。請把 bot 設為 admin，並開啟 Manage Topics 權限。",
+                    "已關閉 pi workspace，但無法刪除 Telegram topic。請把 bot 設為 admin，並開啟 Manage Topics 權限。",
                   ),
               );
             }
@@ -5287,8 +5270,8 @@ export function createTelegramTabManager<TContext>(
       }
       if (serviceKind === "reopened") {
         if (!getTopicBindingConfig()?.autoCreate) return true;
-        await upsertTelegramTopicTabRecord(
-          tabState,
+        await upsertTelegramTopicWorkspaceRecord(
+          workspaceState,
           { chatId, messageThreadId },
           ctx,
           { enforceCapacity: true },
@@ -5299,22 +5282,22 @@ export function createTelegramTabManager<TContext>(
     },
     dispatchPrompt: async (turn, ctx) => {
       if (!isEnabled()) return false;
-      const tabState = await ensureState(deps.getCwd(ctx));
-      const runtime = await getWorkspaceRuntimeForPromptTurn(tabState, turn, ctx);
+      const workspaceState = await ensureState(deps.getCwd(ctx));
+      const runtime = await getWorkspaceRuntimeForPromptTurn(workspaceState, turn, ctx);
       if (!runtime) return true;
       let childState: RpcChildSessionState | undefined;
       try {
         childState = await refreshRuntimeState(runtime);
-        await assertNoOpenSessionConflict(tabState, runtime, runtime.record);
+        await assertNoOpenSessionConflict(workspaceState, runtime, runtime.record);
       } catch (error) {
         await sendTurnTextReply(turn, getErrorMessage(error));
         return true;
       }
-      const promptText = buildTelegramTabPromptText(turn);
+      const promptText = buildTelegramWorkspacePromptText(turn);
       if (!promptText) {
         await sendTurnTextReply(
           turn,
-          isForumNativeMode() ? "Topic prompt is empty." : "Tab prompt is empty.",
+          isForumNativeMode() ? "Topic prompt is empty." : "Workspace prompt is empty.",
         );
         return true;
       }

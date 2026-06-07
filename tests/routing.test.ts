@@ -17,7 +17,7 @@ import {
   getAmbientTelegramThreadContext,
   runWithTelegramThreadContext,
 } from "../lib/thread-context.ts";
-import type { TelegramTabManager } from "../lib/workspace-manager.ts";
+import type { TelegramWorkspaceManager } from "../lib/workspace-manager.ts";
 import type * as Updates from "../lib/updates.ts";
 
 interface TestContext {
@@ -56,9 +56,9 @@ function createTestConfigStore(options: { trustedChatIds?: number[] } = {}) {
     getAllowedUserId: () => 7,
     setAllowedUserId: () => undefined,
     persist: async () => undefined,
-    getConcurrentTabsConfig: () => ({
+    getConcurrentWorkspacesConfig: () => ({
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -275,7 +275,7 @@ test("Routing runtime forwards authorized text messages into prompt queueing", a
   }
 });
 
-test("Routing runtime forwards forum topic service messages only to the tab manager", async () => {
+test("Routing runtime forwards forum topic service messages only to the workspace manager", async () => {
   const events: string[] = [];
   const bridgeRuntime = Runtime.createTelegramBridgeRuntime();
   const activeTurnRuntime = Queue.createTelegramActiveTurnStore();
@@ -309,7 +309,7 @@ test("Routing runtime forwards forum topic service messages only to the tab mana
       appendQueuedItem: queueMutationRuntime.append,
       updateStatus: () => events.push("status"),
     });
-  const tabManager: TelegramTabManager<TestContext> = {
+  const workspaceManager: TelegramWorkspaceManager<TestContext> = {
     isEnabled: () => true,
     getActiveModel: async () => model,
     getActiveThinkingLevel: async () => undefined,
@@ -327,7 +327,7 @@ test("Routing runtime forwards forum topic service messages only to the tab mana
     switchSession: async () => false,
     createActiveTreeBranch: async () => undefined,
     handleCommand: async () => {
-      events.push("unexpected:tab-command");
+      events.push("unexpected:workspace-command");
       return true;
     },
     handleCallbackQuery: async () => false,
@@ -405,7 +405,7 @@ test("Routing runtime forwards forum topic service messages only to the tab mana
     injectClone: async () => undefined,
     getSessionName: () => undefined,
     setSessionName: () => undefined,
-    tabManager,
+    workspaceManager,
   });
   await routeRuntime.handleUpdate(
     {
@@ -571,7 +571,7 @@ test("Routing runtime ignores forum topic service messages from untrusted chats"
       appendQueuedItem: queueMutationRuntime.append,
       updateStatus: () => events.push("status"),
     });
-  const tabManager: TelegramTabManager<TestContext> = {
+  const workspaceManager: TelegramWorkspaceManager<TestContext> = {
     isEnabled: () => true,
     getActiveModel: async () => model,
     getActiveThinkingLevel: async () => undefined,
@@ -661,7 +661,7 @@ test("Routing runtime ignores forum topic service messages from untrusted chats"
     injectClone: async () => undefined,
     getSessionName: () => undefined,
     setSessionName: () => undefined,
-    tabManager,
+    workspaceManager,
   });
   await routeRuntime.handleUpdate(
     {
@@ -678,7 +678,7 @@ test("Routing runtime ignores forum topic service messages from untrusted chats"
   assert.deepEqual(telegramQueueStore.getQueuedItems(), []);
 });
 
-test("Routing runtime applies model menu picks to the active tab when enabled", async () => {
+test("Routing runtime applies model menu picks to the active workspace when enabled", async () => {
   const events: string[] = [];
   const selectedModels: string[] = [];
   const parentModels: string[] = [];
@@ -737,7 +737,7 @@ test("Routing runtime applies model menu picks to the active tab when enabled", 
     openModelMenu: async () => undefined,
     openThinkingMenu: async () => undefined,
   };
-  const tabManager: TelegramTabManager<TestContext> = {
+  const workspaceManager: TelegramWorkspaceManager<TestContext> = {
     isEnabled: () => true,
     getActiveModel: async () => modelA,
     getActiveThinkingLevel: async () => undefined,
@@ -826,7 +826,7 @@ test("Routing runtime applies model menu picks to the active tab when enabled", 
     injectClone: async () => undefined,
     getSessionName: () => undefined,
     setSessionName: () => undefined,
-    tabManager,
+    workspaceManager,
   });
   await routeRuntime.handleUpdate(
     {

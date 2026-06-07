@@ -12,13 +12,13 @@ import test from "node:test";
 import type { TelegramConfig } from "../lib/config.ts";
 import {
   createTelegramConfigStore,
-  createTelegramConcurrentTabsConfigGetter,
+  createTelegramConcurrentWorkspacesConfigGetter,
   createTelegramForumNativeModeChecker,
   createTelegramUserPairingRuntime,
   getTelegramAuthorizationState,
   isTelegramForumNativeModeEnabled,
   isTelegramTrustedChat,
-  normalizeTelegramConcurrentTabsConfig,
+  normalizeTelegramConcurrentWorkspacesConfig,
   pairTelegramUserIfNeeded,
   readTelegramConfig,
   writeTelegramConfig,
@@ -64,9 +64,9 @@ test("Telegram config store preserves external file edits when persisting offset
   const initialConfig: TelegramConfig = {
     botToken: "initial",
     lastUpdateId: 1,
-    concurrentTabs: {
+    concurrentWorkspaces: {
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       inactiveNotify: true,
       workerExtensions: [],
     },
@@ -78,9 +78,9 @@ test("Telegram config store preserves external file edits when persisting offset
 
   await writeTelegramConfig(agentDir, configPath, {
     ...initialConfig,
-    concurrentTabs: {
-      ...initialConfig.concurrentTabs,
-      maxTabs: 20,
+    concurrentWorkspaces: {
+      ...initialConfig.concurrentWorkspaces,
+      maxWorkspaces: 20,
     },
   });
   pollingConfigRef.lastUpdateId = 2;
@@ -89,16 +89,16 @@ test("Telegram config store preserves external file edits when persisting offset
   assert.deepEqual(await readTelegramConfig(configPath), {
     botToken: "initial",
     lastUpdateId: 2,
-    concurrentTabs: {
+    concurrentWorkspaces: {
       enabled: true,
-      maxTabs: 20,
+      maxWorkspaces: 20,
       inactiveNotify: true,
       workerExtensions: [],
     },
   });
   assert.strictEqual(store.get(), pollingConfigRef);
-  assert.equal(store.getConcurrentTabsConfig().maxTabs, 20);
-  assert.equal(pollingConfigRef.concurrentTabs?.maxTabs, 20);
+  assert.equal(store.getConcurrentWorkspacesConfig().maxWorkspaces, 20);
+  assert.equal(pollingConfigRef.concurrentWorkspaces?.maxWorkspaces, 20);
 });
 
 test("Telegram config store owns load, mutation, and persistence", async () => {
@@ -109,9 +109,9 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
       botToken: "initial",
       inboundHandlers: [{ type: "text", template: "translate" }],
       attachmentHandlers: [{ mime: "audio/*", template: "transcribe {file}" }],
-      concurrentTabs: {
+      concurrentWorkspaces: {
         enabled: true,
-        maxTabs: 2,
+        maxWorkspaces: 2,
         inactiveNotify: false,
         workerExtensions: ["/agent/extensions/provider.ts"],
       },
@@ -123,9 +123,9 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
     botToken: "initial",
     inboundHandlers: [{ type: "text", template: "translate" }],
     attachmentHandlers: [{ mime: "audio/*", template: "transcribe {file}" }],
-    concurrentTabs: {
+    concurrentWorkspaces: {
       enabled: true,
-      maxTabs: 2,
+      maxWorkspaces: 2,
       inactiveNotify: false,
       workerExtensions: ["/agent/extensions/provider.ts"],
     },
@@ -143,9 +143,9 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
   assert.deepEqual(store.getAttachmentHandlers(), [
     { mime: "audio/*", template: "transcribe {file}" },
   ]);
-  assert.deepEqual(store.getConcurrentTabsConfig(), {
+  assert.deepEqual(store.getConcurrentWorkspacesConfig(), {
     enabled: true,
-    maxTabs: 2,
+    maxWorkspaces: 2,
     maxWorkers: 2,
     inactiveNotify: false,
     workerExtensions: ["/agent/extensions/provider.ts"],
@@ -167,9 +167,9 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
     botToken: "initial",
     inboundHandlers: [{ type: "text", template: "translate" }],
     attachmentHandlers: [{ mime: "audio/*", template: "transcribe {file}" }],
-    concurrentTabs: {
+    concurrentWorkspaces: {
       enabled: true,
-      maxTabs: 2,
+      maxWorkspaces: 2,
       inactiveNotify: false,
       workerExtensions: ["/agent/extensions/provider.ts"],
     },
@@ -182,9 +182,9 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
     botToken: "initial",
     inboundHandlers: [{ type: "text", template: "translate" }],
     attachmentHandlers: [{ mime: "audio/*", template: "transcribe {file}" }],
-    concurrentTabs: {
+    concurrentWorkspaces: {
       enabled: true,
-      maxTabs: 2,
+      maxWorkspaces: 2,
       inactiveNotify: false,
       workerExtensions: ["/agent/extensions/provider.ts"],
     },
@@ -192,10 +192,10 @@ test("Telegram config store owns load, mutation, and persistence", async () => {
   });
 });
 
-test("Telegram concurrent tabs config normalizes defaults and invalid limits", () => {
-  assert.deepEqual(normalizeTelegramConcurrentTabsConfig(), {
+test("Telegram concurrent workspaces config normalizes defaults and invalid limits", () => {
+  assert.deepEqual(normalizeTelegramConcurrentWorkspacesConfig(), {
     enabled: false,
-    maxTabs: 10,
+    maxWorkspaces: 10,
     maxWorkers: 10,
     inactiveNotify: true,
     workerExtensions: [],
@@ -211,15 +211,15 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     },
   });
   assert.deepEqual(
-    normalizeTelegramConcurrentTabsConfig({
+    normalizeTelegramConcurrentWorkspacesConfig({
       enabled: true,
-      maxTabs: -1,
+      maxWorkspaces: -1,
       inactiveNotify: false,
       workerExtensions: ["/agent/extensions/provider.ts", "", 1 as unknown as string],
     }),
     {
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       maxWorkers: 10,
       inactiveNotify: false,
       workerExtensions: ["/agent/extensions/provider.ts"],
@@ -236,7 +236,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     },
   );
   assert.deepEqual(
-    normalizeTelegramConcurrentTabsConfig({
+    normalizeTelegramConcurrentWorkspacesConfig({
       topicBinding: {
         enabled: true,
         native: false,
@@ -259,17 +259,17 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     },
   );
   assert.equal(
-    normalizeTelegramConcurrentTabsConfig({ maxTabs: 8, maxWorkers: 3 }).maxWorkers,
+    normalizeTelegramConcurrentWorkspacesConfig({ maxWorkspaces: 8, maxWorkers: 3 }).maxWorkers,
     3,
   );
   assert.equal(
-    normalizeTelegramConcurrentTabsConfig({ maxTabs: 8, maxWorkers: 0 }).maxWorkers,
+    normalizeTelegramConcurrentWorkspacesConfig({ maxWorkspaces: 8, maxWorkers: 0 }).maxWorkers,
     8,
   );
-  const getConfig = createTelegramConcurrentTabsConfigGetter({
-    getConcurrentTabsConfig: () => ({
+  const getConfig = createTelegramConcurrentWorkspacesConfigGetter({
+    getConcurrentWorkspacesConfig: () => ({
       enabled: true,
-      maxTabs: 8,
+      maxWorkspaces: 8,
       maxWorkers: 3,
       inactiveNotify: false,
       workerExtensions: ["/agent/extensions/provider.ts"],
@@ -287,7 +287,7 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
   });
   assert.deepEqual(getConfig(), {
     enabled: true,
-    maxTabs: 8,
+    maxWorkspaces: 8,
     maxWorkers: 3,
     inactiveNotify: false,
     workerExtensions: ["/agent/extensions/provider.ts"],
@@ -303,13 +303,13 @@ test("Telegram concurrent tabs config normalizes defaults and invalid limits", (
     },
   });
   assert.equal(
-    isTelegramForumNativeModeEnabled(normalizeTelegramConcurrentTabsConfig()),
+    isTelegramForumNativeModeEnabled(normalizeTelegramConcurrentWorkspacesConfig()),
     false,
   );
   assert.equal(isTelegramForumNativeModeEnabled(getConfig()), true);
   assert.equal(
     createTelegramForumNativeModeChecker({
-      getConcurrentTabsConfig: getConfig,
+      getConcurrentWorkspacesConfig: getConfig,
     })(),
     true,
   );

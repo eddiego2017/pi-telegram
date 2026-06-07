@@ -59,7 +59,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   tree: "🌳",
   dump: "🧾",
   name: "🏷️",
-  tab: "🗂️",
+  workspace: "🗂️",
   topic: "🧵",
   queue: "🔢",
   next: "⏩",
@@ -169,10 +169,10 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       ),
     },
     {
-      command: "tab",
+      command: "workspace",
       description: formatTelegramBotCommandDescription(
-        "tab",
-        "Manage concurrent tabs",
+        "workspace",
+        "Manage concurrent workspaces",
       ),
     },
 
@@ -209,7 +209,7 @@ export function getTelegramBotCommands(options: {
   forumNativeMode?: boolean;
 } = {}): readonly TelegramBotCommandDefinition[] {
   if (!options.forumNativeMode) return TELEGRAM_BOT_COMMANDS;
-  return TELEGRAM_BOT_COMMANDS.filter((command) => command.command !== "tab").map(
+  return TELEGRAM_BOT_COMMANDS.filter((command) => command.command !== "workspace").map(
     (command) => {
       switch (command.command) {
         case "compact":
@@ -585,7 +585,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "name",
   "model",
   "llm",
-  "tab",
+  "workspace",
   "topic",
   "thinking",
   "settings",
@@ -628,7 +628,7 @@ export type TelegramCommandAction =
   | { kind: "status"; executionMode: "immediate" }
   | { kind: "model"; executionMode: "immediate" }
   | { kind: "llm"; args: string; executionMode: "immediate" }
-  | { kind: "tab"; args: string; executionMode: "immediate" }
+  | { kind: "workspace"; args: string; executionMode: "immediate" }
   | { kind: "topic"; args: string; executionMode: "immediate" }
   | { kind: "thinking"; executionMode: "immediate" }
   | { kind: "settings"; executionMode: "immediate" }
@@ -658,7 +658,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleStatus: (message: TMessage, ctx: TContext) => Promise<void>;
   handleModel: (message: TMessage, ctx: TContext) => Promise<void>;
   handleLlm: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
-  handleTab?: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
+  handleWorkspace?: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleTopic?: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleThinking: (message: TMessage, ctx: TContext) => Promise<void>;
   handleSettings?: (message: TMessage, ctx: TContext) => Promise<void>;
@@ -721,8 +721,8 @@ export interface TelegramCompactCommandDeps extends TelegramRuntimeEventRecorder
 }
 
 /**
- * `/new` prefers the active tab worker when concurrent tabs are enabled; if
- * no tab is active it falls back to the host tmux pane because the SDK's
+ * `/new` prefers the active workspace worker when concurrent workspaces are enabled; if
+ * no workspace is active it falls back to the host tmux pane because the SDK's
  * `/new` is implemented in the interactive editor layer (not as an extension
  * command) and `sendUserMessage` deliberately skips slash-command handling.
  * See the pi-telegram README for the contract and assumptions.
@@ -1088,14 +1088,14 @@ export interface TelegramCommandRuntimeDeps<
     ctx: TContext,
     callbacks: { onComplete: () => void; onError: (error: unknown) => void },
   ) => void;
-  compactActiveTab?: (
+  compactActiveWorkspace?: (
     ctx: TContext,
     callbacks: { onComplete: () => void; onError: (error: unknown) => void },
   ) => boolean;
   queueReloadRuntimeCommand: () => void | Promise<void>;
   injectNewSession: (ctx: TContext) => Promise<boolean>;
   injectClone: () => Promise<void>;
-  abortActiveTab?: (
+  abortActiveWorkspace?: (
     ctx: TContext,
   ) => Promise<TelegramAbortTargetResult | undefined>;
   enqueueControlItem: (
@@ -1133,7 +1133,7 @@ export interface TelegramCommandRuntimeDeps<
     ctx: TContext,
     turnLimit?: number,
   ) => Promise<void>;
-  handleTabCommand?: (
+  handleWorkspaceCommand?: (
     message: TMessage,
     args: string,
     ctx: TContext,
@@ -1168,7 +1168,7 @@ export const TELEGRAM_APP_MENU_INTRO_HTML = [
   `${formatTelegramCommandEmojiPrefix("dump")}/dump [N] — Export visible transcript`,
   `${formatTelegramCommandEmojiPrefix("name")}/name — Set current session name`,
   `${formatTelegramCommandEmojiPrefix("llm")}/llm — List available LLM models`,
-  `${formatTelegramCommandEmojiPrefix("tab")}/tab — Manage concurrent tabs`,
+  `${formatTelegramCommandEmojiPrefix("workspace")}/workspace — Manage concurrent workspaces`,
   `${formatTelegramCommandEmojiPrefix("next")}/next — Force next turn`,
   `${formatTelegramCommandEmojiPrefix("continue")}/continue — Queue continue prompt`,
   `${formatTelegramCommandEmojiPrefix("abort")}/abort — Abort π`,
@@ -1407,7 +1407,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   name: { kind: "name", args: "", executionMode: "immediate" },
   model: { kind: "model", executionMode: "immediate" },
   llm: { kind: "llm", args: "", executionMode: "immediate" },
-  tab: { kind: "tab", args: "", executionMode: "immediate" },
+  workspace: { kind: "workspace", args: "", executionMode: "immediate" },
   topic: { kind: "topic", args: "", executionMode: "immediate" },
   thinking: { kind: "thinking", executionMode: "immediate" },
   settings: { kind: "settings", executionMode: "immediate" },
@@ -1428,7 +1428,7 @@ export function buildTelegramCommandAction(
     baseAction.kind === "name" ||
     baseAction.kind === "resume" ||
     baseAction.kind === "dump" ||
-    baseAction.kind === "tab" ||
+    baseAction.kind === "workspace" ||
     baseAction.kind === "topic"
   ) {
     return { ...baseAction, args: args ?? "" };
@@ -1920,9 +1920,9 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
     case "llm":
       await deps.handleLlm(message, action.args, ctx);
       return true;
-    case "tab":
-      if (!deps.handleTab) return false;
-      await deps.handleTab(message, action.args, ctx);
+    case "workspace":
+      if (!deps.handleWorkspace) return false;
+      await deps.handleWorkspace(message, action.args, ctx);
       return true;
     case "topic":
       if (!deps.handleTopic) return false;
@@ -2014,11 +2014,11 @@ export function createTelegramCommandHandlerTargetRuntime<
     stopTypingLoop: deps.stopTypingLoop,
     enqueueContinueTurn: deps.enqueueContinueTurn,
     compact: deps.compact,
-    compactActiveTab: deps.compactActiveTab,
+    compactActiveWorkspace: deps.compactActiveWorkspace,
     queueReloadRuntimeCommand: deps.queueReloadRuntimeCommand,
     injectNewSession: deps.injectNewSession,
     injectClone: deps.injectClone,
-    abortActiveTab: deps.abortActiveTab,
+    abortActiveWorkspace: deps.abortActiveWorkspace,
     enqueueControlItem: commandTargetRuntime.enqueueControlItem,
     showStatus: commandTargetRuntime.showStatus,
     openModelMenu: commandTargetRuntime.openModelMenu,
@@ -2033,7 +2033,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     openSessionMenu: commandTargetRuntime.openSessionMenu,
     openTreeMenu: commandTargetRuntime.openTreeMenu,
     openDumpMenu: commandTargetRuntime.openDumpMenu,
-    handleTabCommand: deps.handleTabCommand,
+    handleWorkspaceCommand: deps.handleWorkspaceCommand,
     handleTopicCommand: deps.handleTopicCommand,
     getSessionName: deps.getSessionName,
     setSessionName: deps.setSessionName,
@@ -2130,8 +2130,8 @@ async function handleTelegramCommandRuntime<
     ctx,
     {
       handleStop: async (nextMessage, commandCtx) => {
-        const tabAbort = await deps.abortActiveTab?.(commandCtx);
-        if (tabAbort) {
+        const workspaceAbort = await deps.abortActiveWorkspace?.(commandCtx);
+        if (workspaceAbort) {
           deps.clearPendingModelSwitch();
           const clearedCount = deps.clearQueuedTelegramItems(commandCtx);
           deps.setPreserveQueuedTurnsAsHistory(false);
@@ -2140,7 +2140,7 @@ async function handleTelegramCommandRuntime<
               ? ` Cleared ${formatTelegramQueuedTurnCount(clearedCount)}.`
               : "";
           deps.updateStatus(commandCtx);
-          await sendReplyFor(nextMessage)(`${tabAbort.message}${clearedSuffix}`);
+          await sendReplyFor(nextMessage)(`${workspaceAbort.message}${clearedSuffix}`);
           return;
         }
         await handleTelegramStopCommand({
@@ -2155,12 +2155,12 @@ async function handleTelegramCommandRuntime<
         });
       },
       handleAbort: async (nextMessage, commandCtx) => {
-        const tabAbort = await deps.abortActiveTab?.(commandCtx);
-        if (tabAbort) {
+        const workspaceAbort = await deps.abortActiveWorkspace?.(commandCtx);
+        if (workspaceAbort) {
           deps.clearPendingModelSwitch();
           deps.setPreserveQueuedTurnsAsHistory(true);
           deps.updateStatus(commandCtx);
-          await sendReplyFor(nextMessage)(tabAbort.message);
+          await sendReplyFor(nextMessage)(workspaceAbort.message);
           return;
         }
         await handleTelegramAbortCommand({
@@ -2275,7 +2275,7 @@ async function handleTelegramCommandRuntime<
                   )
               : undefined,
           compact: (callbacks) => {
-            if (deps.compactActiveTab?.(commandCtx, callbacks)) return;
+            if (deps.compactActiveWorkspace?.(commandCtx, callbacks)) return;
             deps.compact(commandCtx, callbacks);
           },
           startTypingLoop: deps.startTypingLoop
@@ -2315,9 +2315,9 @@ async function handleTelegramCommandRuntime<
           sendTextReply: sendReplyFor(nextMessage),
         });
       },
-      handleTab: deps.handleTabCommand
+      handleWorkspace: deps.handleWorkspaceCommand
         ? async (nextMessage, args, commandCtx) => {
-            await deps.handleTabCommand?.(nextMessage, args, commandCtx);
+            await deps.handleWorkspaceCommand?.(nextMessage, args, commandCtx);
           }
         : undefined,
       handleTopic: deps.handleTopicCommand

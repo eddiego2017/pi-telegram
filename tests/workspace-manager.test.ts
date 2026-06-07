@@ -11,29 +11,29 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
-  createTelegramTabAwareSessionDeletePorts,
-  createTelegramTabAwareTreeMenuPorts,
-  createTelegramTabAwareResumeMenuPorts,
-  createTelegramTabAwareSessionNamePorts,
-  createTelegramTabAwareSessionSnapshotPorts,
-  createTelegramTabManager,
-  type TelegramTabBackend,
-  type TelegramTabManager,
+  createTelegramWorkspaceAwareSessionDeletePorts,
+  createTelegramWorkspaceAwareTreeMenuPorts,
+  createTelegramWorkspaceAwareResumeMenuPorts,
+  createTelegramWorkspaceAwareSessionNamePorts,
+  createTelegramWorkspaceAwareSessionSnapshotPorts,
+  createTelegramWorkspaceManager,
+  type TelegramWorkspaceBackend,
+  type TelegramWorkspaceManager,
 } from "../lib/workspace-manager.ts";
 import type {
   RpcChildBackendEvent,
   RpcChildSessionState,
 } from "../lib/rpc-child.ts";
-import type { TelegramNormalizedConcurrentTabsConfig } from "../lib/config.ts";
+import type { TelegramNormalizedConcurrentWorkspacesConfig } from "../lib/config.ts";
 import { createTelegramTopicOrphanProofStore } from "../lib/topic-orphans.ts";
 import {
   getAmbientTelegramThreadContext,
   runWithTelegramThreadContext,
 } from "../lib/thread-context.ts";
 import {
-  normalizeTelegramTopicTabName,
-  TELEGRAM_DEFAULT_TAB_NAME,
-} from "../lib/tabs.ts";
+  normalizeTelegramTopicWorkspaceName,
+  TELEGRAM_DEFAULT_WORKSPACE_NAME,
+} from "../lib/workspaces.ts";
 
 const previewEnvSnapshot = {
   thinking: process.env.PI_TELEGRAM_THINKING_PREVIEWS,
@@ -63,7 +63,7 @@ test.after(() => {
   }
 });
 
-class FakeTabBackend implements TelegramTabBackend {
+class FakeWorkspaceBackend implements TelegramWorkspaceBackend {
   readonly prompts: string[] = [];
   readonly followUps: string[] = [];
   readonly aborts: string[] = [];
@@ -78,15 +78,15 @@ class FakeTabBackend implements TelegramTabBackend {
   nextSwitchSessionName: string | undefined;
   disposed = false;
   disposeDeferred: ReturnType<typeof createDeferred<void>> | undefined;
-  readonly tabName: string;
+  readonly workspaceName: string;
   private listeners = new Set<(event: RpcChildBackendEvent) => void>();
   private state: RpcChildSessionState;
 
-  constructor(tabName: string, sessionFile?: string) {
-    this.tabName = tabName;
+  constructor(workspaceName: string, sessionFile?: string) {
+    this.workspaceName = workspaceName;
     this.state = {
-      sessionFile: sessionFile ?? `/sessions/${tabName}.jsonl`,
-      sessionId: `session-${tabName}`,
+      sessionFile: sessionFile ?? `/sessions/${workspaceName}.jsonl`,
+      sessionId: `session-${workspaceName}`,
       messageCount: 0,
       isStreaming: false,
     };
@@ -127,7 +127,7 @@ class FakeTabBackend implements TelegramTabBackend {
   }
 
   async abort(): Promise<void> {
-    this.aborts.push(this.tabName);
+    this.aborts.push(this.workspaceName);
     if (this.abortError) throw this.abortError;
     this.state = { ...this.state, isStreaming: false };
   }
@@ -136,7 +136,7 @@ class FakeTabBackend implements TelegramTabBackend {
   compactError: unknown;
 
   async compact(): Promise<void> {
-    this.compactions.push(this.tabName);
+    this.compactions.push(this.workspaceName);
     this.state = { ...this.state, isStreaming: false, isCompacting: true };
     if (this.compactDeferred) await this.compactDeferred.promise;
     if (this.compactError) {
@@ -188,8 +188,8 @@ class FakeTabBackend implements TelegramTabBackend {
     const version = this.newSessions.length;
     this.state = {
       ...this.state,
-      sessionFile: `/sessions/${this.tabName}-${version}.jsonl`,
-      sessionId: `session-${this.tabName}-${version}`,
+      sessionFile: `/sessions/${this.workspaceName}-${version}.jsonl`,
+      sessionId: `session-${this.workspaceName}-${version}`,
       sessionName: undefined,
       messageCount: 0,
       isStreaming: false,
@@ -205,7 +205,7 @@ class FakeTabBackend implements TelegramTabBackend {
     this.state = {
       ...this.state,
       sessionFile: sessionPath,
-      sessionId: `resumed-${this.tabName}`,
+      sessionId: `resumed-${this.workspaceName}`,
       sessionName,
       messageCount: 0,
       isStreaming: false,
@@ -218,9 +218,9 @@ class FakeTabBackend implements TelegramTabBackend {
   }
 }
 
-function makeResumePortTabManager(
-  overrides: Partial<TelegramTabManager<string>>,
-): TelegramTabManager<string> {
+function makeResumePortWorkspaceManager(
+  overrides: Partial<TelegramWorkspaceManager<string>>,
+): TelegramWorkspaceManager<string> {
   return {
     isEnabled: () => true,
     getActiveModel: async () => undefined,
@@ -247,7 +247,7 @@ function makeResumePortTabManager(
   };
 }
 
-function waitForTabStreamFlush(): Promise<void> {
+function waitForWorkspaceStreamFlush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
@@ -265,19 +265,19 @@ function createDeferred<T = void>(): {
   return { promise, resolve, reject };
 }
 
-test("Tab-aware resume ports recompute active tab scope before host fallback", async () => {
+test("Workspace-aware resume ports recompute active workspace scope before host fallback", async () => {
   const events: string[] = [];
-  const ports = createTelegramTabAwareResumeMenuPorts<string>({
-    tabManager: makeResumePortTabManager({
+  const ports = createTelegramWorkspaceAwareResumeMenuPorts<string>({
+    workspaceManager: makeResumePortWorkspaceManager({
       getActiveResumeSessionScope: () => ({
-        kind: "tab",
-        tabName: "A",
+        kind: "workspace",
+        workspaceName: "A",
         cwd: "/repo",
         sessionDir: "/sessions/shared",
         currentSessionFile: "/sessions/current.jsonl",
       }),
       switchSession: async (sessionPath, ctx, scope) => {
-        events.push(`tab:${sessionPath}:${ctx}:${scope?.tabName ?? ""}`);
+        events.push(`workspace:${sessionPath}:${ctx}:${scope?.workspaceName ?? ""}`);
         return true;
       },
     }),
@@ -288,13 +288,13 @@ test("Tab-aware resume ports recompute active tab scope before host fallback", a
 
   await ports.injectResumeExec("/sessions/old.jsonl", "ctx");
 
-  assert.deepEqual(events, ["tab:/sessions/old.jsonl:ctx:A"]);
+  assert.deepEqual(events, ["workspace:/sessions/old.jsonl:ctx:A"]);
 });
 
-test("Tab-aware resume ports avoid host fallback when active tab scope is missing", async () => {
+test("Workspace-aware resume ports avoid host fallback when active workspace scope is missing", async () => {
   const events: string[] = [];
-  const ports = createTelegramTabAwareResumeMenuPorts<string>({
-    tabManager: makeResumePortTabManager({
+  const ports = createTelegramWorkspaceAwareResumeMenuPorts<string>({
+    workspaceManager: makeResumePortWorkspaceManager({
       getActiveResumeSessionScope: () => undefined,
     }),
     injectParentResumeExec: async (sessionPath) => {
@@ -304,18 +304,18 @@ test("Tab-aware resume ports avoid host fallback when active tab scope is missin
 
   await assert.rejects(
     () => ports.injectResumeExec("/sessions/old.jsonl", "ctx"),
-    /No active tab session scope/,
+    /No active workspace session scope/,
   );
   assert.deepEqual(events, []);
 });
 
-test("Tab-aware resume ports keep host fallback when tabs are disabled", async () => {
+test("Workspace-aware resume ports keep host fallback when workspaces are disabled", async () => {
   const events: string[] = [];
-  const ports = createTelegramTabAwareResumeMenuPorts<string>({
-    tabManager: makeResumePortTabManager({
+  const ports = createTelegramWorkspaceAwareResumeMenuPorts<string>({
+    workspaceManager: makeResumePortWorkspaceManager({
       isEnabled: () => false,
       switchSession: async () => {
-        events.push("unexpected-tab");
+        events.push("unexpected-workspace");
         return true;
       },
     }),
@@ -329,17 +329,17 @@ test("Tab-aware resume ports keep host fallback when tabs are disabled", async (
   assert.deepEqual(events, ["parent:/host/old.jsonl"]);
 });
 
-test("Tab-aware session snapshot ports allow persisted active-tab deletion", () => {
-  const ports = createTelegramTabAwareSessionSnapshotPorts({
-    tabManager: makeResumePortTabManager({
+test("Workspace-aware session snapshot ports allow persisted active-workspace deletion", () => {
+  const ports = createTelegramWorkspaceAwareSessionSnapshotPorts({
+    workspaceManager: makeResumePortWorkspaceManager({
       getActiveSessionReference: () => ({
-        tabName: "A",
+        workspaceName: "A",
         cwd: "/repo",
         sessionFile: "/sessions/A.jsonl",
       }),
     }),
     getParentSnapshot: () => ({ sessionFile: "/sessions/parent.jsonl" }),
-    getTabSnapshot: () => ({ sessionFile: "/sessions/A.jsonl" }),
+    getWorkspaceSnapshot: () => ({ sessionFile: "/sessions/A.jsonl" }),
   });
 
   assert.deepEqual(ports.getSnapshot("ctx"), { sessionFile: "/sessions/A.jsonl" });
@@ -348,12 +348,12 @@ test("Tab-aware session snapshot ports allow persisted active-tab deletion", () 
   assert.equal(ports.isReadOnly({}, "ctx"), true);
 });
 
-test("Tab-aware session delete ports route active tabs before parent fallback", async () => {
+test("Workspace-aware session delete ports route active workspaces before parent fallback", async () => {
   const events: string[] = [];
-  const activePorts = createTelegramTabAwareSessionDeletePorts<string>({
-    tabManager: makeResumePortTabManager({
+  const activePorts = createTelegramWorkspaceAwareSessionDeletePorts<string>({
+    workspaceManager: makeResumePortWorkspaceManager({
       deleteActiveSession: async (path, ctx) => {
-        events.push(`tab:${path}:${ctx}`);
+        events.push(`workspace:${path}:${ctx}`);
         return true;
       },
     }),
@@ -363,8 +363,8 @@ test("Tab-aware session delete ports route active tabs before parent fallback", 
   });
   await activePorts.injectDeleteCurrentSession("/sessions/A.jsonl", "ctx");
 
-  const fallbackPorts = createTelegramTabAwareSessionDeletePorts<string>({
-    tabManager: makeResumePortTabManager({
+  const fallbackPorts = createTelegramWorkspaceAwareSessionDeletePorts<string>({
+    workspaceManager: makeResumePortWorkspaceManager({
       deleteActiveSession: async () => undefined,
     }),
     injectParentDeleteCurrentSession: async (path) => {
@@ -374,18 +374,18 @@ test("Tab-aware session delete ports route active tabs before parent fallback", 
   await fallbackPorts.injectDeleteCurrentSession("/sessions/parent.jsonl", "ctx");
 
   assert.deepEqual(events, [
-    "tab:/sessions/A.jsonl:ctx",
+    "workspace:/sessions/A.jsonl:ctx",
     "parent:/sessions/parent.jsonl",
   ]);
 });
 
-test("Tab-aware tree ports expose active-tab branch without parent tree exec", async () => {
+test("Workspace-aware tree ports expose active-workspace branch without parent tree exec", async () => {
   const events: string[] = [];
   const snapshot = {};
-  const ports = createTelegramTabAwareTreeMenuPorts<string>({
-    tabManager: makeResumePortTabManager({
+  const ports = createTelegramWorkspaceAwareTreeMenuPorts<string>({
+    workspaceManager: makeResumePortWorkspaceManager({
       getActiveSessionReference: () => ({
-        tabName: "A",
+        workspaceName: "A",
         cwd: "/repo",
         sessionFile: "/sessions/A.jsonl",
       }),
@@ -407,16 +407,16 @@ test("Tab-aware tree ports expose active-tab branch without parent tree exec", a
   });
   await assert.rejects(
     () => ports.injectTreeExec("u1", false, "ctx"),
-    /Active tab tree navigation/,
+    /Active workspace tree navigation/,
   );
   assert.deepEqual(events, ["branch:u1:ctx"]);
 });
 
-test("Tab-aware tree ports fall back to parent tree exec without active tab", async () => {
+test("Workspace-aware tree ports fall back to parent tree exec without active workspace", async () => {
   const events: string[] = [];
   const snapshot = {};
-  const ports = createTelegramTabAwareTreeMenuPorts<string>({
-    tabManager: makeResumePortTabManager({
+  const ports = createTelegramWorkspaceAwareTreeMenuPorts<string>({
+    workspaceManager: makeResumePortWorkspaceManager({
       getActiveSessionReference: () => undefined,
     }),
     injectParentTreeExec: async (entryId, summarize) => {
@@ -430,18 +430,18 @@ test("Tab-aware tree ports fall back to parent tree exec without active tab", as
   assert.deepEqual(events, ["parent:u1:false"]);
 });
 
-test("Tab manager declines prompt dispatch when disabled", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-disabled-"));
+test("Workspace manager declines prompt dispatch when disabled", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-disabled-"));
   const replies: string[] = [];
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: false,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
       replies.push(text);
@@ -460,19 +460,18 @@ test("Tab manager declines prompt dispatch when disabled", async () => {
     false,
   );
   assert.equal(await manager.handleCommand("", 1, 2, "ctx"), true);
-  assert.match(replies[0] ?? "", /Concurrent tabs are disabled/);
+  assert.match(replies[0] ?? "", /Concurrent workspaces are disabled/);
 });
 
-test("Workspace manager migrates the default legacy tabs state file to workspace state", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-state-migration-"));
-  const legacyStatePath = join(tempDir, "telegram-tabs.json");
+test("Workspace manager reads and writes the workspaces state file", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-state-"));
   const workspaceStatePath = join(tempDir, "telegram-workspaces.json");
   await writeFile(
-    legacyStatePath,
+    workspaceStatePath,
     JSON.stringify({
       version: 1,
-      activeTab: "A",
-      tabs: {
+      activeWorkspace: "A",
+      workspaces: {
         default: {
           name: "default",
           cwd: "/repo",
@@ -491,10 +490,10 @@ test("Workspace manager migrates the default legacy tabs state file to workspace
     }),
   );
   const replies: string[] = [];
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
@@ -511,36 +510,29 @@ test("Workspace manager migrates the default legacy tabs state file to workspace
   await manager.dispose();
 
   assert.match(replies.at(-1) ?? "", /A \* stopped/);
-  assert.equal(existsSync(legacyStatePath), true);
   assert.equal(existsSync(workspaceStatePath), true);
   const saved = JSON.parse(await readFile(workspaceStatePath, "utf8")) as {
     activeWorkspace?: string;
-    activeTab?: string;
     workspaces?: Record<string, { status?: string }>;
-    tabs?: Record<string, unknown>;
   };
   assert.equal(saved.activeWorkspace, "A");
-  assert.equal(saved.activeTab, undefined);
   assert.equal(saved.workspaces?.A?.status, "exited");
-  assert.equal(saved.tabs, undefined);
-  const legacy = JSON.parse(await readFile(legacyStatePath, "utf8")) as { activeTab?: string };
-  assert.equal(legacy.activeTab, "A");
 });
 
-test("Tab manager creates spaced tab names and filters implicit tab queries", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-spaced-filter-"));
+test("Workspace manager creates spaced workspace names and filters implicit workspace queries", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-spaced-filter-"));
   const replies: string[] = [];
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
-    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    createBackend: (options) => new FakeWorkspaceBackend(options.workspaceName, options.sessionFile),
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
       replies.push(text);
       return replies.length;
@@ -548,30 +540,30 @@ test("Tab manager creates spaced tab names and filters implicit tab queries", as
   });
 
   await manager.handleCommand("new eve online marketing", 1, 10, "ctx");
-  assert.match(replies.at(-1) ?? "", /Created and switched to tab eve online marketing/);
-  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "eve online marketing");
+  assert.match(replies.at(-1) ?? "", /Created and switched to workspace eve online marketing/);
+  assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, "eve online marketing");
 
   await manager.handleCommand("new eve mining", 1, 11, "ctx");
   await manager.handleCommand("eve online marketing", 1, 12, "ctx");
-  assert.match(replies.at(-1) ?? "", /Switched to tab eve online marketing/);
+  assert.match(replies.at(-1) ?? "", /Switched to workspace eve online marketing/);
 
   await manager.handleCommand("eve on", 1, 13, "ctx");
-  assert.match(replies.at(-1) ?? "", /Tabs \(1\/3\):/);
+  assert.match(replies.at(-1) ?? "", /Workspaces \(1\/3\):/);
   assert.match(replies.at(-1) ?? "", /Filters: eve 3→2, on 2→1/);
   assert.match(replies.at(-1) ?? "", /eve online marketing/);
   assert.doesNotMatch(replies.at(-1) ?? "", /eve mining/);
 });
 
-test("Tab manager deletes the active tab session after creating a replacement", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-delete-session-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager deletes the active workspace session after creating a replacement", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-delete-session-"));
+  const statePath = join(tempDir, "workspaces.json");
   const replies: string[] = [];
   const deletedSessions: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
@@ -579,8 +571,8 @@ test("Tab manager deletes the active tab session after creating a replacement", 
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -594,7 +586,7 @@ test("Tab manager deletes the active tab session after creating a replacement", 
 
   await manager.handleCommand("new A", 1, 10, "ctx");
   assert.deepEqual(manager.getActiveSessionReference("ctx"), {
-    tabName: "A",
+    workspaceName: "A",
     cwd: "/repo",
     sessionFile: "/sessions/A.jsonl",
     sessionId: "session-A",
@@ -606,7 +598,7 @@ test("Tab manager deletes the active tab session after creating a replacement", 
   assert.deepEqual(backends.get("A")?.newSessions, ["/sessions/A.jsonl"]);
   assert.deepEqual(deletedSessions, ["/sessions/A.jsonl"]);
   assert.deepEqual(manager.getActiveSessionReference("ctx"), {
-    tabName: "A",
+    workspaceName: "A",
     cwd: "/repo",
     sessionFile: "/sessions/A-1.jsonl",
     sessionId: "session-A-1",
@@ -614,24 +606,24 @@ test("Tab manager deletes the active tab session after creating a replacement", 
   });
 });
 
-test("Tab manager compacts the active tab worker", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-compact-"));
+test("Workspace manager compacts the active workspace worker", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-compact-"));
   const replies: string[] = [];
   const events: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -663,23 +655,23 @@ test("Tab manager compacts the active tab worker", async () => {
   assert.equal(manager.getActiveSessionReference("ctx")?.sessionId, "session-A");
 });
 
-test("Tab manager queues prompts during compaction and flushes them after", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-compact-queue-"));
+test("Workspace manager queues prompts during compaction and flushes them after", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-compact-queue-"));
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -732,23 +724,23 @@ test("Tab manager queues prompts during compaction and flushes them after", asyn
   assert.deepEqual(backend.followUps, ["second"]);
 });
 
-test("Tab manager drops compaction queue on abort", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-compact-abort-"));
+test("Workspace manager drops compaction queue on abort", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-compact-abort-"));
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -789,16 +781,16 @@ test("Tab manager drops compaction queue on abort", async () => {
   assert.deepEqual(backend.followUps, []);
 });
 
-test("Tab manager routes prompts to active workers and notifies inactive completion", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-runtime-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager routes prompts to active workers and notifies inactive completion", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-runtime-"));
+  const statePath = join(tempDir, "workspaces.json");
   const sharedSessionDir = join(tempDir, "sessions");
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
+  const backends = new Map<string, FakeWorkspaceBackend>();
   let currentTime = 1000;
-  const config: TelegramNormalizedConcurrentTabsConfig = {
+  const config: TelegramNormalizedConcurrentWorkspacesConfig = {
     enabled: true,
-    maxTabs: 4,
+    maxWorkspaces: 4,
     inactiveNotify: true,
     workerExtensions: ["/agent/extensions/provider.ts"],
     topicBinding: {
@@ -812,8 +804,8 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     },
   };
   const backendOptions: unknown[] = [];
-  const branchCalls: Array<{ tabName: string; sessionFile?: string; entryId: string }> = [];
-  const manager = createTelegramTabManager<string>({
+  const branchCalls: Array<{ workspaceName: string; sessionFile?: string; entryId: string }> = [];
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => config,
     getCwd: () => "/repo",
     now: () => currentTime,
@@ -821,8 +813,8 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     sessionDir: sharedSessionDir,
     createBackend: (options) => {
       backendOptions.push(options);
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -831,7 +823,7 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     },
     createTreeBranch: (reference, entryId) => {
       branchCalls.push({
-        tabName: reference.tabName,
+        workspaceName: reference.workspaceName,
         sessionFile: reference.sessionFile,
         entryId,
       });
@@ -840,14 +832,14 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
   });
 
   await manager.handleCommand("new A", 1, 10, "ctx");
-  assert.match(replies.at(-1) ?? "", /Created and switched to tab A/);
+  assert.match(replies.at(-1) ?? "", /Created and switched to workspace A/);
   assert.equal(
     (backendOptions[0] as { sessionDir?: string }).sessionDir,
     sharedSessionDir,
   );
   assert.equal(existsSync(join(sharedSessionDir, "A")), false);
   assert.deepEqual(manager.getActiveSessionReference("ctx"), {
-    tabName: "A",
+    workspaceName: "A",
     cwd: "/repo",
     sessionFile: "/sessions/A.jsonl",
     sessionId: "session-A",
@@ -891,7 +883,7 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
   assert.equal(manager.getActiveSessionName("ctx"), undefined);
   assert.deepEqual(backends.get("A")?.newSessions, [undefined]);
   assert.deepEqual(manager.getActiveSessionReference("ctx"), {
-    tabName: "A",
+    workspaceName: "A",
     cwd: "/repo",
     sessionFile: "/sessions/A-1.jsonl",
     sessionId: "session-A-1",
@@ -902,8 +894,8 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     },
   });
   const scope = manager.getActiveResumeSessionScope("ctx");
-  assert.equal(scope?.kind, "tab");
-  assert.equal(scope?.tabName, "A");
+  assert.equal(scope?.kind, "workspace");
+  assert.equal(scope?.workspaceName, "A");
   assert.equal(scope?.sessionDir, sharedSessionDir);
   assert.equal(scope?.currentSessionFile, "/sessions/A-1.jsonl");
   assert.equal(
@@ -914,7 +906,7 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     "/sessions/resumed-A.jsonl",
   ]);
   assert.deepEqual(manager.getActiveSessionReference("ctx"), {
-    tabName: "A",
+    workspaceName: "A",
     cwd: "/repo",
     sessionFile: "/sessions/resumed-A.jsonl",
     sessionId: "resumed-A",
@@ -931,11 +923,11 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     text: "prompt u1",
   });
   assert.deepEqual(branchCalls, [
-    { tabName: "A", sessionFile: "/sessions/resumed-A.jsonl", entryId: "u1" },
+    { workspaceName: "A", sessionFile: "/sessions/resumed-A.jsonl", entryId: "u1" },
   ]);
   assert.equal(backendBeforeBranch?.disposed, true);
   assert.deepEqual(manager.getActiveSessionReference("ctx"), {
-    tabName: "A",
+    workspaceName: "A",
     cwd: "/repo",
     sessionFile: "/sessions/resumed-A.jsonl",
     sessionId: "resumed-A",
@@ -955,7 +947,7 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     "ctx",
   );
   assert.deepEqual(backends.get("A")?.prompts, ["hello A"]);
-  assert.match(replies.at(-1) ?? "", /Started tab A/);
+  assert.match(replies.at(-1) ?? "", /Started workspace A/);
   assert.equal(await manager.canSwitchActiveModel("ctx"), false);
   assert.equal(
     await manager.selectActiveModel(
@@ -975,12 +967,12 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
     "ctx",
   );
   assert.deepEqual(backends.get("A")?.followUps, ["second A"]);
-  assert.match(replies.at(-1) ?? "", /Queued follow-up in tab A/);
+  assert.match(replies.at(-1) ?? "", /Queued follow-up in workspace A/);
 
   await manager.handleCommand("new B", 1, 30, "ctx");
-  assert.match(replies.at(-1) ?? "", /Created and switched to tab B/);
+  assert.match(replies.at(-1) ?? "", /Created and switched to workspace B/);
   assert.deepEqual(manager.getActiveSessionReference("ctx"), {
-    tabName: "B",
+    workspaceName: "B",
     cwd: "/repo",
     sessionFile: "/sessions/B.jsonl",
     sessionId: "session-B",
@@ -999,20 +991,20 @@ test("Tab manager routes prompts to active workers and notifies inactive complet
       { role: "assistant", content: [{ type: "text", text: "answer A" }] },
     ],
   });
-  assert.match(replies.at(-1) ?? "", /Tab A finished/);
+  assert.match(replies.at(-1) ?? "", /Workspace A finished/);
   assert.equal(replies.includes("answer A"), false);
 
   await manager.handleCommand("A", 1, 40, "ctx");
-  assert.match(replies.at(-1) ?? "", /Switched to tab A\.\n\nLast reply:\nanswer A/);
-  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
+  assert.match(replies.at(-1) ?? "", /Switched to workspace A\.\n\nLast reply:\nanswer A/);
+  assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, "A");
 
   await manager.handleCommand("abort A", 1, 50, "ctx");
   assert.deepEqual(backends.get("A")?.aborts, ["A"]);
 });
 
-test("Tab manager routes forum topic prompts to topic-bound tabs without switching active tab", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-routing-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager routes forum topic prompts to topic-bound workspaces without switching active workspace", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-routing-"));
+  const statePath = join(tempDir, "workspaces.json");
   const textReplies: string[] = [];
   const streamReplies: Array<{
     chatId: number;
@@ -1027,11 +1019,11 @@ test("Tab manager routes forum topic prompts to topic-bound tabs without switchi
     scope: ReturnType<typeof getAmbientTelegramThreadContext>;
   }> = [];
   const typingScopes: Array<ReturnType<typeof getAmbientTelegramThreadContext>> = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -1048,8 +1040,8 @@ test("Tab manager routes forum topic prompts to topic-bound tabs without switchi
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -1081,7 +1073,7 @@ test("Tab manager routes forum topic prompts to topic-bound tabs without switchi
   });
 
   await manager.handleCommand("new A", 1, 10, "ctx");
-  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
+  assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, "A");
 
   await manager.dispatchPrompt(
     {
@@ -1092,10 +1084,10 @@ test("Tab manager routes forum topic prompts to topic-bound tabs without switchi
     "ctx",
   );
   assert.deepEqual(backends.get("default")?.prompts, ["general prompt"]);
-  assert.match(textReplies.at(-1) ?? "", /Started tab General/);
-  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
+  assert.match(textReplies.at(-1) ?? "", /Started workspace General/);
+  assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, "A");
 
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
   await manager.dispatchPrompt(
     {
       chatId: -10042,
@@ -1105,22 +1097,22 @@ test("Tab manager routes forum topic prompts to topic-bound tabs without switchi
     },
     "ctx",
   );
-  assert.deepEqual(backends.get(topicTab)?.prompts, ["topic prompt"]);
-  assert.match(textReplies.at(-1) ?? "", new RegExp(`Started tab ${topicTab}`));
-  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
+  assert.deepEqual(backends.get(topicWorkspace)?.prompts, ["topic prompt"]);
+  assert.match(textReplies.at(-1) ?? "", new RegExp(`Started workspace ${topicWorkspace}`));
+  assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, "A");
   assert.deepEqual(typingScopes.at(-1), {
     chatId: -10042,
     messageThreadId: 77,
   });
 
-  const topicBackend = backends.get(topicTab);
+  const topicBackend = backends.get(topicWorkspace);
   assert.ok(topicBackend);
   topicBackend.emit({ type: "agent_start" });
   topicBackend.emit({
     type: "message_update",
     assistantMessageEvent: { type: "text_delta", delta: "topic answer" },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.deepEqual(streamReplies.at(-1), {
     chatId: -10042,
     replyToMessageId: 21,
@@ -1133,7 +1125,7 @@ test("Tab manager routes forum topic prompts to topic-bound tabs without switchi
       { role: "assistant", content: [{ type: "text", text: "topic answer final" }] },
     ],
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(streamEdits.at(-1)?.chatId, -10042);
   assert.equal(streamEdits.at(-1)?.messageId, 101);
   assert.equal(streamEdits.at(-1)?.markdown, "topic answer final");
@@ -1148,7 +1140,7 @@ test("Tab manager routes forum topic prompts to topic-bound tabs without switchi
     workspaces: Record<string, { source?: unknown }>;
   };
   assert.equal(saved.activeWorkspace, "A");
-  assert.deepEqual(saved.workspaces[topicTab]?.source, {
+  assert.deepEqual(saved.workspaces[topicWorkspace]?.source, {
     kind: "telegram-topic",
     chatId: -10042,
     messageThreadId: 77,
@@ -1156,15 +1148,15 @@ test("Tab manager routes forum topic prompts to topic-bound tabs without switchi
   await manager.dispose();
 });
 
-test("Tab manager handles forum topic service create, edit, and close events", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-service-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager handles forum topic service create, edit, and close events", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-service-"));
+  const statePath = join(tempDir, "workspaces.json");
   const disposed: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -1181,13 +1173,13 @@ test("Tab manager handles forum topic service create, edit, and close events", a
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
       const originalDispose = backend.dispose.bind(backend);
       backend.dispose = async () => {
-        disposed.push(options.tabName);
+        disposed.push(options.workspaceName);
         await originalDispose();
       };
-      backends.set(options.tabName, backend);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -1205,11 +1197,11 @@ test("Tab manager handles forum topic service create, edit, and close events", a
     ),
     true,
   );
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
   let saved: { workspaces: Record<string, { source?: { topicTitle?: string }; sessionName?: string } | undefined> } =
     JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(saved.workspaces[topicTab]?.source?.topicTitle, "Deploy Debug");
-  assert.equal(saved.workspaces[topicTab]?.sessionName, "Deploy Debug");
+  assert.equal(saved.workspaces[topicWorkspace]?.source?.topicTitle, "Deploy Debug");
+  assert.equal(saved.workspaces[topicWorkspace]?.sessionName, "Deploy Debug");
   assert.equal(backends.size, 0);
 
   await manager.handleTopicServiceMessage(
@@ -1222,8 +1214,8 @@ test("Tab manager handles forum topic service create, edit, and close events", a
     "ctx",
   );
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(saved.workspaces[topicTab]?.source?.topicTitle, "Deploy Debug 2");
-  assert.equal(saved.workspaces[topicTab]?.sessionName, "Deploy Debug 2");
+  assert.equal(saved.workspaces[topicWorkspace]?.source?.topicTitle, "Deploy Debug 2");
+  assert.equal(saved.workspaces[topicWorkspace]?.sessionName, "Deploy Debug 2");
 
   await manager.dispatchPrompt(
     {
@@ -1234,7 +1226,7 @@ test("Tab manager handles forum topic service create, edit, and close events", a
     },
     "ctx",
   );
-  assert.ok(backends.get(topicTab));
+  assert.ok(backends.get(topicWorkspace));
   await manager.handleTopicServiceMessage(
     {
       chat: { id: -10042 },
@@ -1245,20 +1237,20 @@ test("Tab manager handles forum topic service create, edit, and close events", a
     "ctx",
   );
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(saved.workspaces[topicTab], undefined);
-  assert.deepEqual(disposed, [topicTab]);
+  assert.equal(saved.workspaces[topicWorkspace], undefined);
+  assert.deepEqual(disposed, [topicWorkspace]);
   await manager.dispose();
 });
 
-test("Tab manager deletes Telegram forum topics after close when configured", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-delete-on-close-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager deletes Telegram forum topics after close when configured", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-delete-on-close-"));
+  const statePath = join(tempDir, "workspaces.json");
   const disposed: string[] = [];
   const deleteCalls: Array<{ chatId: number; messageThreadId: number }> = [];
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -1275,10 +1267,10 @@ test("Tab manager deletes Telegram forum topics after close when configured", as
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
       const originalDispose = backend.dispose.bind(backend);
       backend.dispose = async () => {
-        disposed.push(options.tabName);
+        disposed.push(options.workspaceName);
         await originalDispose();
       };
       return backend;
@@ -1299,7 +1291,7 @@ test("Tab manager deletes Telegram forum topics after close when configured", as
     },
     "ctx",
   );
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
   await manager.handleTopicServiceMessage(
     {
       chat: { id: -10042 },
@@ -1313,20 +1305,20 @@ test("Tab manager deletes Telegram forum topics after close when configured", as
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
     workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.workspaces[topicTab], undefined);
-  assert.deepEqual(disposed, [topicTab]);
+  assert.equal(saved.workspaces[topicWorkspace], undefined);
+  assert.deepEqual(disposed, [topicWorkspace]);
   assert.deepEqual(deleteCalls, [{ chatId: -10042, messageThreadId: 77 }]);
   await manager.dispose();
 });
 
-test("Tab manager ignores forum topic service events from untrusted chats", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-untrusted-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager ignores forum topic service events from untrusted chats", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-untrusted-"));
+  const statePath = join(tempDir, "workspaces.json");
   const deleteCalls: Array<{ chatId: number; messageThreadId: number }> = [];
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -1342,7 +1334,7 @@ test("Tab manager ignores forum topic service events from untrusted chats", asyn
     getCwd: () => "/repo",
     statePath,
     sessionDir: join(tempDir, "sessions"),
-    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    createBackend: (options) => new FakeWorkspaceBackend(options.workspaceName, options.sessionFile),
     sendTextReply: async () => undefined,
     deleteForumTopic: async (chatId, messageThreadId) => {
       deleteCalls.push({ chatId, messageThreadId });
@@ -1359,11 +1351,11 @@ test("Tab manager ignores forum topic service events from untrusted chats", asyn
     },
     "ctx",
   );
-  const trustedTopicTab = normalizeTelegramTopicTabName(-10042, 77);
+  const trustedTopicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
   let saved = JSON.parse(await readFile(statePath, "utf8")) as {
     workspaces: Record<string, unknown>;
   };
-  assert.ok(saved.workspaces[trustedTopicTab]);
+  assert.ok(saved.workspaces[trustedTopicWorkspace]);
 
   await manager.handleTopicServiceMessage(
     {
@@ -1375,7 +1367,7 @@ test("Tab manager ignores forum topic service events from untrusted chats", asyn
     "ctx",
   );
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(saved.workspaces[normalizeTelegramTopicTabName(-10043, 77)], undefined);
+  assert.equal(saved.workspaces[normalizeTelegramTopicWorkspaceName(-10043, 77)], undefined);
 
   await manager.handleTopicServiceMessage(
     {
@@ -1387,20 +1379,20 @@ test("Tab manager ignores forum topic service events from untrusted chats", asyn
     "ctx",
   );
   saved = JSON.parse(await readFile(statePath, "utf8"));
-  assert.ok(saved.workspaces[trustedTopicTab]);
+  assert.ok(saved.workspaces[trustedTopicWorkspace]);
   assert.deepEqual(deleteCalls, []);
   await manager.dispose();
 });
 
-test("Tab manager warns when delete-topic-on-close lacks Telegram rights", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-delete-rights-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager warns when delete-topic-on-close lacks Telegram rights", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-delete-rights-"));
+  const statePath = join(tempDir, "workspaces.json");
   const replies: Array<{ chatId: number; replyToMessageId: number | undefined; text: string }> = [];
   const runtimeEvents: Array<Record<string, unknown>> = [];
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -1416,7 +1408,7 @@ test("Tab manager warns when delete-topic-on-close lacks Telegram rights", async
     getCwd: () => "/repo",
     statePath,
     sessionDir: join(tempDir, "sessions"),
-    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    createBackend: (options) => new FakeWorkspaceBackend(options.workspaceName, options.sessionFile),
     sendTextReply: async (chatId, replyToMessageId, text) => {
       replies.push({ chatId, replyToMessageId, text });
       return replies.length;
@@ -1442,7 +1434,7 @@ test("Tab manager warns when delete-topic-on-close lacks Telegram rights", async
     },
     "ctx",
   );
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
   replies.length = 0;
   await manager.handleTopicServiceMessage(
     {
@@ -1457,26 +1449,26 @@ test("Tab manager warns when delete-topic-on-close lacks Telegram rights", async
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
     workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.workspaces[topicTab], undefined);
+  assert.equal(saved.workspaces[topicWorkspace], undefined);
   assert.equal(replies.length, 1);
   assert.deepEqual(replies[0], {
     chatId: -10042,
     replyToMessageId: undefined,
-    text: "已關閉 pi tab，但無法刪除 Telegram topic。請把 bot 設為 admin，並開啟 Manage Topics 權限。",
+    text: "已關閉 pi workspace，但無法刪除 Telegram topic。請把 bot 設為 admin，並開啟 Manage Topics 權限。",
   });
-  assert.equal(runtimeEvents[0]?.category, "tabs");
+  assert.equal(runtimeEvents[0]?.category, "workspaces");
   assert.deepEqual((runtimeEvents[0]?.details as Record<string, unknown>).action, "deleteForumTopic");
   await manager.dispose();
 });
 
-test("Tab manager syncs forum topic titles into active session names", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-title-session-"));
-  const statePath = join(tempDir, "tabs.json");
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+test("Workspace manager syncs forum topic titles into active session names", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-title-session-"));
+  const statePath = join(tempDir, "workspaces.json");
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -1493,8 +1485,8 @@ test("Tab manager syncs forum topic titles into active session names", async () 
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -1520,8 +1512,8 @@ test("Tab manager syncs forum topic titles into active session names", async () 
     "ctx",
   );
 
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
-  assert.deepEqual(backends.get(topicTab)?.sessionNames, ["Deploy Debug"]);
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
+  assert.deepEqual(backends.get(topicWorkspace)?.sessionNames, ["Deploy Debug"]);
 
   await manager.handleTopicServiceMessage(
     {
@@ -1533,13 +1525,13 @@ test("Tab manager syncs forum topic titles into active session names", async () 
     "ctx",
   );
 
-  assert.deepEqual(backends.get(topicTab)?.sessionNames, [
+  assert.deepEqual(backends.get(topicWorkspace)?.sessionNames, [
     "Deploy Debug",
     "Prod Debug",
   ]);
   assert.equal(
-    manager.getActiveSessionReference("ctx")?.tabName,
-    TELEGRAM_DEFAULT_TAB_NAME,
+    manager.getActiveSessionReference("ctx")?.workspaceName,
+    TELEGRAM_DEFAULT_WORKSPACE_NAME,
   );
   await runWithTelegramThreadContext(
     { chatId: -10042, messageThreadId: 77 },
@@ -1555,24 +1547,24 @@ test("Tab manager syncs forum topic titles into active session names", async () 
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
     workspaces: Record<string, { source?: { topicTitle?: string }; sessionName?: string }>;
   };
-  assert.equal(saved.workspaces[topicTab]?.source?.topicTitle, "Prod Debug");
-  assert.equal(saved.workspaces[topicTab]?.sessionName, "Prod Debug");
+  assert.equal(saved.workspaces[topicWorkspace]?.source?.topicTitle, "Prod Debug");
+  assert.equal(saved.workspaces[topicWorkspace]?.sessionName, "Prod Debug");
   await manager.dispose();
 });
 
-test("Tab manager blocks one session from being attached to multiple open topics", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-session-owner-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager blocks one session from being attached to multiple open topics", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-session-owner-"));
+  const statePath = join(tempDir, "workspaces.json");
   const sessionFile = join(tempDir, "shared.jsonl");
   await writeFile(sessionFile, "", "utf8");
   const symlinkPath = join(tempDir, "shared-link.jsonl");
   await symlink(sessionFile, symlinkPath);
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -1589,8 +1581,8 @@ test("Tab manager blocks one session from being attached to multiple open topics
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -1599,8 +1591,8 @@ test("Tab manager blocks one session from being attached to multiple open topics
     },
   });
 
-  const topicA = normalizeTelegramTopicTabName(-10042, 77);
-  const topicB = normalizeTelegramTopicTabName(-10042, 88);
+  const topicA = normalizeTelegramTopicWorkspaceName(-10042, 77);
+  const topicB = normalizeTelegramTopicWorkspaceName(-10042, 88);
   await manager.dispatchPrompt(
     {
       chatId: -10042,
@@ -1621,7 +1613,7 @@ test("Tab manager blocks one session from being attached to multiple open topics
     { chatId: -10042, messageThreadId: 77 },
     async () => {
       const scope = manager.getActiveResumeSessionScope("ctx");
-      assert.equal(scope?.tabName, topicA);
+      assert.equal(scope?.workspaceName, topicA);
       assert.equal(await manager.switchSession(sessionFile, "ctx", scope), true);
     },
   );
@@ -1648,7 +1640,7 @@ test("Tab manager blocks one session from being attached to multiple open topics
     { chatId: -10042, messageThreadId: 88 },
     async () => {
       const scope = manager.getActiveResumeSessionScope("ctx");
-      assert.equal(scope?.tabName, topicB);
+      assert.equal(scope?.workspaceName, topicB);
       await assert.rejects(
         () => manager.switchSession(symlinkPath, "ctx", scope),
         /already open in workspace/,
@@ -1677,15 +1669,15 @@ test("Tab manager blocks one session from being attached to multiple open topics
   await manager.dispose();
 });
 
-test("Tab manager blocks conflicting topic prompts by live session state", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-live-owner-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager blocks conflicting topic prompts by live session state", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-live-owner-"));
+  const statePath = join(tempDir, "workspaces.json");
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -1702,8 +1694,8 @@ test("Tab manager blocks conflicting topic prompts by live session state", async
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -1712,8 +1704,8 @@ test("Tab manager blocks conflicting topic prompts by live session state", async
     },
   });
 
-  const topicA = normalizeTelegramTopicTabName(-10042, 77);
-  const topicB = normalizeTelegramTopicTabName(-10042, 88);
+  const topicA = normalizeTelegramTopicWorkspaceName(-10042, 77);
+  const topicB = normalizeTelegramTopicWorkspaceName(-10042, 88);
   await manager.dispatchPrompt(
     {
       chatId: -10042,
@@ -1763,19 +1755,19 @@ test("Tab manager blocks conflicting topic prompts by live session state", async
   await manager.dispose();
 });
 
-test("Tab manager ignores late worker output after a forum topic is closed", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-close-late-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager ignores late worker output after a forum topic is closed", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-close-late-"));
+  const statePath = join(tempDir, "workspaces.json");
   const textReplies: string[] = [];
   const markdownReplies: string[] = [];
   const streamReplies: string[] = [];
   const typingScopes: Array<ReturnType<typeof getAmbientTelegramThreadContext>> = [];
   const disposed: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -1792,13 +1784,13 @@ test("Tab manager ignores late worker output after a forum topic is closed", asy
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
       const originalDispose = backend.dispose.bind(backend);
       backend.dispose = async () => {
-        disposed.push(options.tabName);
+        disposed.push(options.workspaceName);
         await originalDispose();
       };
-      backends.set(options.tabName, backend);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -1829,8 +1821,8 @@ test("Tab manager ignores late worker output after a forum topic is closed", asy
     },
     "ctx",
   );
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
-  const backend = backends.get(topicTab);
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
+  const backend = backends.get(topicWorkspace);
   assert.ok(backend);
   assert.deepEqual(typingScopes.at(-1), {
     chatId: -10042,
@@ -1848,9 +1840,9 @@ test("Tab manager ignores late worker output after a forum topic is closed", asy
     "ctx",
   );
   for (let attempt = 0; attempt < 20 && disposed.length === 0; attempt += 1) {
-    await waitForTabStreamFlush();
+    await waitForWorkspaceStreamFlush();
   }
-  assert.deepEqual(disposed, [topicTab]);
+  assert.deepEqual(disposed, [topicWorkspace]);
   const typingCountAfterClose = typingScopes.length;
 
   backend.emit({ type: "agent_start" });
@@ -1868,7 +1860,7 @@ test("Tab manager ignores late worker output after a forum topic is closed", asy
       { role: "assistant", content: [{ type: "text", text: "late final" }] },
     ],
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   assert.deepEqual(streamReplies, []);
@@ -1881,20 +1873,20 @@ test("Tab manager ignores late worker output after a forum topic is closed", asy
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
     workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.workspaces[topicTab], undefined);
+  assert.equal(saved.workspaces[topicWorkspace], undefined);
   await manager.dispose();
 });
 
-test("Tab manager preserves session files when closing forum topics", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-session-preserve-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager preserves session files when closing forum topics", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-session-preserve-"));
+  const statePath = join(tempDir, "workspaces.json");
   const sessionFile = join(tempDir, "topic-session.jsonl");
   await writeFile(sessionFile, "session data\n", "utf8");
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -1911,8 +1903,8 @@ test("Tab manager preserves session files when closing forum topics", async () =
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -1928,13 +1920,13 @@ test("Tab manager preserves session files when closing forum topics", async () =
     },
     "ctx",
   );
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
-  backends.get(topicTab)?.setState({ isStreaming: false });
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
+  backends.get(topicWorkspace)?.setState({ isStreaming: false });
   await runWithTelegramThreadContext(
     { chatId: -10042, messageThreadId: 77 },
     async () => {
       const scope = manager.getActiveResumeSessionScope("ctx");
-      assert.equal(scope?.tabName, topicTab);
+      assert.equal(scope?.workspaceName, topicWorkspace);
       assert.equal(await manager.switchSession(sessionFile, "ctx", scope), true);
     },
   );
@@ -1953,14 +1945,14 @@ test("Tab manager preserves session files when closing forum topics", async () =
   await manager.dispose();
 });
 
-test("Tab manager applies forum topic titles to new and resumed sessions", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-title-new-resume-"));
-  const statePath = join(tempDir, "tabs.json");
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+test("Workspace manager applies forum topic titles to new and resumed sessions", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-title-new-resume-"));
+  const statePath = join(tempDir, "workspaces.json");
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -1977,8 +1969,8 @@ test("Tab manager applies forum topic titles to new and resumed sessions", async
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -1994,7 +1986,7 @@ test("Tab manager applies forum topic titles to new and resumed sessions", async
     "ctx",
   );
 
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
   await runWithTelegramThreadContext(
     { chatId: -10042, messageThreadId: 77 },
     async () => {
@@ -2009,11 +2001,11 @@ test("Tab manager applies forum topic titles to new and resumed sessions", async
     },
   );
 
-  assert.deepEqual(backends.get(topicTab)?.newSessions, [undefined]);
-  assert.deepEqual(backends.get(topicTab)?.switchSessions, [
+  assert.deepEqual(backends.get(topicWorkspace)?.newSessions, [undefined]);
+  assert.deepEqual(backends.get(topicWorkspace)?.switchSessions, [
     "/sessions/resumed-topic.jsonl",
   ]);
-  assert.deepEqual(backends.get(topicTab)?.sessionNames, [
+  assert.deepEqual(backends.get(topicWorkspace)?.sessionNames, [
     "Deploy Debug",
     "Deploy Debug",
     "Deploy Debug",
@@ -2021,15 +2013,15 @@ test("Tab manager applies forum topic titles to new and resumed sessions", async
   await manager.dispose();
 });
 
-test("Tab manager syncs persisted topic session names on demand", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-sync-names-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager syncs persisted topic session names on demand", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-sync-names-"));
+  const statePath = join(tempDir, "workspaces.json");
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -2046,8 +2038,8 @@ test("Tab manager syncs persisted topic session names on demand", async () => {
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -2065,7 +2057,7 @@ test("Tab manager syncs persisted topic session names on demand", async () => {
     },
     "ctx",
   );
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
   await runWithTelegramThreadContext(
     { chatId: -10042, messageThreadId: 77 },
     async () => {
@@ -2074,13 +2066,13 @@ test("Tab manager syncs persisted topic session names on demand", async () => {
     },
   );
 
-  assert.deepEqual(backends.get(topicTab)?.sessionNames, [
+  assert.deepEqual(backends.get(topicWorkspace)?.sessionNames, [
     "Deploy Debug",
     "manual",
   ]);
   await manager.handleCommand("sync-names", 1, 30, "ctx");
   assert.equal(replies.at(-1), "Synced 1 topic session name.");
-  assert.deepEqual(backends.get(topicTab)?.sessionNames, [
+  assert.deepEqual(backends.get(topicWorkspace)?.sessionNames, [
     "Deploy Debug",
     "manual",
     "Deploy Debug",
@@ -2094,14 +2086,14 @@ test("Tab manager syncs persisted topic session names on demand", async () => {
   await manager.dispose();
 });
 
-test("Tab manager scopes active APIs to ambient forum topics", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-active-api-"));
-  const statePath = join(tempDir, "tabs.json");
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+test("Workspace manager scopes active APIs to ambient forum topics", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-active-api-"));
+  const statePath = join(tempDir, "workspaces.json");
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 5,
+      maxWorkspaces: 5,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -2118,35 +2110,35 @@ test("Tab manager scopes active APIs to ambient forum topics", async () => {
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
   });
 
   await manager.handleCommand("new A", 1, 10, "ctx");
-  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
+  assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, "A");
 
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
   await runWithTelegramThreadContext(
     { chatId: -10042, messageThreadId: 77 },
     async () => {
-      assert.equal(manager.getActiveSessionReference("ctx")?.tabName, topicTab);
+      assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, topicWorkspace);
       assert.equal(await manager.setActiveSessionName("topic session", "ctx"), true);
       assert.equal(manager.getActiveSessionName("ctx"), "topic session");
-      assert.equal(manager.getActiveSessionReference("ctx")?.tabName, topicTab);
-      assert.equal(manager.getActiveResumeSessionScope("ctx")?.tabName, topicTab);
+      assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, topicWorkspace);
+      assert.equal(manager.getActiveResumeSessionScope("ctx")?.workspaceName, topicWorkspace);
       assert.deepEqual(await manager.newActiveSession("ctx"), { cancelled: false });
     },
   );
-  assert.equal(backends.get(topicTab)?.newSessions.length, 1);
-  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "A");
+  assert.equal(backends.get(topicWorkspace)?.newSessions.length, 1);
+  assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, "A");
 
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
     workspaces: Record<string, { source?: unknown; sessionName?: string }>;
   };
-  assert.deepEqual(saved.workspaces[topicTab]?.source, {
+  assert.deepEqual(saved.workspaces[topicWorkspace]?.source, {
     kind: "telegram-topic",
     chatId: -10042,
     messageThreadId: 77,
@@ -2154,15 +2146,15 @@ test("Tab manager scopes active APIs to ambient forum topics", async () => {
   await manager.dispose();
 });
 
-test("Tab manager rejects unknown forum topics at max tab capacity", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-max-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager rejects unknown forum topics at max workspace capacity", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-max-"));
+  const statePath = join(tempDir, "workspaces.json");
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 1,
+      maxWorkspaces: 1,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -2179,8 +2171,8 @@ test("Tab manager rejects unknown forum topics at max tab capacity", async () =>
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -2212,24 +2204,24 @@ test("Tab manager rejects unknown forum topics at max tab capacity", async () =>
   assert.deepEqual(Object.keys(saved.workspaces), ["default"]);
 });
 
-test("Tab manager reports worker API errors instead of replaying stale text", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-error-"));
+test("Workspace manager reports worker API errors instead of replaying stale text", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-error-"));
   const textReplies: string[] = [];
   const markdownReplies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -2284,19 +2276,19 @@ test("Tab manager reports worker API errors instead of replaying stale text", as
   assert.deepEqual(markdownReplies, ["old answer"]);
   assert.equal(
     textReplies.at(-1),
-    "Tab A failed: 503 auth_unavailable: no auth available",
+    "Workspace A failed: 503 auth_unavailable: no auth available",
   );
 });
 
-test("Tab manager keeps sticky topic workers when another topic starts", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-sticky-topic-workers-"));
+test("Workspace manager keeps sticky topic workers when another topic starts", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-sticky-topic-workers-"));
   const replies: string[] = [];
   const disposed: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       maxWorkers: 1,
       inactiveNotify: true,
       workerExtensions: [],
@@ -2311,16 +2303,16 @@ test("Tab manager keeps sticky topic workers when another topic starts", async (
       },
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
       const originalDispose = backend.dispose.bind(backend);
       backend.dispose = async () => {
-        disposed.push(options.tabName);
+        disposed.push(options.workspaceName);
         await originalDispose();
       };
-      backends.set(options.tabName, backend);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -2342,7 +2334,7 @@ test("Tab manager keeps sticky topic workers when another topic starts", async (
       true,
     );
   }
-  const saved = JSON.parse(await readFile(join(tempDir, "tabs.json"), "utf8")) as {
+  const saved = JSON.parse(await readFile(join(tempDir, "workspaces.json"), "utf8")) as {
     workspaces: Record<string, unknown>;
   };
   assert.equal(Object.keys(saved.workspaces).length, 3);
@@ -2390,14 +2382,14 @@ test("Tab manager keeps sticky topic workers when another topic starts", async (
   await manager.dispose();
 });
 
-test("Tab manager uses current-topic wording for native prompt replies", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-prompt-wording-"));
+test("Workspace manager uses current-topic wording for native prompt replies", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-native-prompt-wording-"));
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -2411,11 +2403,11 @@ test("Tab manager uses current-topic wording for native prompt replies", async (
       },
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -2435,12 +2427,12 @@ test("Tab manager uses current-topic wording for native prompt replies", async (
   );
   assert.equal(replies.at(-1), "Topic prompt is empty.");
 
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
   await runWithTelegramThreadContext(
     { chatId: -10042, messageThreadId: 77 },
     async () => {
       assert.deepEqual(await manager.abortActive("ctx"), {
-        tabName: topicTab,
+        workspaceName: topicWorkspace,
         aborted: false,
         message: "No active worker for current topic.",
       });
@@ -2469,7 +2461,7 @@ test("Tab manager uses current-topic wording for native prompt replies", async (
   );
   assert.equal(replies.at(-1), "Queued follow-up in current topic.");
 
-  const backend = backends.get(topicTab);
+  const backend = backends.get(topicWorkspace);
   assert.ok(backend);
   assert.deepEqual(backend.prompts, ["first"]);
   assert.deepEqual(backend.followUps, ["second"]);
@@ -2490,13 +2482,13 @@ test("Tab manager uses current-topic wording for native prompt replies", async (
     { chatId: -10042, messageThreadId: 77 },
     async () => {
       assert.deepEqual(await manager.abortActive("ctx"), {
-        tabName: topicTab,
+        workspaceName: topicWorkspace,
         aborted: true,
         message: "Aborted current topic.",
       });
-      assert.deepEqual(backend.aborts, [topicTab]);
+      assert.deepEqual(backend.aborts, [topicWorkspace]);
       assert.deepEqual(await manager.abortActive("ctx"), {
-        tabName: topicTab,
+        workspaceName: topicWorkspace,
         aborted: true,
         message: "Aborted current topic.",
       });
@@ -2505,13 +2497,13 @@ test("Tab manager uses current-topic wording for native prompt replies", async (
   await manager.dispose();
 });
 
-test("Tab manager uses workspace wording for native inactive completion notices", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-inactive-notice-"));
+test("Workspace manager uses workspace wording for native inactive completion notices", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-native-inactive-notice-"));
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const config: TelegramNormalizedConcurrentTabsConfig = {
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const config: TelegramNormalizedConcurrentWorkspacesConfig = {
     enabled: true,
-    maxTabs: 4,
+    maxWorkspaces: 4,
     inactiveNotify: true,
     workerExtensions: [],
     topicBinding: {
@@ -2524,14 +2516,14 @@ test("Tab manager uses workspace wording for native inactive completion notices"
       trustedChatIds: [],
     },
   };
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => config,
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -2567,18 +2559,18 @@ test("Tab manager uses workspace wording for native inactive completion notices"
     replies.at(-1),
     "Workspace finished. Open this workspace to view the latest reply.",
   );
-  assert.doesNotMatch(replies.at(-1) ?? "", /Tab|\/tab|tg-/);
+  assert.doesNotMatch(replies.at(-1) ?? "", /tg-/);
   await manager.dispose();
 });
 
-test("Tab manager uses current-topic wording for native worker lifecycle errors", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-worker-wording-"));
+test("Workspace manager uses current-topic wording for native worker lifecycle errors", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-native-worker-wording-"));
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -2592,11 +2584,11 @@ test("Tab manager uses current-topic wording for native worker lifecycle errors"
       },
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -2614,8 +2606,8 @@ test("Tab manager uses current-topic wording for native worker lifecycle errors"
     },
     "ctx",
   );
-  const topicTab = normalizeTelegramTopicTabName(-10042, 77);
-  const backend = backends.get(topicTab);
+  const topicWorkspace = normalizeTelegramTopicWorkspaceName(-10042, 77);
+  const backend = backends.get(topicWorkspace);
   assert.ok(backend);
   backend.setState({ isStreaming: true });
 
@@ -2658,15 +2650,15 @@ test("Tab manager uses current-topic wording for native worker lifecycle errors"
   await manager.dispose();
 });
 
-test("Tab manager may stop idle non-native workers when live worker capacity is full", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-worker-capacity-stop-"));
+test("Workspace manager may stop idle non-native workers when live worker capacity is full", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-worker-capacity-stop-"));
   const replies: string[] = [];
   const disposed: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       maxWorkers: 1,
       inactiveNotify: true,
       workerExtensions: [],
@@ -2681,16 +2673,16 @@ test("Tab manager may stop idle non-native workers when live worker capacity is 
       },
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
       const originalDispose = backend.dispose.bind(backend);
       backend.dispose = async () => {
-        disposed.push(options.tabName);
+        disposed.push(options.workspaceName);
         await originalDispose();
       };
-      backends.set(options.tabName, backend);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -2745,32 +2737,32 @@ test("Tab manager may stop idle non-native workers when live worker capacity is 
     ),
     true,
   );
-  assert.equal(replies.at(-1), "Started tab tg-o6dmkl-26.");
+  assert.equal(replies.at(-1), "Started workspace tg-o6dmkl-26.");
   assert.equal(backends.size, 2);
   assert.equal(disposed.length, 1);
   assert.equal(firstBackend.disposed, true);
   await manager.dispose();
 });
 
-test("Tab manager rebinds worker when resume RPC reports stale session state", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-resume-rebind-"));
+test("Workspace manager rebinds worker when resume RPC reports stale session state", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-resume-rebind-"));
   const replies: string[] = [];
-  const backends: FakeTabBackend[] = [];
+  const backends: FakeWorkspaceBackend[] = [];
   const backendOptions: unknown[] = [];
   const events: string[] = [];
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
       backendOptions.push(options);
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
       backends.push(backend);
       return backend;
     },
@@ -2807,23 +2799,23 @@ test("Tab manager rebinds worker when resume RPC reports stale session state", a
   assert.match(events.join("\n"), /switch_session_rebind:/);
 });
 
-test("Tab manager refreshes session name when resuming another session", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-resume-name-"));
+test("Workspace manager refreshes session name when resuming another session", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-resume-name-"));
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -2861,24 +2853,24 @@ test("Tab manager refreshes session name when resuming another session", async (
   );
 });
 
-test("Tab-aware session name ports target the active tab", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-name-"));
+test("Workspace-aware session name ports target the active workspace", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-name-"));
   const replies: string[] = [];
   const parentSets: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -2886,8 +2878,8 @@ test("Tab-aware session name ports target the active tab", async () => {
       return replies.length;
     },
   });
-  const ports = createTelegramTabAwareSessionNamePorts({
-    tabManager: manager,
+  const ports = createTelegramWorkspaceAwareSessionNamePorts({
+    workspaceManager: manager,
     getParentSessionName: () => "parent",
     setParentSessionName: (name) => {
       parentSets.push(name);
@@ -2905,24 +2897,24 @@ test("Tab-aware session name ports target the active tab", async () => {
   assert.deepEqual(parentSets, []);
 });
 
-test("Tab manager replays only unread tab completions after switch", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-switch-replay-"));
+test("Workspace manager replays only unread workspace completions after switch", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-switch-replay-"));
   const replies: string[] = [];
   const replays: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -2931,7 +2923,7 @@ test("Tab manager replays only unread tab completions after switch", async () =>
     },
     sendLastTurnsOnSwitch: async (reference, chatId, replyToMessageId) => {
       replays.push(
-        `${reference.tabName}:${reference.sessionFile}:${chatId}:${replyToMessageId}`,
+        `${reference.workspaceName}:${reference.sessionFile}:${chatId}:${replyToMessageId}`,
       );
     },
   });
@@ -2940,7 +2932,7 @@ test("Tab manager replays only unread tab completions after switch", async () =>
   await manager.handleCommand("new B", 1, 20, "ctx");
   await manager.handleCommand("A", 7, 30, "ctx");
 
-  assert.match(replies.at(-1) ?? "", /Switched to tab A/);
+  assert.match(replies.at(-1) ?? "", /Switched to workspace A/);
   assert.deepEqual(replays, []);
 
   await manager.dispatchPrompt(
@@ -2963,33 +2955,33 @@ test("Tab manager replays only unread tab completions after switch", async () =>
       { role: "assistant", content: [{ type: "text", text: "answer A" }] },
     ],
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
 
   await manager.handleCommand("A", 7, 40, "ctx");
 
-  assert.match(replies.at(-1) ?? "", /Switched to tab A\. Replaying unread latest messages\./);
+  assert.match(replies.at(-1) ?? "", /Switched to workspace A\. Replaying unread latest messages\./);
   assert.doesNotMatch(replies.at(-1) ?? "", /Last reply/);
   assert.deepEqual(replays, ["A:/sessions/A.jsonl:7:40"]);
 });
 
-test("Tab manager sends switched last reply through markdown delivery when available", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-switch-markdown-"));
+test("Workspace manager sends switched last reply through markdown delivery when available", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-switch-markdown-"));
   const textReplies: string[] = [];
   const markdownReplies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -3025,27 +3017,27 @@ test("Tab manager sends switched last reply through markdown delivery when avail
   await manager.handleCommand("new B", 1, 20, "ctx");
   await manager.handleCommand("A", 7, 30, "ctx");
 
-  assert.match(textReplies.join("\n"), /Created and switched to tab B/);
+  assert.match(textReplies.join("\n"), /Created and switched to workspace B/);
   assert.equal(
     markdownReplies.at(-1),
-    "Switched to tab A.\n\nLast reply:\nanswer **A**\n\n```ts\nconst x = 1\n```",
+    "Switched to workspace A.\n\nLast reply:\nanswer **A**\n\n```ts\nconst x = 1\n```",
   );
 });
 
-test("Tab manager closes the active tab with bare close command", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-active-close-"));
+test("Workspace manager closes the active workspace with bare close command", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-active-close-"));
   const replies: string[] = [];
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
-    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    createBackend: (options) => new FakeWorkspaceBackend(options.workspaceName, options.sessionFile),
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
       replies.push(text);
       return replies.length;
@@ -3055,19 +3047,19 @@ test("Tab manager closes the active tab with bare close command", async () => {
   await manager.handleCommand("new A", 1, 10, "ctx");
   await manager.handleCommand("new B", 1, 11, "ctx");
   await manager.handleCommand("close", 1, 12, "ctx");
-  assert.match(replies.at(-1) ?? "", /Closed tab B/);
+  assert.match(replies.at(-1) ?? "", /Closed workspace B/);
 
   await manager.handleCommand("status B", 1, 13, "ctx");
-  assert.match(replies.at(-1) ?? "", /Unknown tab: B/);
+  assert.match(replies.at(-1) ?? "", /Unknown workspace: B/);
 });
 
-test("Tab manager blocks manual tab lifecycle commands in forum-native mode", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-lifecycle-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager blocks manual workspace lifecycle commands in forum-native mode", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-native-lifecycle-"));
+  const statePath = join(tempDir, "workspaces.json");
   const replies: string[] = [];
-  const config: TelegramNormalizedConcurrentTabsConfig = {
+  const config: TelegramNormalizedConcurrentWorkspacesConfig = {
     enabled: true,
-    maxTabs: 10,
+    maxWorkspaces: 10,
     inactiveNotify: true,
     workerExtensions: [],
     topicBinding: {
@@ -3080,12 +3072,12 @@ test("Tab manager blocks manual tab lifecycle commands in forum-native mode", as
       trustedChatIds: [],
     },
   };
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => config,
     getCwd: () => "/repo",
     statePath,
     sessionDir: join(tempDir, "sessions"),
-    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    createBackend: (options) => new FakeWorkspaceBackend(options.workspaceName, options.sessionFile),
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
       replies.push(text);
       return replies.length;
@@ -3094,7 +3086,7 @@ test("Tab manager blocks manual tab lifecycle commands in forum-native mode", as
 
   await manager.handleCommand("new A", 1, 10, "ctx");
   await manager.handleCommand("new B", 1, 11, "ctx");
-  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "B");
+  assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, "B");
   config.topicBinding!.native = true;
   replies.length = 0;
 
@@ -3113,8 +3105,8 @@ test("Tab manager blocks manual tab lifecycle commands in forum-native mode", as
   assert.equal(saved.activeWorkspace, "B");
 
   await manager.handleCommand("A", 1, 14, "ctx");
-  assert.match(replies.at(-1) ?? "", /Tabs \(2\/3\):/);
-  assert.doesNotMatch(replies.at(-1) ?? "", /Switched to tab A/);
+  assert.match(replies.at(-1) ?? "", /Workspaces \(2\/3\):/);
+  assert.doesNotMatch(replies.at(-1) ?? "", /Switched to workspace A/);
   saved = JSON.parse(await readFile(statePath, "utf8"));
   assert.equal(saved.activeWorkspace, "B");
 
@@ -3130,13 +3122,13 @@ test("Tab manager blocks manual tab lifecycle commands in forum-native mode", as
   assert.equal(saved.workspaces.Beta, undefined);
 
   await manager.handleCommand("status B", 1, 17, "ctx");
-  assert.match(replies.at(-1) ?? "", /Tab: B/);
+  assert.match(replies.at(-1) ?? "", /Workspace: B/);
   await manager.dispose();
 });
 
-test("Tab manager cleans proven topic orphan records", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-topic-diagnostics-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager cleans proven topic orphan records", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-topic-diagnostics-"));
+  const statePath = join(tempDir, "workspaces.json");
   const replies: string[] = [];
   const topicOrphanProofStore = createTelegramTopicOrphanProofStore();
   topicOrphanProofStore.record({
@@ -3150,17 +3142,17 @@ test("Tab manager cleans proven topic orphan records", async () => {
     statePath,
     JSON.stringify({
       version: 1,
-      activeTab: TELEGRAM_DEFAULT_TAB_NAME,
-      tabs: {
-        [TELEGRAM_DEFAULT_TAB_NAME]: {
-          name: TELEGRAM_DEFAULT_TAB_NAME,
+      activeWorkspace: TELEGRAM_DEFAULT_WORKSPACE_NAME,
+      workspaces: {
+        [TELEGRAM_DEFAULT_WORKSPACE_NAME]: {
+          name: TELEGRAM_DEFAULT_WORKSPACE_NAME,
           cwd: "/repo",
           createdAt: 1000,
           lastUsedAt: 1000,
           status: "idle",
         },
-        [normalizeTelegramTopicTabName(-10042, 77)]: {
-          name: normalizeTelegramTopicTabName(-10042, 77),
+        [normalizeTelegramTopicWorkspaceName(-10042, 77)]: {
+          name: normalizeTelegramTopicWorkspaceName(-10042, 77),
           cwd: "/repo",
           createdAt: 1000,
           lastUsedAt: 1000,
@@ -3173,8 +3165,8 @@ test("Tab manager cleans proven topic orphan records", async () => {
             topicTitle: "Deleted Topic",
           },
         },
-        [normalizeTelegramTopicTabName(-10042, 88)]: {
-          name: normalizeTelegramTopicTabName(-10042, 88),
+        [normalizeTelegramTopicWorkspaceName(-10042, 88)]: {
+          name: normalizeTelegramTopicWorkspaceName(-10042, 88),
           cwd: "/repo",
           createdAt: 1000,
           lastUsedAt: 1000,
@@ -3189,10 +3181,10 @@ test("Tab manager cleans proven topic orphan records", async () => {
       },
     }),
   );
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       inactiveNotify: true,
       workerExtensions: [],
       topicBinding: {
@@ -3208,7 +3200,7 @@ test("Tab manager cleans proven topic orphan records", async () => {
     getCwd: () => "/repo",
     statePath,
     sessionDir: join(tempDir, "sessions"),
-    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    createBackend: (options) => new FakeWorkspaceBackend(options.workspaceName, options.sessionFile),
     topicOrphanProofStore,
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
       replies.push(text);
@@ -3233,8 +3225,8 @@ test("Tab manager cleans proven topic orphan records", async () => {
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
     workspaces: Record<string, unknown>;
   };
-  assert.equal(saved.workspaces[normalizeTelegramTopicTabName(-10042, 77)], undefined);
-  assert.ok(saved.workspaces[normalizeTelegramTopicTabName(-10042, 88)]);
+  assert.equal(saved.workspaces[normalizeTelegramTopicWorkspaceName(-10042, 77)], undefined);
+  assert.ok(saved.workspaces[normalizeTelegramTopicWorkspaceName(-10042, 88)]);
   assert.deepEqual(topicOrphanProofStore.getProofs(), []);
 
   await manager.handleTopicCommand?.("cleanup", 1, 12, "ctx");
@@ -3245,17 +3237,17 @@ test("Tab manager cleans proven topic orphan records", async () => {
   await manager.dispose();
 });
 
-test("Tab manager keeps the dashboard read-only in forum-native mode", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-native-dashboard-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace manager keeps the dashboard read-only in forum-native mode", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-native-dashboard-"));
+  const statePath = join(tempDir, "workspaces.json");
   const textReplies: string[] = [];
   const dashboardTexts: string[] = [];
   const dashboardMarkups: string[] = [];
   const interactiveEdits: string[] = [];
   const answers: string[] = [];
-  const config: TelegramNormalizedConcurrentTabsConfig = {
+  const config: TelegramNormalizedConcurrentWorkspacesConfig = {
     enabled: true,
-    maxTabs: 10,
+    maxWorkspaces: 10,
     inactiveNotify: true,
     workerExtensions: [],
     topicBinding: {
@@ -3268,12 +3260,12 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
       trustedChatIds: [],
     },
   };
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => config,
     getCwd: () => "/repo",
     statePath,
     sessionDir: join(tempDir, "sessions"),
-    createBackend: (options) => new FakeTabBackend(options.tabName, options.sessionFile),
+    createBackend: (options) => new FakeWorkspaceBackend(options.workspaceName, options.sessionFile),
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
       textReplies.push(text);
       return textReplies.length;
@@ -3295,7 +3287,7 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
 
   await manager.handleCommand("new A", 1, 10, "ctx");
   await manager.handleCommand("new B", 1, 11, "ctx");
-  assert.equal(manager.getActiveSessionReference("ctx")?.tabName, "B");
+  assert.equal(manager.getActiveSessionReference("ctx")?.workspaceName, "B");
   config.topicBinding!.native = true;
 
   await manager.handleCommand("", 1, 12, "ctx");
@@ -3303,15 +3295,15 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
   assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10\n/);
   assert.match(dashboardTexts.at(-1) ?? "", /○ General · idle · worker not started · \d+s · 0msg · unset/);
   assert.match(dashboardTexts.at(-1) ?? "", /● B · idle · worker idle · \d+s · 0msg · unset/);
-  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /tab:switch:/);
-  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /tab:close/);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /workspace:switch:/);
+  assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /workspace:close/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /Manage 🗑/);
   assert.doesNotMatch(dashboardMarkups.at(-1) ?? "", /Close/);
 
   await manager.handleCallbackQuery(
     {
       id: "cb-switch-native",
-      data: "tab:switch:A",
+      data: "workspace:switch:A",
       message: { chat: { id: 7 }, message_id: 77 },
     },
     "ctx",
@@ -3329,7 +3321,7 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
   await manager.handleCallbackQuery(
     {
       id: "cb-close-native",
-      data: "tab:close:do:B",
+      data: "workspace:close:do:B",
       message: { chat: { id: 7 }, message_id: 77 },
     },
     "ctx",
@@ -3341,7 +3333,7 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
   await manager.handleCallbackQuery(
     {
       id: "cb-close-manage-native",
-      data: "tab:close-manage",
+      data: "workspace:close-manage",
       message: { chat: { id: 7 }, message_id: 77 },
     },
     "ctx",
@@ -3351,8 +3343,8 @@ test("Tab manager keeps the dashboard read-only in forum-native mode", async () 
   await manager.dispose();
 });
 
-test("Tab manager opens interactive dashboard and handles tab callbacks", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-dashboard-"));
+test("Workspace manager opens interactive dashboard and handles workspace callbacks", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-dashboard-"));
   const textReplies: string[] = [];
   const interactiveSends: string[] = [];
   const interactiveEdits: string[] = [];
@@ -3360,20 +3352,20 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   const dashboardMarkups: string[] = [];
   const answers: string[] = [];
   const replays: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -3402,7 +3394,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
       answers.push(text ?? "");
     },
     sendLastTurnsOnSwitch: async (reference, chatId, replyToMessageId) => {
-      replays.push(`${reference.tabName}:${chatId}:${replyToMessageId}`);
+      replays.push(`${reference.workspaceName}:${chatId}:${replyToMessageId}`);
     },
   });
 
@@ -3410,7 +3402,7 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   await manager.handleCommand("new B", 1, 11, "ctx");
   await manager.handleCommand("", 1, 12, "ctx");
 
-  assert.deepEqual(interactiveSends, ["plain:Tabs 3/10:General|A"]);
+  assert.deepEqual(interactiveSends, ["plain:Workspaces 3/10:General|A"]);
   assert.match(dashboardTexts.at(-1) ?? "", /\nWorkers: 2\/10\n/);
   assert.match(dashboardTexts.at(-1) ?? "", /○ General · idle · worker not started · \d+s · 0msg · unset/);
   assert.match(dashboardTexts.at(-1) ?? "", /● B · idle · worker idle · \d+s · 0msg · unset/);
@@ -3428,21 +3420,21 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   await manager.handleCallbackQuery(
     {
       id: "cb-switch",
-      data: "tab:switch:A",
+      data: "workspace:switch:A",
       message: { chat: { id: 7 }, message_id: 77 },
     },
     "ctx",
   );
 
   assert.equal(answers.at(-1), "Switching to A.");
-  assert.match(textReplies.at(-1) ?? "", /Switched to tab A/);
+  assert.match(textReplies.at(-1) ?? "", /Switched to workspace A/);
   assert.deepEqual(replays, []);
-  assert.match(interactiveEdits.at(-1) ?? "", /plain:Tabs 3\/10/);
+  assert.match(interactiveEdits.at(-1) ?? "", /plain:Workspaces 3\/10/);
 
   await manager.handleCallbackQuery(
     {
       id: "cb-last5",
-      data: "tab:last5",
+      data: "workspace:last5",
       message: { chat: { id: 7 }, message_id: 77 },
     },
     "ctx",
@@ -3453,36 +3445,36 @@ test("Tab manager opens interactive dashboard and handles tab callbacks", async 
   await manager.handleCallbackQuery(
     {
       id: "cb-close",
-      data: "tab:close:A",
+      data: "workspace:close:A",
       message: { chat: { id: 7 }, message_id: 77 },
     },
     "ctx",
   );
-  assert.match(interactiveEdits.at(-1) ?? "", /Close tab A/);
+  assert.match(interactiveEdits.at(-1) ?? "", /Close workspace A/);
   await manager.handleCallbackQuery(
     {
       id: "cb-close-do",
-      data: "tab:close:do:A",
+      data: "workspace:close:do:A",
       message: { chat: { id: 7 }, message_id: 77 },
     },
     "ctx",
   );
   assert.equal(answers.at(-1), "Closing A.");
-  assert.match(textReplies.at(-1) ?? "", /Closed tab A/);
+  assert.match(textReplies.at(-1) ?? "", /Closed workspace A/);
 });
 
-test("Tab dashboard closes multiple selected tabs", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-multi-close-"));
-  const statePath = join(tempDir, "tabs.json");
+test("Workspace dashboard closes multiple selected workspaces", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-multi-close-"));
+  const statePath = join(tempDir, "workspaces.json");
   const textReplies: string[] = [];
   const interactiveEdits: string[] = [];
   const editMarkups: string[] = [];
   const answers: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       inactiveNotify: true,
       workerExtensions: [],
     }),
@@ -3490,8 +3482,8 @@ test("Tab dashboard closes multiple selected tabs", async () => {
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -3521,18 +3513,18 @@ test("Tab dashboard closes multiple selected tabs", async () => {
   await manager.handleCallbackQuery(
     {
       id: "manage",
-      data: "tab:close-manage",
+      data: "workspace:close-manage",
       message: { chat: { id: 7 }, message_id: 88 },
     },
     "ctx",
   );
-  assert.match(interactiveEdits.at(-1) ?? "", /Close mode: select tabs to close/);
-  assert.match(editMarkups.at(-1) ?? "", /☐ A:tab:close-toggle:A/);
+  assert.match(interactiveEdits.at(-1) ?? "", /Close mode: select workspaces to close/);
+  assert.match(editMarkups.at(-1) ?? "", /☐ A:workspace:close-toggle:A/);
 
   await manager.handleCallbackQuery(
     {
       id: "select-a",
-      data: "tab:close-toggle:A",
+      data: "workspace:close-toggle:A",
       message: { chat: { id: 7 }, message_id: 88 },
     },
     "ctx",
@@ -3541,7 +3533,7 @@ test("Tab dashboard closes multiple selected tabs", async () => {
   await manager.handleCallbackQuery(
     {
       id: "select-b",
-      data: "tab:close-toggle:B",
+      data: "workspace:close-toggle:B",
       message: { chat: { id: 7 }, message_id: 88 },
     },
     "ctx",
@@ -3551,24 +3543,24 @@ test("Tab dashboard closes multiple selected tabs", async () => {
   await manager.handleCallbackQuery(
     {
       id: "close-selected",
-      data: "tab:close-selected",
+      data: "workspace:close-selected",
       message: { chat: { id: 7 }, message_id: 88 },
     },
     "ctx",
   );
-  assert.match(interactiveEdits.at(-1) ?? "", /Close 2 selected tabs\?/);
-  assert.match(editMarkups.at(-1) ?? "", /Close selected:tab:close-confirm/);
+  assert.match(interactiveEdits.at(-1) ?? "", /Close 2 selected workspaces\?/);
+  assert.match(editMarkups.at(-1) ?? "", /Close selected:workspace:close-confirm/);
 
   await manager.handleCallbackQuery(
     {
       id: "confirm-close",
-      data: "tab:close-confirm",
+      data: "workspace:close-confirm",
       message: { chat: { id: 7 }, message_id: 88 },
     },
     "ctx",
   );
-  assert.equal(answers.at(-1), "2 tabs closed.");
-  assert.match(interactiveEdits.at(-1) ?? "", /Tabs 2\/10/);
+  assert.equal(answers.at(-1), "2 workspaces closed.");
+  assert.match(interactiveEdits.at(-1) ?? "", /Workspaces 2\/10/);
 
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
     activeWorkspace: string;
@@ -3581,15 +3573,15 @@ test("Tab dashboard closes multiple selected tabs", async () => {
   assert.equal(backends.get("C")?.disposed, false);
 });
 
-test("Tab manager renames tabs without discarding session state", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-rename-"));
+test("Workspace manager renames workspaces without discarding session state", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-rename-"));
   const replies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const statePath = join(tempDir, "tabs.json");
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const statePath = join(tempDir, "workspaces.json");
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       inactiveNotify: true,
       workerExtensions: [],
     }),
@@ -3597,8 +3589,8 @@ test("Tab manager renames tabs without discarding session state", async () => {
     statePath,
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -3609,9 +3601,9 @@ test("Tab manager renames tabs without discarding session state", async () => {
 
   await manager.handleCommand("new A", 1, 10, "ctx");
   await manager.handleCommand("rename A Alpha", 1, 11, "ctx");
-  assert.match(replies.at(-1) ?? "", /Renamed tab A to Alpha/);
+  assert.match(replies.at(-1) ?? "", /Renamed workspace A to Alpha/);
   assert.deepEqual(manager.getActiveSessionReference("ctx"), {
-    tabName: "Alpha",
+    workspaceName: "Alpha",
     cwd: "/repo",
     sessionFile: "/sessions/A.jsonl",
     sessionId: "session-A",
@@ -3621,12 +3613,12 @@ test("Tab manager renames tabs without discarding session state", async () => {
     {
       chatId: 1,
       replyToMessageId: 12,
-      content: [{ type: "text", text: "hello renamed tab" }],
+      content: [{ type: "text", text: "hello renamed workspace" }],
     },
     "ctx",
   );
-  assert.deepEqual(backends.get("A")?.prompts, ["hello renamed tab"]);
-  assert.match(replies.at(-1) ?? "", /Started tab Alpha/);
+  assert.deepEqual(backends.get("A")?.prompts, ["hello renamed workspace"]);
+  assert.match(replies.at(-1) ?? "", /Started workspace Alpha/);
 
   const saved = JSON.parse(await readFile(statePath, "utf8")) as {
     activeWorkspace: string;
@@ -3639,29 +3631,29 @@ test("Tab manager renames tabs without discarding session state", async () => {
   await manager.handleCommand("rename Alpha", 1, 13, "ctx");
   assert.match(replies.at(-1) ?? "", /already named Alpha/);
   await manager.handleCommand("rename Alpha default", 1, 14, "ctx");
-  assert.match(replies.at(-1) ?? "", /Tab General already exists/);
+  assert.match(replies.at(-1) ?? "", /Workspace General already exists/);
   await manager.handleCommand("rename default Other", 1, 15, "ctx");
   assert.match(replies.at(-1) ?? "", /Cannot rename General/);
 });
 
-test("Tab manager sends typing actions for the active running tab", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-typing-"));
+test("Workspace manager sends typing actions for the active running workspace", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-typing-"));
   const replies: string[] = [];
   const typingActions: number[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 10,
+      maxWorkspaces: 10,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -3704,26 +3696,26 @@ test("Tab manager sends typing actions for the active running tab", async () => 
   await manager.dispose();
 });
 
-test("Tab manager relays active worker thinking and tool call output", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-rendering-"));
+test("Workspace manager relays active worker thinking and tool call output", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-rendering-"));
   const textReplies: string[] = [];
   const markdownReplies: string[] = [];
   const streamReplies: string[] = [];
   const streamEdits: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async (_chatId, _replyToMessageId, text) => {
@@ -3766,7 +3758,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       delta: "I should ",
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.match(streamReplies.at(-1) ?? "", /💡 Thinking/);
   assert.match(streamReplies.at(-1) ?? "", /I should/);
 
@@ -3778,7 +3770,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       delta: "inspect the repo.",
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.match(streamEdits.at(-1) ?? "", /101:💡 Thinking/);
   assert.match(streamEdits.at(-1) ?? "", /I should inspect the repo\./);
 
@@ -3786,7 +3778,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
     type: "message_update",
     assistantMessageEvent: { type: "thinking_end", contentIndex: 0 },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(
     [...streamReplies, ...streamEdits].filter((reply) =>
       reply.includes("I should inspect the repo."),
@@ -3816,7 +3808,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       },
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(streamReplies.length, streamReplyCountBeforeTool);
   assert.equal(streamEdits.length, streamEditCountBeforeTool);
 
@@ -3840,7 +3832,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       },
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(streamReplies.length, streamReplyCountBeforeTool);
   assert.equal(streamEdits.length, streamEditCountBeforeTool);
 
@@ -3857,7 +3849,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       },
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(streamReplies.length, streamReplyCountBeforeTool + 1);
   assert.match(streamReplies.at(-1) ?? "", /🔧 `bash`/);
   assert.match(streamReplies.at(-1) ?? "", /"command": "pwd"/);
@@ -3871,7 +3863,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       delta: "I'll check ",
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(streamReplies.at(-1), "I'll check");
 
   backend.emit({
@@ -3882,7 +3874,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       delta: "the working directory",
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.match(streamEdits.at(-1) ?? "", /103:I'll check the working directory/);
 
   backend.emit({
@@ -3901,7 +3893,7 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       ],
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(
     [...streamReplies, ...streamEdits, ...markdownReplies].filter((reply) =>
       reply.includes("I should inspect the repo."),
@@ -3938,37 +3930,37 @@ test("Tab manager relays active worker thinking and tool call output", async () 
       },
     ],
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(
     markdownReplies.at(-1),
     ["💡 Thinking\n> I should inspect the repo.", "Done."].join("\n\n"),
   );
 });
 
-test("Tab manager can compact tool previews into one status stream", async () => {
+test("Workspace manager can compact tool previews into one status stream", async () => {
   const previousMode = process.env.PI_TELEGRAM_TOOL_PREVIEW_MODE;
   const previousToolPreviews = process.env.PI_TELEGRAM_TOOL_PREVIEWS;
   process.env.PI_TELEGRAM_TOOL_PREVIEW_MODE = "compact";
   process.env.PI_TELEGRAM_TOOL_PREVIEWS = "0";
   try {
-    const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-tool-compact-"));
+    const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-tool-compact-"));
     const streamReplies: string[] = [];
     const streamEdits: string[] = [];
     const markdownReplies: string[] = [];
-    const backends = new Map<string, FakeTabBackend>();
-    const manager = createTelegramTabManager<string>({
+    const backends = new Map<string, FakeWorkspaceBackend>();
+    const manager = createTelegramWorkspaceManager<string>({
       getConfig: () => ({
         enabled: true,
-        maxTabs: 4,
+        maxWorkspaces: 4,
         inactiveNotify: true,
         workerExtensions: [],
       }),
       getCwd: () => "/repo",
-      statePath: join(tempDir, "tabs.json"),
+      statePath: join(tempDir, "workspaces.json"),
       sessionDir: join(tempDir, "sessions"),
       createBackend: (options) => {
-        const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-        backends.set(options.tabName, backend);
+        const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+        backends.set(options.workspaceName, backend);
         return backend;
       },
       sendTextReply: async () => undefined,
@@ -4006,7 +3998,7 @@ test("Tab manager can compact tool previews into one status stream", async () =>
       toolName: "bash",
       args: { command: "sleep 8" },
     });
-    await waitForTabStreamFlush();
+    await waitForWorkspaceStreamFlush();
     assert.equal(streamReplies.length, 1);
     assert.match(streamReplies[0] ?? "", /🔧 Tools/);
     assert.match(streamReplies[0] ?? "", /running `bash`/);
@@ -4019,7 +4011,7 @@ test("Tab manager can compact tool previews into one status stream", async () =>
       args: { command: "sleep 8" },
       result: { content: [], isError: false },
     });
-    await waitForTabStreamFlush();
+    await waitForWorkspaceStreamFlush();
     assert.equal(streamReplies.length, 1);
     assert.match(streamEdits.at(-1) ?? "", /done `bash`/);
 
@@ -4029,7 +4021,7 @@ test("Tab manager can compact tool previews into one status stream", async () =>
       toolName: "read",
       args: { path: "/tmp/a.txt" },
     });
-    await waitForTabStreamFlush();
+    await waitForWorkspaceStreamFlush();
     assert.equal(streamReplies.length, 1);
     assert.match(streamEdits.at(-1) ?? "", /running `read`/);
     assert.match(streamEdits.at(-1) ?? "", /"path": "\/tmp\/a.txt"/);
@@ -4043,25 +4035,25 @@ test("Tab manager can compact tool previews into one status stream", async () =>
   }
 });
 
-test("Tab manager confirms final stream delivery without fallback", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-final-stream-ok-"));
+test("Workspace manager confirms final stream delivery without fallback", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-final-stream-ok-"));
   const markdownReplies: string[] = [];
   const streamReplies: string[] = [];
   const streamEdits: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -4097,40 +4089,40 @@ test("Tab manager confirms final stream delivery without fallback", async () => 
     type: "message_update",
     assistantMessageEvent: { type: "text_delta", delta: "partial" },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "agent_end",
     messages: [
       { role: "assistant", content: [{ type: "text", text: "partial plus final" }] },
     ],
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
 
   assert.deepEqual(streamReplies, ["partial"]);
   assert.equal(streamEdits.at(-1), "101:partial plus final");
   assert.deepEqual(markdownReplies, []);
 });
 
-test("Tab manager treats unchanged final stream as delivered without fallback", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-final-stream-unchanged-"));
+test("Workspace manager treats unchanged final stream as delivered without fallback", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-final-stream-unchanged-"));
   const markdownReplies: string[] = [];
   const streamReplies: string[] = [];
   const streamEdits: string[] = [];
   const pendingFinalEdit = createDeferred<number | undefined>();
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -4166,12 +4158,12 @@ test("Tab manager treats unchanged final stream as delivered without fallback", 
     type: "message_update",
     assistantMessageEvent: { type: "text_delta", delta: "partial" },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "message_update",
     assistantMessageEvent: { type: "text_delta", delta: " plus final" },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "agent_end",
     messages: [
@@ -4179,35 +4171,35 @@ test("Tab manager treats unchanged final stream as delivered without fallback", 
     ],
   });
   pendingFinalEdit.resolve(101);
-  await waitForTabStreamFlush();
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
+  await waitForWorkspaceStreamFlush();
 
   assert.deepEqual(streamReplies, ["partial"]);
   assert.deepEqual(streamEdits, ["101:partial plus final"]);
   assert.deepEqual(markdownReplies, []);
 });
 
-test("Tab manager falls back to a full reply when final stream edit fails", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-final-stream-fail-"));
+test("Workspace manager falls back to a full reply when final stream edit fails", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-final-stream-fail-"));
   const markdownReplies: string[] = [];
   const streamReplies: string[] = [];
   const streamEdits: string[] = [];
   const deletedMessages: Array<{ chatId: number; messageId: number }> = [];
   const runtimeEvents: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -4251,42 +4243,42 @@ test("Tab manager falls back to a full reply when final stream edit fails", asyn
     type: "message_update",
     assistantMessageEvent: { type: "text_delta", delta: "partial" },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "agent_end",
     messages: [
       { role: "assistant", content: [{ type: "text", text: "complete final" }] },
     ],
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
 
   assert.deepEqual(streamReplies, ["partial"]);
   assert.deepEqual(streamEdits, ["101:complete final"]);
   assert.deepEqual(markdownReplies, ["complete final"]);
   assert.deepEqual(deletedMessages, [{ chatId: 1, messageId: 101 }]);
-  assert.match(runtimeEvents.join("\n"), /tabs:stream_markdown:Telegram edit failed/);
+  assert.match(runtimeEvents.join("\n"), /workspaces:stream_markdown:Telegram edit failed/);
 });
 
-test("Tab manager deletes stale thinking preview when final fallback includes it", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-thinking-fallback-delete-"));
+test("Workspace manager deletes stale thinking preview when final fallback includes it", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-thinking-fallback-delete-"));
   const markdownReplies: string[] = [];
   const streamReplies: string[] = [];
   const streamEdits: string[] = [];
   const deletedMessages: Array<{ chatId: number; messageId: number }> = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -4330,17 +4322,17 @@ test("Tab manager deletes stale thinking preview when final fallback includes it
       delta: "complete thought",
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "message_update",
     assistantMessageEvent: { type: "thinking_end", contentIndex: 0 },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "message_update",
     assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "partial" },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "agent_end",
     messages: [
@@ -4353,7 +4345,7 @@ test("Tab manager deletes stale thinking preview when final fallback includes it
       },
     ],
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
 
   assert.equal(streamReplies[0], "💡 Thinking\n> complete thought");
   assert.equal(streamReplies[1], "partial");
@@ -4369,24 +4361,24 @@ test("Tab manager deletes stale thinking preview when final fallback includes it
   await manager.dispose();
 });
 
-test("Tab manager marks partial stream previews when a tab turn is aborted", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-stream-abort-"));
+test("Workspace manager marks partial stream previews when a workspace turn is aborted", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-stream-abort-"));
   const streamReplies: string[] = [];
   const streamEdits: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -4418,37 +4410,37 @@ test("Tab manager marks partial stream previews when a tab turn is aborted", asy
     type: "message_update",
     assistantMessageEvent: { type: "text_delta", delta: "partial answer" },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
 
   assert.deepEqual(await manager.abortActive("ctx"), {
-    tabName: "A",
+    workspaceName: "A",
     aborted: true,
-    message: "Aborted tab A.",
+    message: "Aborted workspace A.",
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
 
   assert.deepEqual(streamReplies, ["partial answer"]);
   assert.equal(streamEdits.at(-1), "101:partial answer\n\n[aborted]");
   assert.deepEqual(backends.get("A")?.aborts, ["A"]);
 });
 
-test("Tab manager disposes unresponsive worker and clears busy state on abort failure", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-abort-unresponsive-"));
-  const backends = new Map<string, FakeTabBackend>();
+test("Workspace manager disposes unresponsive worker and clears busy state on abort failure", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-abort-unresponsive-"));
+  const backends = new Map<string, FakeWorkspaceBackend>();
   const events: { area: string; action?: string; error: string }[] = [];
-  const manager = createTelegramTabManager<string>({
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -4476,38 +4468,38 @@ test("Tab manager disposes unresponsive worker and clears busy state on abort fa
   backend.abortError = new Error("abort timed out");
 
   assert.deepEqual(await manager.abortActive("ctx"), {
-    tabName: "A",
+    workspaceName: "A",
     aborted: true,
-    message: "Aborted tab A after worker stopped responding.",
+    message: "Aborted workspace A after worker stopped responding.",
   });
 
   assert.deepEqual(backend.aborts, ["A"]);
   assert.equal(backend.disposed, true);
   assert.deepEqual(await manager.canSwitchActiveModel("ctx"), true);
-  assert.equal(events.some((event) => event.area === "tabs" && event.action === "abort" && event.error === "abort timed out"), true);
+  assert.equal(events.some((event) => event.area === "workspaces" && event.action === "abort" && event.error === "abort timed out"), true);
   await manager.dispose();
 });
 
-test("Tab manager keeps stale final stream failures from blocking the next turn", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-final-stream-stale-"));
+test("Workspace manager keeps stale final stream failures from blocking the next turn", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-final-stream-stale-"));
   const markdownReplies: string[] = [];
   const streamReplies: string[] = [];
   const streamEdits: string[] = [];
   const pendingOldEdit = createDeferred<number | undefined>();
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -4545,14 +4537,14 @@ test("Tab manager keeps stale final stream failures from blocking the next turn"
     type: "message_update",
     assistantMessageEvent: { type: "text_delta", delta: "A partial" },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "agent_end",
     messages: [
       { role: "assistant", content: [{ type: "text", text: "A complete final" }] },
     ],
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.deepEqual(streamEdits, ["101:A complete final"]);
 
   await manager.dispatchPrompt(
@@ -4568,38 +4560,38 @@ test("Tab manager keeps stale final stream failures from blocking the next turn"
     type: "message_update",
     assistantMessageEvent: { type: "text_delta", delta: "B first" },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.deepEqual(streamReplies, ["A partial", "B first"]);
 
   pendingOldEdit.reject(new Error("late old edit failed"));
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.deepEqual(markdownReplies, ["A complete final"]);
 
   backend.emit({
     type: "message_update",
     assistantMessageEvent: { type: "text_delta", delta: " plus more" },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(streamEdits.at(-1), "102:B first plus more");
 });
 
-test("Tab manager throttles stream delivery across text and thinking streams", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-stream-throttle-"));
+test("Workspace manager throttles stream delivery across text and thinking streams", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-stream-throttle-"));
   const streamReplies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -4636,7 +4628,7 @@ test("Tab manager throttles stream delivery across text and thinking streams", a
       delta: "I should inspect",
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(streamReplies.length, 1);
 
   backend.emit({
@@ -4647,7 +4639,7 @@ test("Tab manager throttles stream delivery across text and thinking streams", a
       delta: "I'll check",
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(streamReplies.length, 1);
 
   await new Promise((resolve) => setTimeout(resolve, 70));
@@ -4655,25 +4647,25 @@ test("Tab manager throttles stream delivery across text and thinking streams", a
   assert.match(streamReplies[1] ?? "", /I'll check/);
 });
 
-test("Tab manager does not reuse finalized thinking or tool streams", async () => {
-  const tempDir = await mkdtemp(join(tmpdir(), "pi-tabs-stream-seal-"));
+test("Workspace manager does not reuse finalized thinking or tool streams", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-stream-seal-"));
   const streamReplies: string[] = [];
   const streamEdits: string[] = [];
   const markdownReplies: string[] = [];
-  const backends = new Map<string, FakeTabBackend>();
-  const manager = createTelegramTabManager<string>({
+  const backends = new Map<string, FakeWorkspaceBackend>();
+  const manager = createTelegramWorkspaceManager<string>({
     getConfig: () => ({
       enabled: true,
-      maxTabs: 4,
+      maxWorkspaces: 4,
       inactiveNotify: true,
       workerExtensions: [],
     }),
     getCwd: () => "/repo",
-    statePath: join(tempDir, "tabs.json"),
+    statePath: join(tempDir, "workspaces.json"),
     sessionDir: join(tempDir, "sessions"),
     createBackend: (options) => {
-      const backend = new FakeTabBackend(options.tabName, options.sessionFile);
-      backends.set(options.tabName, backend);
+      const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+      backends.set(options.workspaceName, backend);
       return backend;
     },
     sendTextReply: async () => undefined,
@@ -4713,12 +4705,12 @@ test("Tab manager does not reuse finalized thinking or tool streams", async () =
       delta: "first thought",
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "message_update",
     assistantMessageEvent: { type: "thinking_end", contentIndex: 0 },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "message_update",
     assistantMessageEvent: {
@@ -4727,7 +4719,7 @@ test("Tab manager does not reuse finalized thinking or tool streams", async () =
       delta: "second thought",
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
 
   assert.equal(streamReplies.length, 2);
   assert.match(streamReplies[0] ?? "", /first thought/);
@@ -4753,7 +4745,7 @@ test("Tab manager does not reuse finalized thinking or tool streams", async () =
       },
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "message_update",
     assistantMessageEvent: {
@@ -4767,7 +4759,7 @@ test("Tab manager does not reuse finalized thinking or tool streams", async () =
       },
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   backend.emit({
     type: "message_update",
     assistantMessageEvent: {
@@ -4787,7 +4779,7 @@ test("Tab manager does not reuse finalized thinking or tool streams", async () =
       },
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(streamReplies.length, 3);
   backend.emit({
     type: "message_update",
@@ -4802,7 +4794,7 @@ test("Tab manager does not reuse finalized thinking or tool streams", async () =
       },
     },
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
 
   assert.equal(streamReplies.length, 4);
   assert.match(streamReplies[2] ?? "", /"command": "pwd"/);
@@ -4830,7 +4822,7 @@ test("Tab manager does not reuse finalized thinking or tool streams", async () =
       },
     ],
   });
-  await waitForTabStreamFlush();
+  await waitForWorkspaceStreamFlush();
   assert.equal(markdownReplies.length, 1);
   assert.match(markdownReplies[0] ?? "", /"command": "ls"/);
 });

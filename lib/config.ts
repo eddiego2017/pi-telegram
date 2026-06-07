@@ -12,7 +12,7 @@ import { join, resolve } from "node:path";
 import type { TelegramInboundHandlerConfig } from "./inbound-handlers.ts";
 import type { CommandTemplateObjectConfig } from "./command-templates.ts";
 
-export interface TelegramConcurrentTabTopicBindingConfig {
+export interface TelegramConcurrentWorkspaceTopicBindingConfig {
   enabled?: boolean;
   native?: boolean;
   generalIsDefault?: boolean;
@@ -23,7 +23,7 @@ export interface TelegramConcurrentTabTopicBindingConfig {
   defaultModel?: string;
 }
 
-export interface TelegramNormalizedConcurrentTabTopicBindingConfig {
+export interface TelegramNormalizedConcurrentWorkspaceTopicBindingConfig {
   enabled: boolean;
   native: boolean;
   generalIsDefault: boolean;
@@ -34,19 +34,19 @@ export interface TelegramNormalizedConcurrentTabTopicBindingConfig {
   defaultModel?: string;
 }
 
-export interface TelegramConcurrentTabsConfig {
+export interface TelegramConcurrentWorkspacesConfig {
   enabled?: boolean;
-  maxTabs?: number;
+  maxWorkspaces?: number;
   maxWorkers?: number;
   inactiveNotify?: boolean;
   workerExtensions?: string[];
-  topicBinding?: TelegramConcurrentTabTopicBindingConfig;
+  topicBinding?: TelegramConcurrentWorkspaceTopicBindingConfig;
 }
 
-export interface TelegramNormalizedConcurrentTabsConfig
-  extends Required<Omit<TelegramConcurrentTabsConfig, "topicBinding" | "maxWorkers">> {
+export interface TelegramNormalizedConcurrentWorkspacesConfig
+  extends Required<Omit<TelegramConcurrentWorkspacesConfig, "topicBinding" | "maxWorkers">> {
   maxWorkers?: number;
-  topicBinding?: TelegramNormalizedConcurrentTabTopicBindingConfig;
+  topicBinding?: TelegramNormalizedConcurrentWorkspaceTopicBindingConfig;
 }
 
 export interface TelegramDebugConfig {
@@ -86,7 +86,7 @@ export interface TelegramConfig {
   attachmentHandlers?: TelegramInboundHandlerConfig[];
   outboundHandlers?: TelegramOutboundHandlerConfig[];
   proactivePush?: boolean;
-  concurrentTabs?: TelegramConcurrentTabsConfig;
+  concurrentWorkspaces?: TelegramConcurrentWorkspacesConfig;
   debug?: TelegramDebugConfig;
 }
 
@@ -100,7 +100,7 @@ export interface TelegramConfigStore {
   getInboundHandlers: () => TelegramInboundHandlerConfig[] | undefined;
   getAttachmentHandlers: () => TelegramInboundHandlerConfig[] | undefined;
   getOutboundHandlers: () => TelegramOutboundHandlerConfig[] | undefined;
-  getConcurrentTabsConfig: () => TelegramNormalizedConcurrentTabsConfig;
+  getConcurrentWorkspacesConfig: () => TelegramNormalizedConcurrentWorkspacesConfig;
   setAllowedUserId: (userId: number) => void;
   load: () => Promise<void>;
   persist: (config?: TelegramConfig) => Promise<void>;
@@ -236,8 +236,8 @@ export function createTelegramConfigStore(
     ],
     getAttachmentHandlers: () => config.attachmentHandlers,
     getOutboundHandlers: () => config.outboundHandlers,
-    getConcurrentTabsConfig: () => normalizeTelegramConcurrentTabsConfig(
-      config.concurrentTabs,
+    getConcurrentWorkspacesConfig: () => normalizeTelegramConcurrentWorkspacesConfig(
+      config.concurrentWorkspaces,
     ),
     setAllowedUserId: (userId) => {
       config.allowedUserId = userId;
@@ -283,9 +283,9 @@ export function isTelegramTrustedChat(
   return typeof chatId === "number" && trustedChatIds.includes(chatId);
 }
 
-export function normalizeTelegramConcurrentTabTopicBindingConfig(
-  config?: TelegramConcurrentTabTopicBindingConfig,
-): TelegramNormalizedConcurrentTabTopicBindingConfig {
+export function normalizeTelegramConcurrentWorkspaceTopicBindingConfig(
+  config?: TelegramConcurrentWorkspaceTopicBindingConfig,
+): TelegramNormalizedConcurrentWorkspaceTopicBindingConfig {
   return {
     enabled: config?.enabled ?? false,
     native: config?.native ?? false,
@@ -298,24 +298,24 @@ export function normalizeTelegramConcurrentTabTopicBindingConfig(
   };
 }
 
-export function normalizeTelegramConcurrentTabsConfig(
-  config?: TelegramConcurrentTabsConfig,
-): TelegramNormalizedConcurrentTabsConfig {
-  const maxTabs =
-    typeof config?.maxTabs === "number" &&
-    Number.isInteger(config.maxTabs) &&
-    config.maxTabs > 0
-      ? config.maxTabs
+export function normalizeTelegramConcurrentWorkspacesConfig(
+  config?: TelegramConcurrentWorkspacesConfig,
+): TelegramNormalizedConcurrentWorkspacesConfig {
+  const maxWorkspaces =
+    typeof config?.maxWorkspaces === "number" &&
+    Number.isInteger(config.maxWorkspaces) &&
+    config.maxWorkspaces > 0
+      ? config.maxWorkspaces
       : 10;
   const maxWorkers =
     typeof config?.maxWorkers === "number" &&
     Number.isInteger(config.maxWorkers) &&
     config.maxWorkers > 0
       ? config.maxWorkers
-      : maxTabs;
+      : maxWorkspaces;
   return {
     enabled: config?.enabled ?? false,
-    maxTabs,
+    maxWorkspaces,
     maxWorkers,
     inactiveNotify: config?.inactiveNotify ?? true,
     workerExtensions: Array.isArray(config?.workerExtensions)
@@ -323,20 +323,20 @@ export function normalizeTelegramConcurrentTabsConfig(
           (path): path is string => typeof path === "string" && path.length > 0,
         )
       : [],
-    topicBinding: normalizeTelegramConcurrentTabTopicBindingConfig(
+    topicBinding: normalizeTelegramConcurrentWorkspaceTopicBindingConfig(
       config?.topicBinding,
     ),
   };
 }
 
-export function createTelegramConcurrentTabsConfigGetter(
-  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
-): () => TelegramNormalizedConcurrentTabsConfig {
-  return () => configStore.getConcurrentTabsConfig();
+export function createTelegramConcurrentWorkspacesConfigGetter(
+  configStore: Pick<TelegramConfigStore, "getConcurrentWorkspacesConfig">,
+): () => TelegramNormalizedConcurrentWorkspacesConfig {
+  return () => configStore.getConcurrentWorkspacesConfig();
 }
 
 export function isTelegramForumNativeModeEnabled(
-  config: Pick<TelegramNormalizedConcurrentTabsConfig, "enabled" | "topicBinding">,
+  config: Pick<TelegramNormalizedConcurrentWorkspacesConfig, "enabled" | "topicBinding">,
 ): boolean {
   return (
     config.enabled === true &&
@@ -346,10 +346,10 @@ export function isTelegramForumNativeModeEnabled(
 }
 
 export function createTelegramForumNativeModeChecker(
-  configStore: Pick<TelegramConfigStore, "getConcurrentTabsConfig">,
+  configStore: Pick<TelegramConfigStore, "getConcurrentWorkspacesConfig">,
 ): () => boolean {
   return () => isTelegramForumNativeModeEnabled(
-    configStore.getConcurrentTabsConfig(),
+    configStore.getConcurrentWorkspacesConfig(),
   );
 }
 
