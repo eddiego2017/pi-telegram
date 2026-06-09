@@ -182,9 +182,19 @@ function firstStringField(
 }
 
 function condenseToolSummary(text: string): string {
-  const collapsed = text.replace(/\s+/g, " ").trim();
-  if (collapsed.length <= TELEGRAM_TOOL_SUMMARY_LIMIT) return collapsed;
-  return `${collapsed.slice(0, TELEGRAM_TOOL_SUMMARY_LIMIT - 1)}…`;
+  // For multi-line values (e.g. a multi-line bash command), keep only the
+  // first meaningful line so the summary stays readable instead of mashing
+  // every line into one space-separated blob.
+  const lines = text.split(/\r?\n/);
+  const firstMeaningful = lines.find((line) => line.trim().length > 0) ?? "";
+  const hasMore = lines.some(
+    (line) => line !== firstMeaningful && line.trim().length > 0,
+  );
+  const collapsed = firstMeaningful.replace(/\s+/g, " ").trim();
+  const suffix = hasMore ? " \u2026" : "";
+  const budget = TELEGRAM_TOOL_SUMMARY_LIMIT - suffix.length;
+  if (collapsed.length <= budget) return `${collapsed}${suffix}`;
+  return `${collapsed.slice(0, budget - 1)}…`;
 }
 
 export function summarizeAgentToolCall(name: string, args: unknown): string {
