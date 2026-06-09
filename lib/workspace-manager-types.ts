@@ -221,6 +221,8 @@ export interface TelegramWorkspacePostRunMessage {
 export interface TelegramWorkspaceToolStatusEntry {
   key: string;
   markdown: string;
+  name?: string;
+  summary?: string;
   status: TelegramWorkspaceToolStatusKind;
   updatedAt: number;
 }

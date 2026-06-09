@@ -107,7 +107,7 @@ export interface WsRuntimeContext<TContext> {
   streamActiveWorkspaceThinking: (workspaceState: TelegramWorkspacesState, workspaceName: string, runtime: WorkspaceRuntime, index: number, text: string, force?: boolean) => void;
   flushActiveWorkspaceThinkingBuffer: (workspaceState: TelegramWorkspacesState, workspaceName: string, runtime: WorkspaceRuntime, index: number) => void;
   streamActiveWorkspaceToolCall: (workspaceState: TelegramWorkspacesState, workspaceName: string, runtime: WorkspaceRuntime, index: number, markdown: string, final: boolean) => void;
-  streamActiveWorkspaceCompactToolStatus: (workspaceState: TelegramWorkspacesState, workspaceName: string, runtime: WorkspaceRuntime, preview: { key: string; markdown: string; status: TelegramWorkspaceToolStatusKind; }) => void;
+  streamActiveWorkspaceCompactToolStatus: (workspaceState: TelegramWorkspacesState, workspaceName: string, runtime: WorkspaceRuntime, preview: { key: string; markdown: string; name?: string; summary?: string; status: TelegramWorkspaceToolStatusKind; }) => void;
   getWorkspaceTurnDetails: (workspaceName: string, runtime: WorkspaceRuntime) => Record<string, unknown>;
   isFinalWorkspaceStreamDeliveryConfirmed: (result: TelegramWorkspaceStreamDeliveryResult, expectedMarkdown: string, latestSentMarkdown?: string) => boolean;
   finalizeActiveWorkspaceTextStream: (runtime: WorkspaceRuntime, stream: TelegramWorkspaceStreamState | undefined, finalMarkdown: string) => Promise<TelegramWorkspaceStreamDeliveryResult>;

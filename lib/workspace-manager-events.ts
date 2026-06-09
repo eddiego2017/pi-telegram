@@ -12,6 +12,7 @@ import {
   formatAgentToolCallBlock,
   getAgentMessagePreviewText,
   isAssistantAgentMessage,
+  summarizeAgentToolCall,
 } from "./replies.ts";
 import type { TelegramWorkspaceRecord } from "./workspaces.ts";
 import {
@@ -216,7 +217,14 @@ export function formatTelegramWorkspaceToolCallPreview(block: unknown): string {
 
 export function getRpcAssistantToolCallPreview(
   event: RpcChildBackendEvent,
-): { index: number; key: string; markdown: string; final: boolean } | undefined {
+): {
+  index: number;
+  key: string;
+  markdown: string;
+  name?: string;
+  summary?: string;
+  final: boolean;
+} | undefined {
   if (event.type !== "message_update") return undefined;
   const assistantEvent = getRpcAssistantMessageEvent(event);
   if (!assistantEvent) return undefined;
@@ -226,6 +234,11 @@ export function getRpcAssistantToolCallPreview(
   const block = assistantEvent.toolCall;
   const rawBlock = getRecord(block);
   const markdown = formatTelegramWorkspaceToolCallPreview(block);
+  const name =
+    typeof rawBlock?.name === "string" && rawBlock.name ? rawBlock.name : undefined;
+  const summary = name
+    ? summarizeAgentToolCall(name, rawBlock?.arguments ?? rawBlock?.partialJson)
+    : "";
   return markdown
     ? {
         index,
@@ -234,6 +247,8 @@ export function getRpcAssistantToolCallPreview(
             ? rawBlock.id
             : `tool:${index}`,
         markdown,
+        ...(name ? { name } : {}),
+        ...(summary ? { summary } : {}),
         final: eventType === "toolcall_end",
       }
     : undefined;
@@ -241,7 +256,13 @@ export function getRpcAssistantToolCallPreview(
 
 export function getRpcToolExecutionPreview(
   event: RpcChildBackendEvent,
-): { key: string; markdown: string; status: TelegramWorkspaceToolStatusKind } | undefined {
+): {
+  key: string;
+  markdown: string;
+  name?: string;
+  summary?: string;
+  status: TelegramWorkspaceToolStatusKind;
+} | undefined {
   if (event.type !== "tool_execution_start" && event.type !== "tool_execution_end") {
     return undefined;
   }
@@ -255,12 +276,15 @@ export function getRpcToolExecutionPreview(
   const isError =
     event.type === "tool_execution_end" &&
     (event.isError === true || result?.isError === true);
+  const summary = summarizeAgentToolCall(toolName, event.args);
   return {
     key: toolCallId ?? `${toolName}:${event.type}`,
     markdown: formatAgentToolCallBlock({
       name: toolName,
       arguments: event.args,
     }),
+    name: toolName,
+    ...(summary ? { summary } : {}),
     status:
       event.type === "tool_execution_start"
         ? "running"
@@ -273,10 +297,21 @@ export function getRpcToolExecutionPreview(
 export function formatTelegramWorkspaceToolStatusKind(
   status: TelegramWorkspaceToolStatusKind,
 ): string {
-  if (status === "running") return "running";
-  if (status === "done") return "done";
-  if (status === "failed") return "failed";
-  return "queued";
+  if (status === "running") return "\u23F3";
+  if (status === "done") return "\u2705";
+  if (status === "failed") return "\u274C";
+  return "\u231B";
+}
+
+function getTelegramWorkspaceToolStatusTitle(
+  entry: TelegramWorkspaceToolStatusEntry,
+): string {
+  if (entry.name) {
+    const summary = entry.summary ? ` · ${entry.summary}` : "";
+    return `\`${entry.name}\`${summary}`;
+  }
+  const firstLine = entry.markdown.trim().split("\n")[0] ?? "";
+  return firstLine.replace(/^\u{1F527}\s*/u, "") || "`tool`";
 }
 
 export function formatTelegramWorkspaceCompactToolStatusMarkdown(
@@ -289,10 +324,9 @@ export function formatTelegramWorkspaceCompactToolStatusMarkdown(
     lines.push(`Showing latest ${visibleEntries.length} of ${totalCount}.`);
   }
   for (const entry of visibleEntries) {
-    const blockLines = entry.markdown.trim().split("\n");
-    const title = blockLines.shift()?.replace(/^\u{1F527}\s*/u, "") || "`tool`";
-    lines.push("", `${formatTelegramWorkspaceToolStatusKind(entry.status)} ${title}`);
-    lines.push(...blockLines);
+    lines.push(
+      `${formatTelegramWorkspaceToolStatusKind(entry.status)} ${getTelegramWorkspaceToolStatusTitle(entry)}`,
+    );
   }
   return truncateTelegramWorkspaceStreamMarkdown(lines.join("\n"));
 }

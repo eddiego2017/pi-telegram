@@ -151,6 +151,78 @@ export function formatTelegramToolCallArgumentsPreview(argsText: string): string
     .join("\n");
 }
 
+const TELEGRAM_TOOL_SUMMARY_LIMIT = 80;
+
+function coerceToolArgsRecord(args: unknown): Record<string, unknown> | undefined {
+  if (args && typeof args === "object" && !Array.isArray(args)) {
+    return args as Record<string, unknown>;
+  }
+  if (typeof args === "string" && args.trim()) {
+    try {
+      const parsed = JSON.parse(args);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function firstStringField(
+  record: Record<string, unknown>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function condenseToolSummary(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= TELEGRAM_TOOL_SUMMARY_LIMIT) return collapsed;
+  return `${collapsed.slice(0, TELEGRAM_TOOL_SUMMARY_LIMIT - 1)}…`;
+}
+
+export function summarizeAgentToolCall(name: string, args: unknown): string {
+  const record = coerceToolArgsRecord(args);
+  if (!record) return "";
+  const lower = name.toLowerCase();
+  let value: string | undefined;
+  if (lower === "bash" || lower === "shell" || lower === "run") {
+    value = firstStringField(record, ["command", "cmd", "script"]);
+  } else if (
+    lower === "read" ||
+    lower === "write" ||
+    lower === "edit" ||
+    lower === "view"
+  ) {
+    value = firstStringField(record, ["path", "file", "filePath", "file_path"]);
+  } else if (lower === "grep" || lower === "search" || lower === "glob") {
+    value =
+      firstStringField(record, ["pattern", "query", "regex"]) ??
+      firstStringField(record, ["path", "glob"]);
+  } else if (lower === "analyze_image") {
+    value = firstStringField(record, ["imagePath", "path", "prompt"]);
+  } else {
+    value = firstStringField(record, [
+      "path",
+      "file",
+      "filePath",
+      "file_path",
+      "command",
+      "query",
+      "pattern",
+      "url",
+      "name",
+    ]);
+  }
+  return value ? condenseToolSummary(value) : "";
+}
+
 export function formatAgentToolCallBlock(block: {
   name?: unknown;
   arguments?: unknown;

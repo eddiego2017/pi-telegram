@@ -8,6 +8,7 @@ import {
   formatAgentToolCallBlock,
   getAgentMessageBodyText,
   getAgentMessagePreviewText,
+  summarizeAgentToolCall,
 } from "./replies.ts";
 import {
   truncateTelegramWorkspaceStreamMarkdown,
@@ -137,15 +138,24 @@ export function installStreamActive<TContext>(
     preview: {
       key: string;
       markdown: string;
+      name?: string;
+      summary?: string;
       status: TelegramWorkspaceToolStatusKind;
     },
   ): void => {
     if (!self.toolCallCompactPreviewsEnabled) return;
     if (!preview.markdown && !runtime.toolCallStatuses.has(preview.key)) return;
     const current = runtime.toolCallStatuses.get(preview.key);
+    const incoming = preview.markdown.trim();
+    const keptMarkdown = current?.markdown ?? "";
+    // Execution events often arrive without args (info-poor, single line);
+    // don't let them overwrite a richer markdown/summary captured at toolcall_end.
+    const incomingIsRicher = incoming.includes("\n") || !keptMarkdown;
     runtime.toolCallStatuses.set(preview.key, {
       key: preview.key,
-      markdown: preview.markdown || current?.markdown || "\u{1F527} `tool`",
+      markdown: incomingIsRicher ? incoming : keptMarkdown || "\u{1F527} `tool`",
+      name: preview.name ?? current?.name,
+      summary: preview.summary ?? current?.summary,
       status: preview.status,
       updatedAt: self.now(),
     });
@@ -343,9 +353,15 @@ export function installStreamActive<TContext>(
           name: raw.name,
           arguments: raw.arguments,
         });
+        const toolName = typeof raw.name === "string" && raw.name ? raw.name : undefined;
+        const summary = toolName
+          ? summarizeAgentToolCall(toolName, raw.arguments)
+          : "";
         self.streamActiveWorkspaceCompactToolStatus(workspaceState, workspaceName, runtime, {
           key,
           markdown,
+          ...(toolName ? { name: toolName } : {}),
+          ...(summary ? { summary } : {}),
           status: "queued",
         });
         pushTelegramWorkspacePostRunMessage(runtime, "tool", markdown);

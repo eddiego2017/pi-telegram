@@ -4001,8 +4001,7 @@ test("Workspace manager can compact tool previews into one status stream", async
     await waitForWorkspaceStreamFlush();
     assert.equal(streamReplies.length, 1);
     assert.match(streamReplies[0] ?? "", /🔧 Tools/);
-    assert.match(streamReplies[0] ?? "", /running `bash`/);
-    assert.match(streamReplies[0] ?? "", /"command": "sleep 8"/);
+    assert.match(streamReplies[0] ?? "", /⏳ `bash` · sleep 8/);
 
     backend.emit({
       type: "tool_execution_end",
@@ -4013,7 +4012,7 @@ test("Workspace manager can compact tool previews into one status stream", async
     });
     await waitForWorkspaceStreamFlush();
     assert.equal(streamReplies.length, 1);
-    assert.match(streamEdits.at(-1) ?? "", /done `bash`/);
+    assert.match(streamEdits.at(-1) ?? "", /✅ `bash` · sleep 8/);
 
     backend.emit({
       type: "tool_execution_start",
@@ -4023,8 +4022,7 @@ test("Workspace manager can compact tool previews into one status stream", async
     });
     await waitForWorkspaceStreamFlush();
     assert.equal(streamReplies.length, 1);
-    assert.match(streamEdits.at(-1) ?? "", /running `read`/);
-    assert.match(streamEdits.at(-1) ?? "", /"path": "\/tmp\/a.txt"/);
+    assert.match(streamEdits.at(-1) ?? "", /⏳ `read` · \/tmp\/a.txt/);
     assert.equal(markdownReplies.length, 0);
     await manager.dispose();
   } finally {
