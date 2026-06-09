@@ -302,6 +302,31 @@ export function installChildEvent<TContext>(
         const stream = runtime.textStream;
         const finalStreamMarkdown = finalBodyText.trim();
         void (async () => {
+          // Force-flush the compact tool-status stream before finalizing the text
+          // stream so its Telegram message_id stays smaller than the final answer
+          // (otherwise a throttled first-send can land the Tools message last).
+          const toolStatusStream = runtime.toolCallStatusStream;
+          if (
+            toolStatusStream &&
+            toolStatusStream.markdown &&
+            toolStatusStream.markdown !== toolStatusStream.sentMarkdown
+          ) {
+            try {
+              await self.flushWorkspaceStreamMarkdown(runtime, toolStatusStream, {
+                force: true,
+                allowStaleDelivery: true,
+                retryOnFailure: false,
+              });
+            } catch (error) {
+              deps.recordRuntimeEvent?.("workspaces", error, {
+                workspace: workspaceName,
+                action: "tool_status_finalize_flush",
+                turnId: deliveryTarget.turnId,
+                chatId: deliveryTarget.chatId,
+                messageThreadId: deliveryTarget.messageThreadId,
+              });
+            }
+          }
           let streamResult: TelegramWorkspaceStreamDeliveryResult | undefined;
           let streamDelivered = false;
           let fallbackSent = false;

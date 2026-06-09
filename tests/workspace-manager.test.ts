@@ -4033,6 +4033,148 @@ test("Workspace manager can compact tool previews into one status stream", async
   }
 });
 
+test("Workspace manager flushes the compact tool status before the final answer", async () => {
+  const previousMode = process.env.PI_TELEGRAM_TOOL_PREVIEW_MODE;
+  const previousToolPreviews = process.env.PI_TELEGRAM_TOOL_PREVIEWS;
+  process.env.PI_TELEGRAM_TOOL_PREVIEW_MODE = "compact";
+  process.env.PI_TELEGRAM_TOOL_PREVIEWS = "0";
+  try {
+    const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-tool-order-"));
+    const streamReplies: string[] = [];
+    const streamEdits: string[] = [];
+    const markdownReplies: string[] = [];
+    const backends = new Map<string, FakeWorkspaceBackend>();
+    // Hold the clock so the global stream-edit throttle window stays active:
+    // after the thinking preview sends, the tool-status stream's first send is
+    // deferred (scheduled via setTimeout) instead of going out immediately.
+    const currentTime = 1_000_000;
+    const manager = createTelegramWorkspaceManager<string>({
+      getConfig: () => ({
+        enabled: true,
+        maxWorkspaces: 4,
+        inactiveNotify: true,
+        workerExtensions: [],
+      }),
+      getCwd: () => "/repo",
+      now: () => currentTime,
+      statePath: join(tempDir, "workspaces.json"),
+      sessionDir: join(tempDir, "sessions"),
+      createBackend: (options) => {
+        const backend = new FakeWorkspaceBackend(options.workspaceName, options.sessionFile);
+        backends.set(options.workspaceName, backend);
+        return backend;
+      },
+      sendTextReply: async () => undefined,
+      sendMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+        markdownReplies.push(markdown);
+        return markdownReplies.length;
+      },
+      sendStreamMarkdownReply: async (_chatId, _replyToMessageId, markdown) => {
+        streamReplies.push(markdown);
+        return 100 + streamReplies.length;
+      },
+      editStreamMarkdownMessage: async (_chatId, messageId, markdown) => {
+        streamEdits.push(`${messageId}:${markdown}`);
+        return messageId;
+      },
+      streamEditThrottleMs: 10_000,
+    });
+
+    await manager.handleCommand("new A", 1, 10, "ctx");
+    await manager.dispatchPrompt(
+      {
+        chatId: 1,
+        replyToMessageId: 20,
+        content: [{ type: "text", text: "check usage" }],
+      },
+      "ctx",
+    );
+
+    const backend = backends.get("A");
+    assert.ok(backend);
+    backend.emit({ type: "agent_start" });
+    // Thinking preview goes out first and consumes the throttle window.
+    backend.emit({
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        contentIndex: 0,
+        delta: "Let me run the usage check.",
+      },
+    });
+    await waitForWorkspaceStreamFlush();
+    backend.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "thinking_end", contentIndex: 0 },
+    });
+    await waitForWorkspaceStreamFlush();
+    const thinkingSent = streamReplies.length;
+    assert.ok(thinkingSent >= 1);
+    assert.match(streamReplies.at(-1) ?? "", /💡 Thinking/);
+
+    // Tool runs after thinking; its status stream is now throttled and not sent.
+    backend.emit({
+      type: "tool_execution_start",
+      toolCallId: "tool-1",
+      toolName: "bash",
+      args: { command: "ai_usage.py" },
+    });
+    await waitForWorkspaceStreamFlush();
+    assert.equal(streamReplies.length, thinkingSent, "tool status must be throttled");
+    backend.emit({
+      type: "tool_execution_end",
+      toolCallId: "tool-1",
+      toolName: "bash",
+      args: { command: "ai_usage.py" },
+      result: { content: [], isError: false },
+    });
+    await waitForWorkspaceStreamFlush();
+    assert.equal(streamReplies.length, thinkingSent, "tool status must be throttled");
+
+    // The answer streams in (also throttled, so its first send is deferred to
+    // finalize) — mirrors the real streamed-answer case.
+    backend.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "Usage looks steady." },
+    });
+    await waitForWorkspaceStreamFlush();
+    assert.equal(streamReplies.length, thinkingSent, "answer must be throttled too");
+
+    // The turn ends quickly. agent_end must force-flush the tool status before
+    // finalizing the answer so the Tools message lands before the answer.
+    backend.emit({
+      type: "agent_end",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Usage looks steady." }],
+        },
+      ],
+    });
+    await waitForWorkspaceStreamFlush();
+    await waitForWorkspaceStreamFlush();
+
+    const toolsIndex = streamReplies.findIndex((m) => m.includes("🔧 Tools"));
+    const answerIndex = streamReplies.findIndex((m) =>
+      m.includes("Usage looks steady."),
+    );
+    assert.ok(toolsIndex >= 0, "Tools message should be sent");
+    assert.ok(answerIndex >= 0, "answer message should be sent");
+    assert.ok(
+      toolsIndex < answerIndex,
+      `Tools (${toolsIndex}) must come before answer (${answerIndex})`,
+    );
+    assert.match(streamReplies[toolsIndex] ?? "", /✅ `bash` · ai_usage.py/);
+    assert.deepEqual(markdownReplies, []);
+    await manager.dispose();
+  } finally {
+    if (previousMode === undefined) delete process.env.PI_TELEGRAM_TOOL_PREVIEW_MODE;
+    else process.env.PI_TELEGRAM_TOOL_PREVIEW_MODE = previousMode;
+    if (previousToolPreviews === undefined) delete process.env.PI_TELEGRAM_TOOL_PREVIEWS;
+    else process.env.PI_TELEGRAM_TOOL_PREVIEWS = previousToolPreviews;
+  }
+});
+
 test("Workspace manager confirms final stream delivery without fallback", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "pi-workspaces-final-stream-ok-"));
   const markdownReplies: string[] = [];
