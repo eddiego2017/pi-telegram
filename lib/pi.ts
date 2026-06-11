@@ -426,6 +426,15 @@ export function createTelegramTreeExecInjector(
   };
 }
 
+export function createTelegramRegenerateExecInjector(
+  options: TmuxDynamicSlashCommandInjectorOptions,
+): (entryId: string) => Promise<void> {
+  const dynamic = createTmuxDynamicSlashCommandInjector(options);
+  return function injectTelegramRegenerateExec(entryId: string) {
+    return dynamic("/telegram-regenerate-exec", entryId);
+  };
+}
+
 export function createTelegramDeleteCurrentSessionExecInjector(
   options: TmuxDynamicSlashCommandInjectorOptions,
 ): (expectedSessionPath: string) => Promise<void> {
@@ -449,6 +458,23 @@ export function getExtensionContextSessionName(
   ctx: ExtensionContext,
 ): string | undefined {
   return ctx.sessionManager.getSessionName();
+}
+
+export function getExtensionContextSessionBranch(
+  ctx: ExtensionContext,
+): ReturnType<ExtensionContext["sessionManager"]["getBranch"]> {
+  return ctx.sessionManager.getBranch();
+}
+
+/**
+ * Read the current branch entries (root-first) from a session-file reference,
+ * e.g. an active Telegram workspace session. Returns an empty array when the
+ * reference has no session file or cannot be opened.
+ */
+export function getSessionBranchFromReference(
+  reference: PiSessionSnapshotReference,
+): ReturnType<typeof getSessionSnapshotFromReference>["branch"] {
+  return getSessionSnapshotFromReference(reference).branch;
 }
 
 export function getExtensionContextSessionSnapshot(ctx: ExtensionContext) {

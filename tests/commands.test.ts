@@ -118,6 +118,7 @@ test("Command helpers expose Telegram bot command definitions", () => {
     { command: "resume", description: "📂 Resume/manage sessions" },
     { command: "session", description: "🧭 Show current session" },
     { command: "tree", description: "🌳 Rewind current session tree" },
+    { command: "regenerate", description: "🔁 Regenerate last response" },
     { command: "dump", description: "🧾 Export visible transcript" },
     { command: "name", description: "🏷️ Set current session name" },
     { command: "llm", description: "🧬 List available LLM models" },
@@ -1272,6 +1273,9 @@ test("Command handler target runtime binds command targets into command handling
     enqueueContinueTurn: async (_message, ctx) => {
       calls.push(`continue:${ctx}`);
     },
+    regenerateLastTurn: async (_message, ctx) => {
+      calls.push(`regenerate:${ctx}`);
+    },
     compact: () => {},
     queueReloadRuntimeCommand: () => {
       calls.push("reload");
@@ -1418,6 +1422,7 @@ test("Command runtime routes forum-native session commands with topic wording", 
     openResumeMenu: async () => undefined,
     openSessionMenu: async () => undefined,
     openTreeMenu: async () => undefined,
+    regenerateLastTurn: async () => undefined,
     openDumpMenu: async () => undefined,
     getSessionName: () => undefined,
     setSessionName: () => undefined,
@@ -1555,6 +1560,9 @@ test("Command runtime routes commands through runtime ports", async () => {
     },
     openTreeMenu: async (nextMessage: typeof message) => {
       events.push(`tree:${nextMessage.chat.id}`);
+    },
+    regenerateLastTurn: async (nextMessage: typeof message) => {
+      events.push(`regenerate:${nextMessage.chat.id}`);
     },
     openDumpMenu: async (
       nextMessage: typeof message,
@@ -1743,6 +1751,7 @@ test("Command runtime routes abort and stop to the active workspace when availab
     openResumeMenu: async () => undefined,
     openSessionMenu: async () => undefined,
     openTreeMenu: async () => undefined,
+    regenerateLastTurn: async () => undefined,
     openDumpMenu: async () => undefined,
     getSessionName: () => undefined,
     setSessionName: () => undefined,
@@ -1825,6 +1834,7 @@ test("Command runtime routes compact to the active workspace when available", as
     openResumeMenu: async () => undefined,
     openSessionMenu: async () => undefined,
     openTreeMenu: async () => undefined,
+    regenerateLastTurn: async () => undefined,
     openDumpMenu: async () => undefined,
     getSessionName: () => undefined,
     setSessionName: () => undefined,
@@ -1967,6 +1977,9 @@ test("Command helpers execute command actions through provided handlers", async 
     },
     handleSession: async () => {
       events.push("session");
+    },
+    handleRegenerate: async () => {
+      events.push("regenerate");
     },
     handleTree: async () => {
       events.push("tree");

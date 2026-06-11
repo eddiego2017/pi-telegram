@@ -23,6 +23,7 @@ import * as Model from "./model.ts";
 import * as OutboundHandlers from "./outbound-handlers.ts";
 import * as PromptTemplates from "./prompt-templates.ts";
 import * as Queue from "./queue.ts";
+import * as Regenerate from "./regenerate.ts";
 import type { TelegramBridgeRuntime } from "./runtime.ts";
 import type {
   TelegramWorkspaceCallbackQuery,
@@ -201,6 +202,21 @@ export interface TelegramInboundRouteRuntimeDeps<
   injectNewSession: (ctx: TContext) => Promise<boolean>;
   injectClone: () => Promise<void>;
   injectReloadRuntime?: () => Promise<void>;
+  /** Inject the internal /telegram-regenerate-exec slash command (rewinds tree). */
+  injectRegenerateExec?: (entryId: string) => Promise<void>;
+  /** Read the current (parent) session branch entries (root-first) for regenerate. */
+  getSessionBranchEntries?: (
+    ctx: TContext,
+  ) => readonly Regenerate.TelegramRegenerateSessionEntry[];
+  /** Read the active workspace session branch entries (root-first) for regenerate. */
+  getWorkspaceSessionBranchEntries?: (
+    reference: { sessionFile?: string; cwd: string },
+    ctx: TContext,
+  ) => readonly Regenerate.TelegramRegenerateSessionEntry[];
+  /** Record the in-flight regenerate so the rewind outcome can finish it. */
+  setRegeneratePending?: (
+    pending: Regenerate.TelegramRegeneratePending<TContext>,
+  ) => void;
   getSessionName: (ctx: TContext) => string | undefined;
   setSessionName: (name: string, ctx: TContext) => void | Promise<void>;
   recordRuntimeEvent?: (
@@ -522,6 +538,129 @@ export function createTelegramInboundRouteRuntime<
     deps.queueMutationRuntime.append(continueTurn, ctx);
     deps.dispatchNextQueuedTelegramTurn(ctx);
   };
+  const sendRegenerateReply = (message: TMessage, text: string) =>
+    deps.sendTextReply(message.chat.id, message.message_id, text);
+  // Workspace-mode regenerate. Turns run in a separate workspace backend with
+  // its own session file, so we rewind that file (createActiveTreeBranch drops
+  // the last user prompt + reply) and re-dispatch the original prompt straight
+  // to the workspace backend. This path is fully synchronous — no tmux inject or
+  // deferred dispatch needed.
+  const regenerateActiveWorkspaceTurn = async (
+    message: TMessage,
+    ctx: TContext,
+    workspaceManager: NonNullable<typeof deps.workspaceManager>,
+  ): Promise<void> => {
+    const reference = workspaceManager.getActiveSessionReference(ctx);
+    const branch = reference
+      ? (deps.getWorkspaceSessionBranchEntries?.(reference, ctx) ?? [])
+      : [];
+    const target = Regenerate.findTelegramRegenerateTarget(branch);
+    if (!target) {
+      await sendRegenerateReply(message, "⚠️ Nothing to regenerate yet.");
+      return;
+    }
+    try {
+      const result = await workspaceManager.createActiveTreeBranch(
+        target.entryId,
+        ctx,
+      );
+      if (!result || result.cancelled) {
+        await sendRegenerateReply(
+          message,
+          "⚠️ π is busy. Send /abort or /stop first, then /regenerate.",
+        );
+        return;
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      await sendRegenerateReply(
+        message,
+        `⚠️ Regenerate failed: ${errorMessage}`,
+      );
+      return;
+    }
+    const messageThreadId = getTelegramForumThreadMessageThreadId(
+      normalizeTelegramForumThread(message),
+    );
+    const dispatched = await workspaceManager.dispatchPrompt(
+      {
+        chatId: message.chat.id,
+        ...(messageThreadId !== undefined ? { messageThreadId } : {}),
+        replyToMessageId: message.message_id,
+        content: target.content,
+        statusSummary: "regenerate",
+      },
+      ctx,
+    );
+    if (!dispatched) {
+      await sendRegenerateReply(message, "⚠️ Regenerate failed to dispatch.");
+    }
+  };
+  const regenerateLastTurn = async (
+    message: TMessage,
+    ctx: TContext,
+  ): Promise<void> => {
+    if (deps.workspaceManager?.isEnabled()) {
+      await regenerateActiveWorkspaceTurn(message, ctx, deps.workspaceManager);
+      return;
+    }
+    const decision = Regenerate.decideTelegramRegenerate(
+      {
+        isIdle: deps.isIdle(ctx),
+        hasPendingMessages: deps.hasPendingMessages(ctx),
+        hasActiveTurn: deps.activeTurnRuntime.has(),
+        hasDispatchPending: deps.bridgeRuntime.lifecycle.hasDispatchPending(),
+        hasQueuedItems: deps.telegramQueueStore.hasQueuedItems(),
+        isCompactionInProgress:
+          deps.bridgeRuntime.lifecycle.isCompactionInProgress(),
+      },
+      deps.getSessionBranchEntries?.(ctx) ?? [],
+    );
+    if (!decision.ok) {
+      await sendRegenerateReply(
+        message,
+        decision.reason === "busy"
+          ? "⚠️ π is busy. Send /abort or /stop first, then /regenerate."
+          : "⚠️ Nothing to regenerate yet.",
+      );
+      return;
+    }
+    if (!deps.injectRegenerateExec) {
+      await sendRegenerateReply(message, "⚠️ Regenerate is unavailable.");
+      return;
+    }
+    const messageThreadId = getTelegramForumThreadMessageThreadId(
+      normalizeTelegramForumThread(message),
+    );
+    const queueOrder = deps.bridgeRuntime.queue.allocateItemOrder();
+    const regenerateTurn: Queue.PendingTelegramTurn = {
+      kind: "prompt",
+      chatId: message.chat.id,
+      ...(messageThreadId !== undefined ? { messageThreadId } : {}),
+      replyToMessageId: message.message_id,
+      sourceMessageIds: [message.message_id],
+      queueOrder,
+      queueLane: "priority",
+      laneOrder: Number.MIN_SAFE_INTEGER + queueOrder,
+      queuedAttachments: [],
+      content: decision.target.content,
+      historyText: "",
+      statusSummary: "regenerate",
+    };
+    // Append without dispatching: the queued turn must wait until the injected
+    // /telegram-regenerate-exec has rewound the tree, otherwise the regenerated
+    // reply would append to the stale branch. The rewind's success callback
+    // (notifyRegenerateOutcome → dispatchNextQueuedTelegramTurn) drives dispatch.
+    deps.queueMutationRuntime.append(regenerateTurn, ctx);
+    deps.setRegeneratePending?.({
+      entryId: decision.target.entryId,
+      messageId: message.message_id,
+      ctx,
+    });
+    deps.updateStatus(ctx);
+    await deps.injectRegenerateExec(decision.target.entryId);
+  };
   const reservedCommandNames = new Set(
     Commands.TELEGRAM_RESERVED_COMMAND_NAMES,
   );
@@ -613,6 +752,7 @@ export function createTelegramInboundRouteRuntime<
     openResumeMenu: deps.openResumeMenu,
     openSessionMenu: deps.openSessionMenu,
     openTreeMenu: deps.openTreeMenu,
+    regenerateLastTurn,
     openDumpMenu: deps.openDumpMenu,
     handleWorkspaceCommand: deps.workspaceManager
       ? async (message, args, ctx) => {

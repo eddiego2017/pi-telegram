@@ -57,6 +57,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   resume: "📂",
   session: "🧭",
   tree: "🌳",
+  regenerate: "🔁",
   dump: "🧾",
   name: "🏷️",
   workspace: "🗂️",
@@ -145,6 +146,13 @@ export const TELEGRAM_BUILTIN_BOT_COMMANDS: readonly TelegramBotCommandDefinitio
       description: formatTelegramBotCommandDescription(
         "tree",
         "Rewind current session tree",
+      ),
+    },
+    {
+      command: "regenerate",
+      description: formatTelegramBotCommandDescription(
+        "regenerate",
+        "Regenerate last response",
       ),
     },
     {
@@ -313,6 +321,19 @@ export interface TelegramTreeExecBridgeDeps {
   notifyTreeOutcome?: (outcome: TelegramTreeOutcome) => Promise<void>;
 }
 
+export type TelegramRegenerateOutcome =
+  | { ok: true; entryId: string }
+  | { ok: false; entryId: string; error: string };
+
+export interface TelegramRegenerateExecBridgeDeps {
+  /**
+   * Notify callers about regenerate rewind completion or failure. On success
+   * this is the bridge's cue to dispatch the queued regenerate turn against the
+   * freshly rewound branch.
+   */
+  notifyRegenerateOutcome?: (outcome: TelegramRegenerateOutcome) => Promise<void>;
+}
+
 export interface TelegramDeleteCurrentSessionExecBridgeDeps {
   notifySessionDeleteOutcome?: (
     outcome: TelegramSessionDeleteOutcome,
@@ -323,6 +344,7 @@ export interface TelegramDeleteCurrentSessionExecBridgeDeps {
 export interface TelegramBridgeCommandRegistrationDeps
   extends TelegramResumeExecBridgeDeps,
     TelegramTreeExecBridgeDeps,
+    TelegramRegenerateExecBridgeDeps,
     TelegramDeleteCurrentSessionExecBridgeDeps {
   promptForConfig: (ctx: ExtensionCommandContext) => Promise<void>;
   getStatusLines: () => string[];
@@ -565,6 +587,53 @@ export function registerTelegramBridgeCommands(
       }
     },
   });
+  // Internal command used by Telegram /regenerate. Not user-facing. Rewinds the
+  // session tree to the parent of the given user-message entry (dropping the
+  // last prompt + reply) so the queued regenerate turn re-runs from a clean
+  // branch. On success the bridge dispatches that turn via notifyRegenerateOutcome.
+  pi.registerCommand("telegram-regenerate-exec", {
+    description:
+      "(internal) Rewind the current session tree for Telegram /regenerate.",
+    handler: async (args, ctx) => {
+      const entryId = args.trim().split(/\s+/)[0] ?? "";
+      if (!entryId) {
+        ctx.ui.notify("telegram-regenerate-exec: missing entry id", "warning");
+        await deps.notifyRegenerateOutcome?.({
+          ok: false,
+          entryId: "",
+          error: "missing entry id",
+        });
+        return;
+      }
+      try {
+        const result = await ctx.navigateTree(entryId);
+        if (result.cancelled) {
+          ctx.ui.notify(
+            `Regenerate rewind cancelled for ${entryId}`,
+            "warning",
+          );
+          await deps.notifyRegenerateOutcome?.({
+            ok: false,
+            entryId,
+            error: "navigateTree cancelled",
+          });
+          return;
+        }
+        await deps.notifyRegenerateOutcome?.({ ok: true, entryId });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(
+          `Regenerate rewind failed for ${entryId}: ${message}`,
+          "error",
+        );
+        await deps.notifyRegenerateOutcome?.({
+          ok: false,
+          entryId,
+          error: message,
+        });
+      }
+    },
+  });
 }
 
 export const TELEGRAM_RESERVED_COMMAND_NAMES = [
@@ -581,6 +650,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "resume",
   "session",
   "tree",
+  "regenerate",
   "dump",
   "name",
   "model",
@@ -623,6 +693,7 @@ export type TelegramCommandAction =
   | { kind: "resume"; args: string; executionMode: "immediate" }
   | { kind: "session"; executionMode: "immediate" }
   | { kind: "tree"; executionMode: "immediate" }
+  | { kind: "regenerate"; executionMode: "immediate" }
   | { kind: "dump"; args: string; executionMode: "immediate" }
   | { kind: "name"; args: string; executionMode: "immediate" }
   | { kind: "status"; executionMode: "immediate" }
@@ -653,6 +724,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleResume: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleSession: (message: TMessage, ctx: TContext) => Promise<void>;
   handleTree: (message: TMessage, ctx: TContext) => Promise<void>;
+  handleRegenerate: (message: TMessage, ctx: TContext) => Promise<void>;
   handleDump: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleName: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleStatus: (message: TMessage, ctx: TContext) => Promise<void>;
@@ -1128,6 +1200,7 @@ export interface TelegramCommandRuntimeDeps<
   ) => Promise<void>;
   openSessionMenu: (message: TMessage, ctx: TContext) => Promise<void>;
   openTreeMenu: (message: TMessage, ctx: TContext) => Promise<void>;
+  regenerateLastTurn: (message: TMessage, ctx: TContext) => Promise<void>;
   openDumpMenu: (
     message: TMessage,
     ctx: TContext,
@@ -1165,6 +1238,7 @@ export const TELEGRAM_APP_MENU_INTRO_HTML = [
   `${formatTelegramCommandEmojiPrefix("resume")}/resume — Resume/manage previous sessions`,
   `${formatTelegramCommandEmojiPrefix("session")}/session — Show current session`,
   `${formatTelegramCommandEmojiPrefix("tree")}/tree — Rewind current session tree`,
+  `${formatTelegramCommandEmojiPrefix("regenerate")}/regenerate — Regenerate last response`,
   `${formatTelegramCommandEmojiPrefix("dump")}/dump [N] — Export visible transcript`,
   `${formatTelegramCommandEmojiPrefix("name")}/name — Set current session name`,
   `${formatTelegramCommandEmojiPrefix("llm")}/llm — List available LLM models`,
@@ -1186,6 +1260,7 @@ export const TELEGRAM_FORUM_NATIVE_APP_MENU_INTRO_HTML = [
   `${formatTelegramCommandEmojiPrefix("resume")}/resume — Resume/manage previous sessions`,
   `${formatTelegramCommandEmojiPrefix("session")}/session — Show current topic session`,
   `${formatTelegramCommandEmojiPrefix("tree")}/tree — Rewind current session tree`,
+  `${formatTelegramCommandEmojiPrefix("regenerate")}/regenerate — Regenerate last response`,
   `${formatTelegramCommandEmojiPrefix("dump")}/dump [N] — Export visible transcript`,
   `${formatTelegramCommandEmojiPrefix("name")}/name — Set current session name`,
   `${formatTelegramCommandEmojiPrefix("llm")}/llm — List available LLM models`,
@@ -1403,6 +1478,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   resume: { kind: "resume", args: "", executionMode: "immediate" },
   session: { kind: "session", executionMode: "immediate" },
   tree: { kind: "tree", executionMode: "immediate" },
+  regenerate: { kind: "regenerate", executionMode: "immediate" },
   dump: { kind: "dump", args: "", executionMode: "immediate" },
   name: { kind: "name", args: "", executionMode: "immediate" },
   model: { kind: "model", executionMode: "immediate" },
@@ -1905,6 +1981,9 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
     case "tree":
       await deps.handleTree(message, ctx);
       return true;
+    case "regenerate":
+      await deps.handleRegenerate(message, ctx);
+      return true;
     case "dump":
       await deps.handleDump(message, action.args, ctx);
       return true;
@@ -2032,6 +2111,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     openResumeMenu: commandTargetRuntime.openResumeMenu,
     openSessionMenu: commandTargetRuntime.openSessionMenu,
     openTreeMenu: commandTargetRuntime.openTreeMenu,
+    regenerateLastTurn: deps.regenerateLastTurn,
     openDumpMenu: commandTargetRuntime.openDumpMenu,
     handleWorkspaceCommand: deps.handleWorkspaceCommand,
     handleTopicCommand: deps.handleTopicCommand,
@@ -2236,6 +2316,9 @@ async function handleTelegramCommandRuntime<
       },
       handleTree: async (nextMessage, commandCtx) => {
         await deps.openTreeMenu(nextMessage, commandCtx);
+      },
+      handleRegenerate: async (nextMessage, commandCtx) => {
+        await deps.regenerateLastTurn(nextMessage, commandCtx);
       },
       handleDump: async (nextMessage, args, commandCtx) => {
         const turnLimit = parseTelegramDumpTurnLimit(args);

@@ -37,6 +37,7 @@ import * as Preview from "./lib/preview.ts";
 import * as PromptTemplates from "./lib/prompt-templates.ts";
 import * as Prompts from "./lib/prompts.ts";
 import * as Queue from "./lib/queue.ts";
+import * as Regenerate from "./lib/regenerate.ts";
 import * as Replies from "./lib/replies.ts";
 import * as Routing from "./lib/routing.ts";
 import * as Runtime from "./lib/runtime.ts";
@@ -136,6 +137,13 @@ export default function (pi: Pi.ExtensionAPI) {
     target: "pi:0",
     recordRuntimeEvent,
   });
+  const injectRegenerateExec = Pi.createTelegramRegenerateExecInjector({
+    exec: piRuntime.exec,
+    target: "pi:0",
+    recordRuntimeEvent,
+  });
+  const regeneratePendingStore =
+    Regenerate.createTelegramRegeneratePendingStore<Pi.ExtensionContext>();
   const injectDeleteCurrentSessionExec =
     Pi.createTelegramDeleteCurrentSessionExecInjector({
       exec: piRuntime.exec,
@@ -603,6 +611,14 @@ export default function (pi: Pi.ExtensionAPI) {
     getAllowedUserId: configStore.getAllowedUserId,
     sendTextReply,
   });
+  const notifyRegenerateOutcome =
+    Regenerate.createTelegramRegenerateOutcomeNotifier<Pi.ExtensionContext>({
+      pendingStore: regeneratePendingStore,
+      getAllowedUserId: configStore.getAllowedUserId,
+      sendTextReply,
+      dispatchNextQueuedTelegramTurn,
+      removeQueuedTurnsByMessageIds: queueMutationRuntime.removeByMessageIds,
+    });
   const notifySessionDeleteOutcome =
     MenuSession.createTelegramSessionDeleteOutcomeNotifier({
       getAllowedUserId: configStore.getAllowedUserId,
@@ -681,6 +697,10 @@ export default function (pi: Pi.ExtensionAPI) {
     injectNewSession: workspaceAwareNewSessionPorts.injectNewSession,
     injectClone,
     injectReloadRuntime,
+    injectRegenerateExec,
+    getSessionBranchEntries: Pi.getExtensionContextSessionBranch,
+    getWorkspaceSessionBranchEntries: Pi.getSessionBranchFromReference,
+    setRegeneratePending: regeneratePendingStore.set,
     getSessionName: workspaceAwareSessionNamePorts.getSessionName,
     setSessionName: workspaceAwareSessionNamePorts.setSessionName,
     recordRuntimeEvent,
@@ -776,6 +796,7 @@ export default function (pi: Pi.ExtensionAPI) {
     updateStatus,
     notifyResumeOutcome,
     notifyTreeOutcome,
+    notifyRegenerateOutcome,
     notifySessionDeleteOutcome,
   });
 
