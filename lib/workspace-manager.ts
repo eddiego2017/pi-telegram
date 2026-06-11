@@ -21,6 +21,7 @@ import { installCommands } from "./workspace-manager-commands.ts";
 import { buildApiSession } from "./workspace-manager-api-session.ts";
 import { buildApiCallback } from "./workspace-manager-api-callback.ts";
 import { buildApiCommand } from "./workspace-manager-api-command.ts";
+import { installRalph } from "./workspace-manager-ralph.ts";
 
 export * from "./workspace-manager-context.ts";
 export * from "./workspace-manager-constants.ts";
@@ -29,6 +30,8 @@ export * from "./workspace-manager-state.ts";
 export * from "./workspace-manager-events.ts";
 export * from "./workspace-manager-dashboard.ts";
 export * from "./workspace-manager-ports.ts";
+export * from "./workspace-manager-ralph.ts";
+export * from "./ralph-workspace.ts";
 
 export function createTelegramWorkspaceManager<TContext>(
   deps: TelegramWorkspaceManagerDeps<TContext>,
@@ -44,9 +47,11 @@ export function createTelegramWorkspaceManager<TContext>(
   installDashboardRuntime(self, deps);
   installPrompt(self, deps);
   installCommands(self, deps);
+  const ralphApi = installRalph(self, deps);
   return {
     ...buildApiSession(self, deps),
     ...buildApiCallback(self, deps),
     ...buildApiCommand(self, deps),
+    ...ralphApi,
   };
 }

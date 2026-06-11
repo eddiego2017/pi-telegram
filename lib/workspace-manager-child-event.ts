@@ -235,6 +235,7 @@ export function installChildEvent<TContext>(
           }
         }
         void self.persist();
+        self.handleRalphAgentEnd?.(workspaceName, runtime, "", "error");
         return;
       }
       const latestAssistantSummary = Array.isArray(event.messages)
@@ -275,6 +276,7 @@ export function installChildEvent<TContext>(
         })();
         self.logWorkspaceTurnSummary(workspaceName, runtime, "aborted");
         void self.persist();
+        self.handleRalphAgentEnd?.(workspaceName, runtime, "", "aborted");
         return;
       }
       const finalReplyMarkdown = finalBodyText || runtime.activeAssistantText || "";
@@ -455,6 +457,12 @@ export function installChildEvent<TContext>(
       }
       self.logWorkspaceTurnSummary(workspaceName, runtime, latestAssistantSummary.stopReason ?? "stop");
       void self.persist();
+      self.handleRalphAgentEnd?.(
+        workspaceName,
+        runtime,
+        finalBodyText || runtime.activeAssistantText || "",
+        "ok",
+      );
       return;
     }
     if (event.type === "exit") {

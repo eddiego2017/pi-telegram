@@ -774,6 +774,16 @@ export function createTelegramInboundRouteRuntime<
           );
         }
       : undefined,
+    handleRalphCommand: deps.workspaceManager?.handleRalphCommand
+      ? async (message, args, ctx) => {
+          await deps.workspaceManager?.handleRalphCommand?.(
+            args,
+            message.chat.id,
+            message.message_id,
+            ctx,
+          );
+        }
+      : undefined,
     getAllowedUserId: deps.configStore.getAllowedUserId,
     setAllowedUserId: deps.configStore.setAllowedUserId,
     setMyCommands: deps.setMyCommands,

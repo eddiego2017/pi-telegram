@@ -62,6 +62,7 @@ export const TELEGRAM_COMMAND_EMOJI = {
   name: "🏷️",
   workspace: "🗂️",
   topic: "🧵",
+  ralph: "🔂",
   queue: "🔢",
   next: "⏩",
   continue: "▶️",
@@ -657,6 +658,7 @@ export const TELEGRAM_RESERVED_COMMAND_NAMES = [
   "llm",
   "workspace",
   "topic",
+  "ralph",
   "thinking",
   "settings",
   "help",
@@ -701,6 +703,7 @@ export type TelegramCommandAction =
   | { kind: "llm"; args: string; executionMode: "immediate" }
   | { kind: "workspace"; args: string; executionMode: "immediate" }
   | { kind: "topic"; args: string; executionMode: "immediate" }
+  | { kind: "ralph"; args: string; executionMode: "immediate" }
   | { kind: "thinking"; executionMode: "immediate" }
   | { kind: "settings"; executionMode: "immediate" }
   | {
@@ -732,6 +735,7 @@ export interface TelegramCommandActionDeps<TMessage, TContext> {
   handleLlm: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleWorkspace?: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleTopic?: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
+  handleRalph?: (message: TMessage, args: string, ctx: TContext) => Promise<void>;
   handleThinking: (message: TMessage, ctx: TContext) => Promise<void>;
   handleSettings?: (message: TMessage, ctx: TContext) => Promise<void>;
   handleHelp: (
@@ -1216,6 +1220,11 @@ export interface TelegramCommandRuntimeDeps<
     args: string,
     ctx: TContext,
   ) => Promise<void>;
+  handleRalphCommand?: (
+    message: TMessage,
+    args: string,
+    ctx: TContext,
+  ) => Promise<void>;
   getSessionName: (ctx: TContext) => string | undefined;
   setSessionName: (name: string, ctx: TContext) => void | Promise<void>;
   getAllowedUserId: () => number | undefined;
@@ -1485,6 +1494,7 @@ export const TELEGRAM_COMMAND_ACTIONS = {
   llm: { kind: "llm", args: "", executionMode: "immediate" },
   workspace: { kind: "workspace", args: "", executionMode: "immediate" },
   topic: { kind: "topic", args: "", executionMode: "immediate" },
+  ralph: { kind: "ralph", args: "", executionMode: "immediate" },
   thinking: { kind: "thinking", executionMode: "immediate" },
   settings: { kind: "settings", executionMode: "immediate" },
   help: { kind: "help", commandName: "help", executionMode: "immediate" },
@@ -1505,7 +1515,8 @@ export function buildTelegramCommandAction(
     baseAction.kind === "resume" ||
     baseAction.kind === "dump" ||
     baseAction.kind === "workspace" ||
-    baseAction.kind === "topic"
+    baseAction.kind === "topic" ||
+    baseAction.kind === "ralph"
   ) {
     return { ...baseAction, args: args ?? "" };
   }
@@ -2007,6 +2018,10 @@ export async function executeTelegramCommandAction<TMessage, TContext>(
       if (!deps.handleTopic) return false;
       await deps.handleTopic(message, action.args, ctx);
       return true;
+    case "ralph":
+      if (!deps.handleRalph) return false;
+      await deps.handleRalph(message, action.args, ctx);
+      return true;
     case "thinking":
       await deps.handleThinking(message, ctx);
       return true;
@@ -2115,6 +2130,7 @@ export function createTelegramCommandHandlerTargetRuntime<
     openDumpMenu: commandTargetRuntime.openDumpMenu,
     handleWorkspaceCommand: deps.handleWorkspaceCommand,
     handleTopicCommand: deps.handleTopicCommand,
+    handleRalphCommand: deps.handleRalphCommand,
     getSessionName: deps.getSessionName,
     setSessionName: deps.setSessionName,
     getAllowedUserId: deps.getAllowedUserId,
@@ -2406,6 +2422,11 @@ async function handleTelegramCommandRuntime<
       handleTopic: deps.handleTopicCommand
         ? async (nextMessage, args, commandCtx) => {
             await deps.handleTopicCommand?.(nextMessage, args, commandCtx);
+          }
+        : undefined,
+      handleRalph: deps.handleRalphCommand
+        ? async (nextMessage, args, commandCtx) => {
+            await deps.handleRalphCommand?.(nextMessage, args, commandCtx);
           }
         : undefined,
       handleThinking: async (nextMessage, commandCtx) => {

@@ -348,6 +348,12 @@ export interface TelegramWorkspaceManager<TContext> {
     replyToMessageId: number,
     ctx: TContext,
   ) => Promise<boolean>;
+  handleRalphCommand?: (
+    args: string,
+    chatId: number,
+    replyToMessageId: number,
+    ctx: TContext,
+  ) => Promise<boolean>;
   handleCallbackQuery: (
     query: TelegramWorkspaceCallbackQuery,
     ctx: TContext,
