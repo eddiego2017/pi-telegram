@@ -177,20 +177,16 @@ export function ralphSessionName(baseName: string, loop: number): string {
  * confirmation.
  */
 /**
- * Capability reminder injected into both the arm-dialogue and per-iteration
- * prompts. The child runs with --no-extensions, which only removes TypeScript
- * extension TOOLS — it does NOT remove skills. Skills are just SKILL.md + bash
- * scripts, so any agent with bash can use them. Spell this out so the child
- * (and the spec it negotiates) reaches for real capabilities (a headless
- * browser, HQ notes, pdf, etc.) instead of falling back to raw curl.
+ * One-line behavioral nudge for the arm-dialogue only. The child already sees
+ * the full <available_skills> list in its system prompt, so this does NOT
+ * re-list skills. It only corrects two things the system prompt can't: (1)
+ * --no-extensions does not disable skills (they are bash-run), and (2) the
+ * browser skill is a real headless Chrome that beats curl for JS/blocked pages.
+ * Lives only in the arm dialogue so the negotiated kickoff bakes the right
+ * approach into the spec; per-iteration prompts then just follow that spec.
  */
-export const RALPH_CAPABILITY_NOTE = [
-  "Capabilities: you run with --no-extensions, which only removes extension TOOLS, NOT skills. You still have bash, so you can use ANY skill by reading its SKILL.md and running its scripts. Skills live in ~/.pi/agent/skills/<name>/SKILL.md. Notably:",
-  "- browser (~/.pi/agent/skills/browser/SKILL.md): a real headless Chrome via CDP at pi-chrome:9222. Run python3 ~/.pi/agent/skills/browser/scripts/*.py (nav.py open, simphtml.py extract readable text, screenshot.py, eval.py run JS, lists.py links). Prefer this over curl for JS-rendered pages, Cloudflare/login walls, or anything a plain GET can't fetch.",
-  "- eddie-hq-notes (~/.pi/agent/skills/eddie-hq-notes/SKILL.md): read/create/edit HQ vault notes via ehq-*.sh.",
-  "- others as relevant: pdf, svg, youtube-video-processor, tg-user, etc. (browse ~/.pi/agent/skills/).",
-  "Use curl only for simple static pages or JSON APIs; reach for the browser skill when the page needs rendering or is blocked.",
-].join("\n");
+export const RALPH_CAPABILITY_NOTE =
+  "Note for spec design: --no-extensions only removes extension tools, not skills — you can still use any skill in <available_skills> via bash (read its SKILL.md). For web research, prefer the browser skill (headless Chrome) over curl when a page needs JS or is behind Cloudflare/login. Bake the right approach into the kickoff so each fresh iteration knows how to do the work.";
 
 export function buildRalphArmDialoguePrompt(initialTask: string): string {
   const lines = [
@@ -199,8 +195,6 @@ export function buildRalphArmDialoguePrompt(initialTask: string): string {
     "A Ralph loop runs one task repeatedly; every iteration starts in a brand-new session with a clean context window, so the task spec must be self-contained.",
     "",
     RALPH_CAPABILITY_NOTE,
-    "",
-    "When negotiating the spec, fold the right capabilities into the kickoff (e.g. tell future iterations to use the browser skill for web research) so each fresh-context iteration knows how to do the work.",
     "",
     "Work with the operator to agree on:",
     "1. kickoff — the single task to perform each iteration (self-contained; assume no memory of prior iterations beyond a short note).",
@@ -239,7 +233,6 @@ export function buildRalphIterationPrompt(state: RalphWorkspaceState): string {
   if (state.guardrails) {
     lines.push("", "Guardrails (must always hold):", state.guardrails);
   }
-  lines.push("", RALPH_CAPABILITY_NOTE);
   if (state.lastNote) {
     lines.push("", "Note from previous iteration:", state.lastNote);
   }

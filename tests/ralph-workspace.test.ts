@@ -164,8 +164,9 @@ test("Ralph prompts restate spec, protocol, and carried note", () => {
   assert.match(armPrompt, /count things/);
   assert.match(armPrompt, /RALPH-ARM:/);
   assert.match(armPrompt, /confirms/i);
-  // Capability note must tell the child it can still use skills (esp. browser)
-  // despite --no-extensions.
+  // The arm dialogue carries the one-line capability nudge (skills usable
+  // despite --no-extensions; prefer browser over curl) so the negotiated
+  // kickoff bakes the right approach into the spec.
   assert.match(armPrompt, /--no-extensions/);
   assert.match(armPrompt, /browser/);
   const state = makeState({ loop: 1, lastNote: "counter at 1", guardrails: "no force push" });
@@ -175,9 +176,9 @@ test("Ralph prompts restate spec, protocol, and carried note", () => {
   assert.match(prompt, /no force push/);
   assert.match(prompt, /RALPH: done/);
   assert.match(prompt, /RALPH: continue/);
-  // Each fresh-context iteration is reminded it can use skills like browser.
-  assert.match(prompt, /browser/);
-  assert.match(prompt, /pi-chrome:9222/);
+  // Per-iteration prompt must NOT repeat the capability nudge; it just follows
+  // the spec the arm dialogue already baked in.
+  assert.doesNotMatch(prompt, /--no-extensions/);
 });
 
 test("buildRalphWorkspaceState captures base name and delivery target", () => {
