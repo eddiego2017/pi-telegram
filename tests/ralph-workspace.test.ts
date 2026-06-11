@@ -24,6 +24,7 @@ import {
   parseRalphCommand,
   parseRalphMarker,
   ralphSessionName,
+  stripRalphLoopSuffix,
 } from "../lib/ralph-workspace.ts";
 import type { RalphWorkspaceState } from "../lib/ralph-workspace.ts";
 import {
@@ -97,6 +98,20 @@ test("ralphSessionName composes base#loopN without compounding", () => {
   assert.equal(ralphSessionName("task", 0), "task");
   assert.equal(ralphSessionName("task", 2), "task#loop2");
   assert.equal(ralphSessionName("  ", 1), `${RALPH_DEFAULT_BASE_NAME}#loop1`);
+  // A name that already carries a loop suffix must not compound.
+  assert.equal(ralphSessionName("task#loop2", 1), "task#loop1");
+  assert.equal(ralphSessionName("task#loop2#loop1", 3), "task#loop3");
+});
+
+test("stripRalphLoopSuffix removes one or many trailing loop segments", () => {
+  assert.equal(stripRalphLoopSuffix("task"), "task");
+  assert.equal(stripRalphLoopSuffix("task#loop2"), "task");
+  assert.equal(stripRalphLoopSuffix("task#loop2#loop1#loop2"), "task");
+  assert.equal(stripRalphLoopSuffix("my task#loop9"), "my task");
+  assert.equal(stripRalphLoopSuffix(undefined), "");
+  assert.equal(stripRalphLoopSuffix("  "), "");
+  // Only a strict trailing suffix is stripped, not an internal #loopN.
+  assert.equal(stripRalphLoopSuffix("a#loop1-b"), "a#loop1-b");
 });
 
 test("createRalphStateStore round-trips per-workspace state on disk", () => {
@@ -249,6 +264,8 @@ interface ControllerHarness {
 function createControllerHarness(options: {
   scoped?: boolean;
   hasRuntime?: boolean;
+  sessionName?: string;
+  nonTopicSource?: boolean;
 } = {}): ControllerHarness {
   const dir = mkdtempSync(join(tmpdir(), "ralph-ctrl-"));
   const replies: string[] = [];
@@ -259,8 +276,10 @@ function createControllerHarness(options: {
     createdAt: 1,
     lastUsedAt: 1,
     status: "idle",
-    sessionName: "my task",
-    source: { kind: "telegram-topic", chatId: -100, messageThreadId: 7, topicTitle: "my task" },
+    sessionName: options.sessionName ?? "my task",
+    source: options.nonTopicSource
+      ? undefined
+      : { kind: "telegram-topic", chatId: -100, messageThreadId: 7, topicTitle: "my task" },
   });
   runtime.backend = backend;
   runtime.activeChatId = -100;
@@ -328,6 +347,23 @@ test("handleRalphCommand rejects outside a bound topic", async () => {
   }
 });
 
+test("handleRalphCommand rejects a non-topic runtime (General default workspace)", async () => {
+  // With generalIsDefault, the General chat resolves to a scoped default
+  // workspace whose source is not telegram-topic; /ralph must still be rejected
+  // so the parent never arms a loop against itself.
+  const harness = createControllerHarness({ scoped: true, nonTopicSource: true });
+  try {
+    const handled = await harness.api.handleRalphCommand?.("count to 3", -100, 5, {});
+    assert.equal(handled, true);
+    assert.deepEqual(harness.replies, [RALPH_TOPIC_ONLY_MESSAGE]);
+    const delivered = (harness.self as unknown as { deliveredPrompts: string[] })
+      .deliveredPrompts;
+    assert.equal(delivered.length, 0);
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("handleRalphCommand starts the arm dialogue in the topic child", async () => {
   const harness = createControllerHarness();
   try {
@@ -361,6 +397,27 @@ test("RALPH-ARM marker arms the loop and hands off iteration #1", async () => {
     const state = store.read("topic-1");
     assert.equal(state?.active, true);
     assert.equal(state?.expectedTurnId, harness.runtime.activeTurnId);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("re-arming from a compounded session name uses a clean base (no compounding)", async () => {
+  // Bug 1 regression: a prior run leaves record.sessionName as base#loop2; the
+  // next arm must strip the suffix so names never grow base#loop2#loop1...
+  const harness = createControllerHarness({ sessionName: "my task#loop2" });
+  try {
+    harness.self.handleRalphAgentEnd?.(
+      "topic-1",
+      harness.runtime,
+      'RALPH-ARM: {"kickoff":"count","exit_condition":"counter >= 3","guardrails":""}',
+      "ok",
+    );
+    await waitForTick();
+    const store = createRalphStateStore(harness.statePath);
+    assert.equal(store.read("topic-1")?.baseName, "my task");
+    // Iteration #1 renames to the clean base, not base#loop2.
+    assert.deepEqual(harness.backend.calls[1].args, ["my task"]);
   } finally {
     harness.cleanup();
   }

@@ -151,9 +151,21 @@ export function parseRalphMarker(text: string): RalphMarker | undefined {
   return undefined;
 }
 
+/**
+ * Strip any trailing `#loopN` segments from a session name so the loop base
+ * never compounds when Ralph is re-armed in a topic whose current session name
+ * is still a prior run's `base#loopN`. Repeated suffixes are all removed
+ * (e.g. `task#loop2#loop1` -> `task`).
+ */
+export function stripRalphLoopSuffix(name: string | undefined): string {
+  const trimmed = (name ?? "").trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/(?:#loop\d+)+$/, "").trim();
+}
+
 /** Compute the session display name for a given completed-iteration count. */
 export function ralphSessionName(baseName: string, loop: number): string {
-  const base = baseName.trim() || RALPH_DEFAULT_BASE_NAME;
+  const base = stripRalphLoopSuffix(baseName) || RALPH_DEFAULT_BASE_NAME;
   if (loop <= 0) return base;
   return `${base}#loop${loop}`;
 }
@@ -238,7 +250,7 @@ export interface RalphArmDeps {
 export function buildRalphWorkspaceState(deps: RalphArmDeps): RalphWorkspaceState {
   return {
     active: true,
-    baseName: deps.baseName?.trim() || RALPH_DEFAULT_BASE_NAME,
+    baseName: stripRalphLoopSuffix(deps.baseName) || RALPH_DEFAULT_BASE_NAME,
     kickoff: deps.spec.kickoff,
     exitCondition: deps.spec.exitCondition,
     guardrails: deps.spec.guardrails,

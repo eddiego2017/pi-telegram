@@ -279,7 +279,15 @@ export function installRalph<TContext>(
       }
       const workspaceState = await self.ensureState(deps.getCwd(ctx));
       const scoped = await self.resolveScopedTopicRuntime(workspaceState, ctx);
-      if (!scoped.scoped || !scoped.runtime) {
+      // A Ralph loop must bind to a real forum-topic child so handoff resets that
+      // child, never the parent. With generalIsDefault the General chat resolves
+      // to the default workspace, so a scoped runtime alone is not enough: require
+      // the resolved runtime to be telegram-topic sourced.
+      if (
+        !scoped.scoped ||
+        !scoped.runtime ||
+        scoped.runtime.record.source?.kind !== "telegram-topic"
+      ) {
         await deps.sendTextReply(chatId, replyToMessageId, RALPH_TOPIC_ONLY_MESSAGE);
         return true;
       }
