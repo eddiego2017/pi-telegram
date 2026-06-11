@@ -164,6 +164,10 @@ test("Ralph prompts restate spec, protocol, and carried note", () => {
   assert.match(armPrompt, /count things/);
   assert.match(armPrompt, /RALPH-ARM:/);
   assert.match(armPrompt, /confirms/i);
+  // Capability note must tell the child it can still use skills (esp. browser)
+  // despite --no-extensions.
+  assert.match(armPrompt, /--no-extensions/);
+  assert.match(armPrompt, /browser/);
   const state = makeState({ loop: 1, lastNote: "counter at 1", guardrails: "no force push" });
   const prompt = buildRalphIterationPrompt(state);
   assert.match(prompt, /iteration #2/);
@@ -171,6 +175,9 @@ test("Ralph prompts restate spec, protocol, and carried note", () => {
   assert.match(prompt, /no force push/);
   assert.match(prompt, /RALPH: done/);
   assert.match(prompt, /RALPH: continue/);
+  // Each fresh-context iteration is reminded it can use skills like browser.
+  assert.match(prompt, /browser/);
+  assert.match(prompt, /pi-chrome:9222/);
 });
 
 test("buildRalphWorkspaceState captures base name and delivery target", () => {
